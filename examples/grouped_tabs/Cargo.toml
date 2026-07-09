@@ -1,0 +1,19 @@
+[package]
+name = "grouped_tabs"
+description = "schnellui example: configurable grouped tab list with flat and tree presentations"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "grouped_tabs"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+schnellui-icons-md.workspace = true
+schnellui-testing.workspace = true
+clap.workspace = true
+strum.workspace = true

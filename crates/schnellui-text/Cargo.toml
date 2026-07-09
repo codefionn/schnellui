@@ -1,0 +1,23 @@
+[package]
+name = "schnellui-text"
+description = "schnellui text: Parley+Fontique shaping/measure, swash glyph raster into a CPU R8 atlas with dirty sub-rects (SOUL §8, §8.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+parley.workspace = true
+swash.workspace = true
+fontique.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+# Closure-scoped allocation counter for the warm-reshape zero-alloc test (§4.1).
+# Only compiled for tests; installs a counting global allocator in the test binary.
+allocation-counter.workspace = true
+
+[features]
+# Feature-gates the allocation-counting warm-reshape test (§4.1). Off in normal builds.
+count-allocations = []

@@ -1,0 +1,19 @@
+[package]
+name = "rich_text"
+description = "schnellui example: rich text viewer + multi-line editor screenshotter CLI (SOUL §7.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "rich_text"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+schnellui-testing.workspace = true
+schnellui-widgets.workspace = true
+clap.workspace = true
+strum.workspace = true

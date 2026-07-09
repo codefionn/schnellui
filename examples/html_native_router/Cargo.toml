@@ -1,0 +1,24 @@
+[package]
+name = "html_native_router"
+description = "CSR router and shared hydration contract for schnellui's native HTML renderer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "html_native_router"
+path = "src/main.rs"
+
+[lib]
+name = "html_native_router"
+path = "src/lib.rs"
+
+[dependencies]
+schnellui-render-html = { workspace = true, features = ["ssr"] }
+schnellui-template.workspace = true
+serde.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true

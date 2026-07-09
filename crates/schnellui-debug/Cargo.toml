@@ -1,0 +1,20 @@
+[package]
+name = "schnellui-debug"
+description = "CLI client for SchnellUI's local debug instrumentation server"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "schnellui-debug"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde_json.workspace = true
+jaq-core.workspace = true
+jaq-json.workspace = true
+jaq-std.workspace = true
+shell-words.workspace = true

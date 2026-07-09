@@ -1,0 +1,12 @@
+[package]
+name = "schnellui-store"
+description = "Selector-oriented application state facade over schnellui-signal"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-signal.workspace = true
+parking_lot.workspace = true

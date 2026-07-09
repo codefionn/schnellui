@@ -1,0 +1,20 @@
+[package]
+name = "servo_demo"
+description = "schnellui example: an interactive Servo webview rendered inside SchnellUI"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "servo_demo"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+rustls = "0.23"
+schnellui.workspace = true
+schnellui-servo = { workspace = true, features = ["servo-engine"] }
+schnellui-widgets.workspace = true
+url = "2.5"

@@ -1,0 +1,16 @@
+[package]
+name = "schnellui-render-wgpu"
+description = "schnellui WebGPU backend: headless one-frame renderer -> RGBA8 PNG, instanced solid + glyph quads, 256-byte readback (SOUL §7.2)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-scene.workspace = true
+schnellui-text.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+png.workspace = true
+bytemuck.workspace = true

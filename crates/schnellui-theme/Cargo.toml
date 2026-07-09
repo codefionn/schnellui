@@ -1,0 +1,12 @@
+[package]
+name = "schnellui-theme"
+description = "Ready-made design-system themes for schnellui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-scene.workspace = true
+schnellui-widgets.workspace = true

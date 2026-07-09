@@ -1,0 +1,16 @@
+[package]
+name = "schnellui-a11y"
+description = "schnellui accessibility: AccessKit TreeUpdate (full+incremental), inbound ActionRequest routing, JSON tree dump (SOUL §6)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-scene.workspace = true
+slotmap.workspace = true
+accesskit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec.workspace = true

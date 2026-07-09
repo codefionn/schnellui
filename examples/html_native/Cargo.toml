@@ -1,0 +1,25 @@
+[package]
+name = "html_native"
+description = "schnellui native HTML screenshot example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "html_native"
+path = "src/main.rs"
+
+[dependencies]
+schnellui-template.workspace = true
+schnellui-signal.workspace = true
+schnellui-render-html.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+js-sys.workspace = true

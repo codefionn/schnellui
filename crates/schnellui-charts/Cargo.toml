@@ -1,0 +1,18 @@
+[package]
+name = "schnellui-charts"
+description = "schnellui chart widgets: BarChart/LineChart/Sparkline content leaves built on the retained scene (SOUL §8.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-signal.workspace = true
+schnellui-scene.workspace = true
+schnellui-layout.workspace = true
+schnellui-text.workspace = true
+schnellui-a11y.workspace = true
+schnellui-widgets.workspace = true
+slotmap.workspace = true
+smallvec.workspace = true

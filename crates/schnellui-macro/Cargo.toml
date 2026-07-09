@@ -1,0 +1,25 @@
+[package]
+name = "schnellui-macro"
+description = "schnellui view! proc-macro: codegen to a typed builder chain with static/dynamic split (SOUL §3.3)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+schnellui-view-parser.workspace = true
+proc-macro2.workspace = true
+syn.workspace = true
+quote.workspace = true
+
+# The `view!` macro expands to `::schnellui_widgets::…` builder chains; the
+# expansion tests need widgets + signal in scope to prove the emitted code
+# actually compiles and type-checks against the frozen builder API (SOUL §3.3).
+[dev-dependencies]
+schnellui-widgets.workspace = true
+schnellui-signal.workspace = true
+schnellui-scene.workspace = true

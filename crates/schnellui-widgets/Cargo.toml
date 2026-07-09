@@ -1,0 +1,23 @@
+[package]
+name = "schnellui-widgets"
+description = "schnellui content primitives: typed builder chain (Column/Text/Button/...) — the macro's codegen target (SOUL §3.3, §8.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-template.workspace = true
+schnellui-signal.workspace = true
+schnellui-scene.workspace = true
+schnellui-motion.workspace = true
+schnellui-layout.workspace = true
+schnellui-text.workspace = true
+schnellui-a11y.workspace = true
+slotmap.workspace = true
+smallvec.workspace = true
+unicode-segmentation.workspace = true
+# PNG decode for `Image::from_png` (SOUL §8.1) — the same codec the renderer
+# already uses to encode shots.
+png.workspace = true

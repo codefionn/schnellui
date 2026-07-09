@@ -1,0 +1,49 @@
+[package]
+name = "schnellui"
+description = "schnellui umbrella: App::mount -> frame (pull->layout->paint->a11y), render_to_png, dump_a11y, dispatch_action (SOUL §7)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-template.workspace = true
+schnellui-signal.workspace = true
+schnellui-store.workspace = true
+schnellui-scene.workspace = true
+schnellui-layout.workspace = true
+schnellui-localization.workspace = true
+schnellui-text.workspace = true
+schnellui-render-wgpu.workspace = true
+schnellui-a11y.workspace = true
+schnellui-widgets.workspace = true
+schnellui-theme.workspace = true
+schnellui-icons.workspace = true
+schnellui-charts.workspace = true
+schnellui-macro.workspace = true
+schnellui-platform.workspace = true
+accesskit_winit.workspace = true
+slotmap.workspace = true
+# opt-in windowed (non-headless) mode: the winit 0.30 ApplicationHandler event loop
+# glue for `App::run_windowed` (SOUL §8). The headless one-shot screenshotter (§7)
+# never touches winit — it is only linked into the App API surface, not the hot path.
+winit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Optional: pulls in the counting #[global_allocator] for the alloc-budget test
+# (SOUL §4.1); gated so normal builds are untouched.
+allocation-counter = { workspace = true, optional = true }
+
+[features]
+# Compiles and enables the localhost instrumentation server in optimized builds.
+# Debug builds enable it automatically unless SCHNELLUI_DEBUG_SERVER=off.
+debug-instrumentation = []
+# Propagates the allocation-counter gate down to the signal + scene runtimes and
+# links the counting allocator for `tests/alloc_budget.rs` (§4.1).
+count-allocations = [
+    "dep:allocation-counter",
+    "schnellui-signal/count-allocations",
+    "schnellui-scene/count-allocations",
+]

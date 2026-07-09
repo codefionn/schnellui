@@ -1,0 +1,8 @@
+[package]
+name = "schnellui-motion"
+description = "Declarative animation declarations shared by every schnellui backend - sampled per frame for GPU rendering or compiled to CSS @keyframes for the HTML renderer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true

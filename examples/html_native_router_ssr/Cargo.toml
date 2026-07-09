@@ -1,0 +1,17 @@
+[package]
+name = "html_native_router_ssr"
+description = "Authorized SSR server example for schnellui's native HTML router"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "html_native_router_ssr"
+path = "src/main.rs"
+
+[dependencies]
+html_native_router = { path = "../html_native_router", version = "0.1.0" }
+schnellui-render-html = { workspace = true, features = ["ssr"] }
+clap.workspace = true

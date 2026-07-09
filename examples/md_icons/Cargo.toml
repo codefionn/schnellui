@@ -1,0 +1,19 @@
+[package]
+name = "md_icons"
+description = "Cached Material Design icon gallery for schnellui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "md_icons"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+schnellui.workspace = true
+schnellui-icons.workspace = true
+schnellui-icons-md.workspace = true
+schnellui-widgets.workspace = true

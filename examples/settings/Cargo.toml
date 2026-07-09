@@ -1,0 +1,23 @@
+[package]
+name = "settings"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "settings"
+path = "src/main.rs"
+
+[dependencies]
+# Umbrella crate: `App`, the `view!` macro, and the re-exported signal/scene/a11y APIs.
+schnellui.workspace = true
+# The a11y-tree oracle helpers (`find_by_role_name`, `assert_value_contains`).
+schnellui-testing.workspace = true
+# The `view!` macro expands to `::schnellui_widgets::…` paths, so the widgets crate
+# must be a direct dependency for those to resolve.
+schnellui-widgets.workspace = true
+clap.workspace = true
+strum.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "schnellui-view-parser"
+description = "schnellui view! parser + AST, separate from the proc-macro for tooling & hot-reload (SOUL §3.3)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+proc-macro2.workspace = true
+syn.workspace = true
+quote.workspace = true
+# NOTE: the schnellui view! grammar is brace/paren-based (`tag(attrs) { children }`),
+# not angle-bracket HTML, so it is hand-rolled on `syn` directly; rstml (an
+# HTML/JSX node parser) is not the right tool and is intentionally not pulled in.

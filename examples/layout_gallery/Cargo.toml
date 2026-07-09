@@ -1,0 +1,21 @@
+[package]
+name = "layout_gallery"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "layout_gallery"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+schnellui-testing.workspace = true
+# `view!` expands to `::schnellui_widgets::…` paths, so it must be a direct dep even
+# though the types are also reachable via `schnellui::widgets` (SOUL §3.3).
+schnellui-widgets.workspace = true
+clap.workspace = true
+strum.workspace = true

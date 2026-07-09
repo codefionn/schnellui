@@ -1,0 +1,26 @@
+[package]
+name = "schnellui-bench"
+description = "schnellui allocation + time budget benchmark: measures named hot paths against the SOUL §4.1 ALLOC_BUDGETS table and gates CI on the zero-alloc covenant (SOUL §1, §4)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "schnellui-bench"
+path = "src/main.rs"
+
+[dependencies]
+# The umbrella (App::mount/frame/set_signal/bind_paint) + its re-exported pillars.
+schnellui.workspace = true
+# Content primitives + the thread-local widget-state `reset()` used to isolate paths.
+schnellui-widgets.workspace = true
+# The closure-scoped counting allocator (SOUL §4.1). Its `#[global_allocator]` is
+# installed simply by linking the crate, so `allocation_counter::measure` counts the
+# heap traffic of any closure — no `count-allocations` feature needed here, since the
+# framework's runtime behaviour is identical either way (that feature only gates the
+# in-tree budget *tests*, it does not change frame()/set()).
+allocation-counter.workspace = true
+clap.workspace = true

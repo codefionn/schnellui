@@ -1,0 +1,21 @@
+[package]
+name = "schnellui-scene"
+description = "schnellui retained scene: WidgetId slotmap + ECS SecondaryMap columns, interned primitives, damage (SOUL §3.2, §8.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-signal.workspace = true
+slotmap.workspace = true
+smallvec.workspace = true
+# Optional: pulls in a counting #[global_allocator]; gated so normal builds are
+# untouched (SOUL §4.1). Enabled by the workspace `count-allocations` feature.
+allocation-counter = { workspace = true, optional = true }
+
+[features]
+# The soul-made-executable gate (SOUL §4.1). When on, the steady-state mutation
+# tests measure `allocs + bytes` and assert literal zero on the re-render path.
+count-allocations = ["dep:allocation-counter"]

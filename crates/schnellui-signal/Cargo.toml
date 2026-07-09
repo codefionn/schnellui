@@ -1,0 +1,23 @@
+[package]
+name = "schnellui-signal"
+description = "schnellui reactive arena: NodeId, Signal, Memo, Effect, push-pull coloring (SOUL §3.1)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+slotmap.workspace = true
+smallvec.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
+
+[dev-dependencies]
+# Closure-scoped allocation counter for the zero-alloc budget tests (§4.1).
+# Only compiled for tests; installs a counting global allocator in the test binary.
+allocation-counter.workspace = true
+
+[features]
+# Feature-gates the allocation-counting hot-path tests (§4.1). Off in normal builds.
+count-allocations = []

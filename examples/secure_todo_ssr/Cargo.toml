@@ -1,0 +1,20 @@
+[package]
+name = "secure_todo_ssr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+argon2 = "0.5"
+axum = { version = "0.8", features = ["form", "http1", "tokio"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+schnellui-render-html = { path = "../../crates/schnellui-render-html", features = ["ssr"] }
+schnellui-template = { path = "../../crates/schnellui-template" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }

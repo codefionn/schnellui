@@ -1,0 +1,13 @@
+[package]
+name = "schnellui-template"
+description = "Renderer-generic component templates for schnellui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-a11y.workspace = true
+schnellui-layout.workspace = true
+schnellui-scene.workspace = true

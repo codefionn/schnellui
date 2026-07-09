@@ -1,0 +1,20 @@
+[package]
+name = "temperature"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "temperature"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+schnellui-testing.workspace = true
+# Direct dep required: the `view!` macro expands to `::schnellui_widgets::…` paths.
+schnellui-widgets.workspace = true
+clap.workspace = true
+strum.workspace = true

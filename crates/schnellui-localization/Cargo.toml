@@ -1,0 +1,9 @@
+[package]
+name = "schnellui-localization"
+description = "Locale negotiation and message catalogs for schnellui applications"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
