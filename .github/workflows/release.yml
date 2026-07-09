@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Match tag against workspace version
+        run: |
+          version="$(cargo metadata --format-version 1 --no-deps \
+              | jq -r '.packages[] | select(.name == "schnellui") | .version')"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match workspace version ${version}"
+              exit 1
+          fi
+
+  check:
+    needs: version
+    uses: ./.github/workflows/check.yml
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [check, ci]
+    runs-on: ubuntu-24.04
+    # A first release of all workspace crates waits out the new-crate limit.
+    timeout-minutes: 360
+    environment: crates-io
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      # Publishes every member without `publish = false` in dependency order.
+      # crates.io lets an account create about one new crate per 10 minutes
+      # after a short burst and answers 429 past that. Each pass excludes the
+      # crates whose version is already in the index, so a 429 or a rerun
+      # after a partial upload resumes where the last attempt stopped.
+      - name: Publish to crates.io
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP}/publish.log"
+          for attempt in $(seq 1 30); do
+              excludes=()
+              pending=0
+              while read -r name version; do
+                  # Sparse index path for names of four or more characters.
+                  if curl -fsS "https://index.crates.io/${name:0:2}/${name:2:2}/${name}" 2>/dev/null \
+                      | jq -e --arg v "${version}" 'select(.vers == $v)' >/dev/null; then
+                      excludes+=(--exclude "${name}")
+                  else
+                      pending=$((pending + 1))
+                  fi
+              done < <(cargo metadata --format-version 1 --no-deps \
+                  | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"')
+              if (( pending == 0 )); then
+                  echo "all crates are on crates.io"
+                  exit 0
+              fi
+              echo "attempt ${attempt}: ${pending} crates left"
+              if cargo publish --workspace --locked "${excludes[@]}" 2>&1 | tee "${log}"; then
+                  continue
+              fi
+              if grep -q 'status 429' "${log}"; then
+                  sleep 600
+              elif grep -q 'already exists on crates.io index' "${log}"; then
+                  # The sparse index lags a fresh upload by a few seconds.
+                  sleep 30
+              else
+                  exit 1
+              fi
+          done
+          echo "::error::crates still unpublished after 30 attempts"
+          exit 1
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

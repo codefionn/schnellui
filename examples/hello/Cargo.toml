@@ -1,0 +1,17 @@
+[package]
+name = "hello"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"
+
+[dependencies]
+# The umbrella crate gives us `App` and re-exports the `view!` macro.
+schnellui.workspace = true
+clap.workspace = true

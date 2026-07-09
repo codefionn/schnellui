@@ -1,0 +1,67 @@
+name: Check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      # Servo is excluded like in scripts/ci.sh: building it takes longer than the
+      # rest of the workspace together. Lints are reported but do not fail the job
+      # until the existing warnings are fixed; add `-- -D warnings` after that.
+      - name: Clippy
+        run: |
+          cargo clippy --locked --workspace --all-targets \
+              --exclude schnellui-servo --exclude servo_demo
+
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      # Catches manifest and packaging problems before a release tag does.
+      - name: Package publishable crates
+        run: cargo publish --workspace --dry-run --no-verify --locked

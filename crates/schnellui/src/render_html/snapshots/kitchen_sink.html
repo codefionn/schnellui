@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style id="schnellui-native-styles">
+:root {
+  --sui-text: #1d242e;
+  --sui-muted: #5d6a7a;
+  --sui-surface: #ffffff;
+  --sui-outline: #8a96a8;
+  --sui-accent: #2e63d4;
+  --sui-on-accent: #ffffff;
+  --sui-disabled: #9da7b5;
+  --sui-page: #e7eaf0;
+  --sui-radius: 4px;
+  --sui-density: 1;
+  --sui-frame: 0px;
+  --sui-shadow: 0px;
+  --sui-focus: #0e1e40;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 640px; height: 480px; overflow: hidden; }
+body { background: var(--sui-page); color: var(--sui-text); font: 16px/1.2 Arial, Helvetica, sans-serif; }
+button, input, select, textarea { font: inherit; }
+#schnellui-root {
+  width: 640px;
+  height: 480px;
+  overflow: hidden;
+}
+.sui-container { display: flex; min-width: 0; min-height: 0; }
+.sui-row { flex-direction: row; }
+.sui-column { flex-direction: column; }
+.sui-stack { position: relative; }
+.sui-stack > * { position: absolute; inset: 0; }
+.sui-scroll { flex-direction: column; overflow-y: auto; overflow-x: visible; scrollbar-width: none; }
+.sui-scroll::-webkit-scrollbar { width: 0; height: 0; }
+.sui-scroll[data-sui-scrollbar="true"] { scrollbar-width: thin; scrollbar-color: var(--sui-outline) var(--sui-surface); }
+.sui-scroll[data-sui-scrollbar="true"]::-webkit-scrollbar { width: 10px; }
+.sui-scroll[data-sui-scrollbar="true"]::-webkit-scrollbar-track { background: var(--sui-surface); border-radius: 999px; }
+.sui-scroll[data-sui-scrollbar="true"]::-webkit-scrollbar-thumb { background: var(--sui-outline); border: 2px solid var(--sui-surface); border-radius: 999px; }
+.sui-pad { display: flex; flex-direction: column; }
+.sui-spacer { flex: 1 0 0; }
+.sui-flex { display: flex; }
+.sui-flex > * { flex: 1 1 auto; }
+.sui-container:has(> .sui-responsive[data-sui-responsive="parent"]),
+.sui-pad:has(> .sui-responsive[data-sui-responsive="parent"]),
+.sui-flex:has(> .sui-responsive[data-sui-responsive="parent"]) {
+  container-type: size;
+}
+.sui-responsive-c0a40a7e437eabdd { display: none; }
+@media (max-width: 400px) { .sui-responsive-c0a40a7e437eabdd { display: contents; } }
+
+.sui-text { display: inline-block; color: var(--sui-text); min-width: 0; }
+.sui-button {
+  appearance: none;
+  border: var(--sui-frame) solid var(--sui-outline);
+  border-radius: var(--sui-radius);
+  padding: calc(4px * var(--sui-density)) calc(8px * var(--sui-density));
+  color: var(--sui-on-accent);
+  background: var(--sui-accent);
+  box-shadow: var(--sui-shadow) var(--sui-shadow) 0 var(--sui-text);
+  cursor: pointer;
+}
+.sui-button-ghost { color: var(--sui-text); background: transparent; border-color: transparent; box-shadow: none; }
+.sui-button:disabled { background: var(--sui-disabled); cursor: default; }
+.sui-checkbox { width: calc(18px * var(--sui-density)); height: calc(18px * var(--sui-density)); margin: 0; accent-color: var(--sui-accent); }
+.sui-slider { width: 160px; margin: 0; accent-color: var(--sui-accent); }
+.sui-input-field { display: inline-flex; flex-direction: column; gap: 2px; color: var(--sui-muted); font-size: 12px; }
+.sui-input { min-width: 180px; padding: calc(4px * var(--sui-density)) calc(8px * var(--sui-density)); color: var(--sui-text); background: var(--sui-surface); border: max(1px, var(--sui-frame)) solid var(--sui-outline); border-radius: var(--sui-radius); }
+.sui-dock-area, .sui-tab-group, .sui-rich-text {
+  padding: 10px; border: 1px dashed var(--sui-outline); border-radius: var(--sui-radius);
+}
+.sui-drag-handle { cursor: grab; border: 0; color: var(--sui-muted); background: transparent; border-radius: var(--sui-radius); letter-spacing: -3px; }
+.sui-image { display: block; object-fit: cover; border-radius: var(--sui-radius); background: var(--sui-surface); }
+.sui-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; color: var(--sui-accent); }
+.sui-progress-field, .sui-textarea-field, .sui-dropdown-field {
+  display: inline-flex; flex-direction: column; gap: 4px; color: var(--sui-muted); font-size: 12px;
+}
+progress { width: 180px; accent-color: var(--sui-accent); }
+.sui-spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid var(--sui-outline); border-top-color: var(--sui-accent); border-radius: 50%; animation: sui-spin 900ms linear infinite; }
+@keyframes sui-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.sui-switch-field, .sui-radio-field { display: inline-flex; align-items: center; gap: 7px; }
+.sui-switch { accent-color: var(--sui-accent); }
+.sui-divider { width: 100%; margin: 2px 0; border: 0; border-top: 1px solid var(--sui-outline); }
+.sui-link { color: var(--sui-accent); border-radius: 2px; text-underline-offset: 2px; }
+.sui-link[aria-disabled="true"] { color: var(--sui-muted); cursor: not-allowed; opacity: 0.72; }
+.sui-badge { display: inline-block; width: fit-content; padding: 3px 8px; border-radius: 999px; color: var(--sui-on-accent); background: var(--sui-accent); font-size: 12px; }
+.sui-dialog { position: static; margin: 0; width: min(420px, 100%); padding: 14px; color: var(--sui-text); background: var(--sui-surface); border: 1px solid var(--sui-outline); border-radius: var(--sui-radius); }
+.sui-dialog::backdrop { display: none; }
+.sui-dialog header { margin-bottom: 8px; font-weight: 700; }
+.sui-grouped-tabs, .sui-tab-bar { display: flex; gap: 6px; align-items: flex-start; }
+.sui-tab-group { display: flex; flex-direction: column; gap: 5px; }
+.sui-tab-node { padding-left: 8px; border-left: 2px solid var(--sui-outline); }
+.sui-tab { padding: 5px 9px; color: var(--sui-text); background: var(--sui-surface); border: 1px solid var(--sui-outline); border-radius: var(--sui-radius); cursor: pointer; }
+.sui-tab[aria-selected="true"] { color: var(--sui-on-accent); background: var(--sui-accent); }
+.sui-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--sui-outline); border-radius: var(--sui-radius); overflow: hidden; }
+.sui-list-item { padding: 5px 9px; }
+.sui-list-item[tabindex="0"], .sui-table-row[tabindex="0"] { cursor: pointer; }
+.sui-list-item[aria-disabled="true"], .sui-table-row[aria-disabled="true"] { cursor: not-allowed; opacity: 0.68; }
+.sui-list-item + .sui-list-item { border-top: 1px solid var(--sui-outline); }
+.sui-list-item[aria-selected="true"] { background: color-mix(in srgb, var(--sui-accent) 18%, transparent); }
+.sui-dropdown, .sui-textarea { min-width: 180px; padding: 6px 8px; color: var(--sui-text); background: var(--sui-surface); border: 1px solid var(--sui-outline); border-radius: var(--sui-radius); }
+.sui-textarea { min-height: 74px; resize: none; }
+.sui-table { border-collapse: collapse; font-size: 13px; }
+.sui-table td { padding: 6px 10px; border: 1px solid var(--sui-outline); }
+.sui-table-row[aria-selected="true"] { background: color-mix(in srgb, var(--sui-accent) 18%, transparent); }
+.sui-rich-text h3, .sui-rich-text p { margin: 0 0 6px; }
+.sui-svg { display: grid; place-items: center; margin: 0; }
+.sui-svg svg { width: 100%; height: 100%; }
+.sui-svg img { width: 100%; height: 100%; object-fit: contain; }
+.sui-theme-provider { padding: 10px; color: #f8fafc; background: #172033; border-radius: var(--sui-radius); }
+.sui-theme-provider .sui-text { color: inherit; }
+
+:where(button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])) {
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    outline-color 120ms ease,
+    transform 90ms ease;
+}
+:where(button, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sui-button:not(:disabled):hover {
+    background-color:rgba(46, 99, 212, 0.0941);color:#1d242e;border-color:rgba(46, 99, 212, 0.7216);
+    transform: translate(-1px, -1px);
+  }
+  .sui-button-ghost:not(:disabled):hover,
+  .sui-tab:not(:disabled):hover,
+  .sui-drag-handle:not(:disabled):hover,
+  .sui-list-item[tabindex="0"]:hover,
+  .sui-table-row[tabindex="0"]:hover {
+    background-color:rgba(46, 99, 212, 0.0941);color:#1d242e;border-color:rgba(46, 99, 212, 0.7216);
+  }
+  .sui-link:not([aria-disabled="true"]):hover {
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+  }
+  :where(.sui-input, .sui-dropdown, .sui-textarea):not(:disabled):hover {
+    border-color:rgba(46, 99, 212, 0.7216);
+  }
+  :where(.sui-checkbox, .sui-slider, .sui-switch, .sui-radio-field input):not(:disabled):hover {
+    background-color:rgba(46, 99, 212, 0.0941);color:#1d242e;border-color:rgba(46, 99, 212, 0.7216);
+  }
+  :where(.sui-scroll, .sui-image, .sui-rich-text):hover {  }
+}
+
+:where(
+  .sui-tab,
+  .sui-drag-handle,
+  .sui-list-item[tabindex="0"],
+  .sui-table-row[tabindex="0"]
+):not(:disabled):active {
+  background-color:#dbe6f9;
+  transform: translate(1px, 1px);
+}
+.sui-button:not(:disabled):active { background-color:#dbe6f9; transform: translate(1px, 1px); }
+:where(.sui-checkbox, .sui-slider, .sui-switch, .sui-radio-field input):not(:disabled):active { background-color:#dbe6f9; }
+:where(.sui-input, .sui-dropdown, .sui-textarea):not(:disabled):active {  }
+:where(.sui-scroll, .sui-image, .sui-rich-text):active {  }
+
+:where(button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: none;
+}
+:where(.sui-button):focus-visible { outline:3px solid #0e1e40;outline-offset:-3px; }
+:where(.sui-tab, .sui-list-item, .sui-table-row, .sui-link):focus-visible { outline:3px solid #0e1e40;outline-offset:-3px; }
+:where(.sui-input, .sui-dropdown, .sui-textarea):focus-visible {
+  outline:3px solid #0e1e40;outline-offset:-3px;
+}
+:where(.sui-checkbox, .sui-slider, .sui-switch, .sui-radio-field input):focus-visible { outline:3px solid #0e1e40;outline-offset:-3px; }
+:where(.sui-scroll, .sui-image, .sui-rich-text):focus-visible { outline:3px solid #0e1e40;outline-offset:-3px; }
+:where(.sui-input-field, .sui-dropdown-field, .sui-textarea-field):has(:focus-visible),
+:where(.sui-switch-field, .sui-radio-field):has(input:focus-visible) {
+  color: var(--sui-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, a[href], input, select, textarea, [tabindex]) {
+    transition: none;
+  }
+  .sui-spinner { animation: none; }
+}
+
+@media (forced-colors: active) {
+  :where(button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline-color: Highlight;
+  }
+}
+</style>
+</head>
+<body><main id="schnellui-root"><div class="sui-container sui-column" style="gap:3.5px;justify-content:flex-start;align-items:flex-start;" data-sui-component="Column"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">a"b'c&lt;d&gt;&amp;e é ✓</span><button class="sui-button" data-sui-component="Button" data-sui-role="button" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" style="" onclick="__schnellui_rust_event(JSON.stringify({id:0,value:''}))">a"b'c&lt;d&gt;&amp;e é ✓</button><input class="sui-checkbox" data-sui-component="Checkbox" data-sui-role="checkbox" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="checkbox" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" checked><input class="sui-slider" data-sui-component="Slider" data-sui-role="slider" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="range" min="0" max="10" value="4" step="0.5" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><label class="sui-input-field" data-sui-component="TextInput"><span>a"b'c&lt;d&gt;&amp;e é ✓</span><input class="sui-input" data-sui-role="text-input" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="text" value="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"></label><label class="sui-input-field" data-sui-component="PasswordInput"><span>a"b'c&lt;d&gt;&amp;e é ✓</span><input class="sui-input" data-sui-role="password-input" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="password" value="pw" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"></label><div class="sui-pad" style="padding:4px 4px 4px 4px;" data-sui-component="Pad"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">padded</span></div><div class="sui-flex" style="flex-grow:1;" data-sui-component="Flex"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">flex</span></div><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;" data-sui-key="k1">keyed</span><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;" data-sui-key="outer">keyed twice</span><div class="sui-responsive sui-responsive-c0a40a7e437eabdd" data-sui-responsive="viewport" data-sui-key="rk"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">ref</span></div><div class="sui-container sui-row" style="gap:0px;justify-content:flex-start;align-items:flex-start;" data-sui-component="Row"><section class="sui-dock-area" data-sui-component="DockArea" data-sui-role="group" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">in dock</span></section><button class="sui-drag-handle" data-sui-component="DragHandle" data-sui-role="button" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" draggable="true" onclick="__schnellui_rust_event(JSON.stringify({id:1,value:''}))">⋮⋮</button><img class="sui-image" data-sui-component="Image" data-sui-role="image" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" src="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" alt="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" style="width:10px;height:20px;"><span class="sui-icon" data-sui-component="Icon" role="img" data-sui-role="image" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓">a"b'c&lt;d&gt;&amp;e é ✓</span><span class="sui-icon" data-sui-component="Icon" role="img" data-sui-role="image" data-sui-name="default icon" aria-label="default icon">◆</span><label class="sui-progress-field" data-sui-component="ProgressBar"><span>a"b'c&lt;d&gt;&amp;e é ✓</span><progress data-sui-role="progress-indicator" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" value="3" min="0" max="9"></progress></label><span class="sui-spinner" data-sui-component="LoadingSpinner" data-sui-role="progress-indicator" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" role="progressbar" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-busy="true"></span><label class="sui-switch-field" data-sui-component="Switch"><input class="sui-switch" data-sui-role="switch" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="checkbox" role="switch" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" checked onchange="__schnellui_rust_event(JSON.stringify({id:2,checked:this.checked,value:this.value}))"><span>a"b'c&lt;d&gt;&amp;e é ✓</span></label><label class="sui-radio-field" data-sui-component="Radio"><input data-sui-role="radio" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" type="radio" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" checked onchange="__schnellui_rust_event(JSON.stringify({id:3,value:this.value}))"><span>a"b'c&lt;d&gt;&amp;e é ✓</span></label><hr class="sui-divider" data-sui-component="Divider"><a class="sui-link" data-sui-component="Link" data-sui-role="link" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" href="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-disabled="false" onclick="__schnellui_rust_event(JSON.stringify({id:4,value:''}))">a"b'c&lt;d&gt;&amp;e é ✓</a><a class="sui-link" data-sui-component="Link" data-sui-role="link" data-sui-name="off" aria-disabled="true" tabindex="-1">off</a><output class="sui-badge" data-sui-component="Badge" data-sui-role="status" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓">a"b'c&lt;d&gt;&amp;e é ✓</output></div><dialog class="sui-dialog" data-sui-component="Dialog" data-sui-role="dialog" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" open><header>a"b'c&lt;d&gt;&amp;e é ✓</header><nav class="sui-grouped-tabs" data-sui-component="GroupedTabList" data-sui-role="tab-list" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><section class="sui-tab-group" data-sui-component="TabGroup" data-sui-role="group" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><strong>a"b'c&lt;d&gt;&amp;e é ✓</strong><div class="sui-tab-node" data-sui-component="TabNode" data-sui-role="group" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><div class="sui-tab-bar" data-sui-component="TabBar" role="tablist" data-sui-role="tab-list" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><button class="sui-tab" data-sui-component="Tab" role="tab" data-sui-role="tab" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-selected="true" onclick="__schnellui_rust_event(JSON.stringify({id:5,value:''}))">a"b'c&lt;d&gt;&amp;e é ✓</button></div></div></section></nav></dialog><ul class="sui-list" data-sui-component="List" data-sui-role="list" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><li class="sui-list-item" data-sui-component="ListItem" data-sui-role="list-item" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-selected="true" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" onclick="__schnellui_rust_event(JSON.stringify({id:6,value:''}))">a"b'c&lt;d&gt;&amp;e é ✓<span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">nested</span></li></ul><label class="sui-dropdown-field" data-sui-component="Dropdown"><span>a"b'c&lt;d&gt;&amp;e é ✓</span><select class="sui-dropdown" data-sui-role="combo-box" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" onchange="__schnellui_rust_event(JSON.stringify({id:7,value:this.value}))"><option class="sui-dropdown-option" data-sui-component="DropdownOption" data-sui-role="list-box-option" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" value="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" selected>a"b'c&lt;d&gt;&amp;e é ✓</option><option class="sui-dropdown-option" data-sui-component="DropdownOption" data-sui-role="list-box-option" data-sui-name="plain" value="plain">plain</option></select></label><table class="sui-table" data-sui-component="Table" data-sui-role="table" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><tbody><tr class="sui-table-row" data-sui-component="TableRow" data-sui-role="table-row" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}" onclick="__schnellui_rust_event(JSON.stringify({id:8,value:''}))"><td>a"b'c&lt;d&gt;&amp;e é ✓</td><td>cell</td></tr></tbody></table><article class="sui-rich-text" data-sui-component="RichText" data-sui-role="document" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><h3>a"b'c&lt;d&gt;&amp;e é ✓</h3><p>a"b'c&lt;d&gt;&amp;e é ✓</p><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">rt</span></article><label class="sui-textarea-field" data-sui-component="TextArea"><span>a"b'c&lt;d&gt;&amp;e é ✓</span><textarea class="sui-textarea" data-sui-role="multiline-text-input" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" placeholder="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" oninput="__schnellui_rust_event(JSON.stringify({id:9,value:this.value}))">a"b'c&lt;d&gt;&amp;e é ✓</textarea></label><figure class="sui-svg" data-sui-component="Svg" data-sui-role="image" data-sui-name="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" aria-label="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓" style="width:5px;height:6px;"><img src="data:image/svg+xml;base64,PHN2Zy8+" alt="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"></figure><figure class="sui-svg" data-sui-component="Svg" data-sui-role="image" data-sui-name="" aria-label="" style=""><svg id="t"></svg></figure><section class="sui-theme-provider" data-sui-component="ThemeProvider" data-theme="a&quot;b&#39;c&lt;d&gt;&amp;e é ✓"><span class="sui-text" data-sui-component="Text" style="font-size:16px;white-space:nowrap;text-align:start;">themed</span></section></div></main>
+<script>
+(() => {
+  let active = null;
+  let pointerY = 0;
+  let frame = 0;
+  const tick = () => {
+    if (!active) return;
+    const rect = active.getBoundingClientRect();
+    const zone = Math.min(24, rect.height / 2);
+    const delta = pointerY <= rect.top + zone ? -12 :
+      pointerY >= rect.bottom - zone ? 12 : 0;
+    if (delta) active.scrollTop += delta;
+    frame = requestAnimationFrame(tick);
+  };
+  document.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    active = event.target.closest('.sui-scroll[data-sui-edge-auto-scroll="true"]');
+    if (!active) return;
+    pointerY = event.clientY;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(tick);
+  });
+  document.addEventListener('pointermove', event => { pointerY = event.clientY; });
+  const stop = () => { active = null; cancelAnimationFrame(frame); };
+  document.addEventListener('pointerup', stop);
+  document.addEventListener('pointercancel', stop);
+})();
+</script>
+</body>
+</html>

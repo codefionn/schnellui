@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-and-allocation-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      SCHNELLUI_DEBUG_SERVER: "off"
+      # Mesa's CPU Vulkan adapter makes render equivalence tests work on runners.
+      WGPU_BACKEND: vulkan
+      SCHNELLUI_REQUIRE_GPU: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install native build and software rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev libvulkan1 mesa-vulkan-drivers fonts-dejavu-core
+          # Job-level env cannot read the runner context, so these paths are set here.
+          echo "SCHNELLUI_CI_REPORT=$RUNNER_TEMP/allocation-report.json" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
+      - name: Test and enforce allocation budgets
+        run: scripts/ci.sh
+      - name: Save allocation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: allocation-report
+          path: ${{ env.SCHNELLUI_CI_REPORT }}
+          if-no-files-found: ignore
+          retention-days: 7

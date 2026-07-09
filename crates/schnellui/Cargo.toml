@@ -1,0 +1,84 @@
+[package]
+name = "schnellui"
+description = "schnellui: the reactive signal arena, retained scene, layout, text, widgets, themes, GPU + HTML renderers, platform integration and the App runtime (SOUL §8)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+schnellui-macro.workspace = true
+accesskit.workspace = true
+accesskit_winit.workspace = true
+slotmap.workspace = true
+smallvec.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
+rustc-hash.workspace = true
+# Inline (<= 24 byte) strings: terminal cell graphemes clone without allocating.
+compact_str.workspace = true
+unicode-segmentation.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+taffy.workspace = true
+parley.workspace = true
+swash.workspace = true
+fontique.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+# PNG encode (render readback) and decode (`Image::from_png`).
+png.workspace = true
+bytemuck.workspace = true
+# PNG decode/encode and the perceptual diff behind `schnellui::testing`.
+image.workspace = true
+# opt-in windowed (non-headless) mode: winit 0.30 ApplicationHandler event loop
+# glue for `App::run_windowed` (SOUL §8). The headless one-shot screenshotter (§7)
+# never touches winit — it is only linked into the App API surface, not the hot path.
+winit.workspace = true
+
+# Optional: pulls in the counting #[global_allocator] for the alloc-budget test
+# (SOUL §4.1); gated so normal builds are untouched.
+allocation-counter = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+arboard.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd.workspace = true
+async-io.workspace = true
+futures-util.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = ["NSFont"] }
+objc2-foundation.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chromiumoxide.workspace = true
+futures.workspace = true
+tokio.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+
+[dev-dependencies]
+# Closure-scoped allocation counter for the zero-alloc budget tests (§4.1).
+# Only compiled for tests; installs a counting global allocator in the test binary.
+allocation-counter.workspace = true
+# Property tests with shrinking (the `testing` pillar's dev-dependency only).
+proptest.workspace = true
+
+[features]
+# Compiles and enables the localhost instrumentation server in optimized builds.
+# Debug builds enable it automatically unless SCHNELLUI_DEBUG_SERVER=off.
+debug-instrumentation = []
+# The soul-made-executable gate (SOUL §4.1). When on, the steady-state mutation
+# tests measure `allocs + bytes` and assert literal zero on the re-render path.
+# Also links the counting allocator for `tests/alloc_budget.rs`.
+count-allocations = ["dep:allocation-counter"]
+# Server-side rendering entry points of the HTML renderer.
+ssr = []

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8fff778ea26f2eb6f552860c6732aff7072ca752f27f95da1ffbbdea58b4174f # shrinks to ops = [Type("👍🏽"), Backspace, Type("a"), Type("a")]
+cc 376fb2343cacaea0b4f69d75c112d8988b922a8927d3a5fd9d17af025cf1198f # shrinks to ops = [Type("Ω"), Type("ß"), Home { shift: false }, SetValue(["Ω", "ß"]), Backspace]

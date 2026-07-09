@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Servo Engine Room</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #173834;
+      --paper: #f3eddf;
+      --signal: #eb5e36;
+      --line: rgba(23, 56, 52, .22);
+      --muted: #677772;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, transparent 31px, var(--line) 32px, transparent 33px),
+        linear-gradient(transparent 31px, var(--line) 32px, transparent 33px),
+        var(--paper);
+      background-size: 32px 32px;
+      font-family: Georgia, "Times New Roman", serif;
+    }
+
+    main {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .hero {
+      display: flex;
+      flex: 1.3 1 0;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: clamp(32px, 6vw, 72px);
+      border-right: 1px solid var(--ink);
+      background: rgba(243, 237, 223, .88);
+    }
+
+    .eyebrow, .readout, button, label {
+      font-family: "Courier New", monospace;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .lamp {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--signal);
+      box-shadow: 0 0 0 5px rgba(235, 94, 54, .14);
+    }
+
+    h1 {
+      max-width: 680px;
+      margin: 28px 0 18px;
+      font-size: clamp(48px, 8vw, 104px);
+      font-weight: 400;
+      line-height: .82;
+      letter-spacing: -.065em;
+    }
+
+    .lede {
+      max-width: 580px;
+      margin: 0;
+      font-size: clamp(17px, 2vw, 23px);
+      line-height: 1.45;
+    }
+
+    .readout {
+      display: flex;
+      gap: 28px;
+      margin-top: 48px;
+      padding-top: 18px;
+      border-top: 1px solid var(--ink);
+      font-size: 11px;
+    }
+
+    .panel {
+      display: flex;
+      flex: .7 1 0;
+      flex-direction: column;
+      justify-content: center;
+      gap: 22px;
+      padding: clamp(26px, 4vw, 52px);
+      color: var(--paper);
+      background: var(--ink);
+    }
+
+    .panel h2 {
+      margin: 0;
+      font-size: clamp(26px, 4vw, 46px);
+      font-weight: 400;
+      line-height: 1;
+    }
+
+    .panel p {
+      margin: 0;
+      color: #c9d1ca;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #c9d1ca;
+      font-size: 10px;
+    }
+
+    input {
+      width: 100%;
+      padding: 13px 14px;
+      color: var(--paper);
+      border: 1px solid #77918a;
+      border-radius: 0;
+      outline: none;
+      background: transparent;
+      font: 16px Georgia, serif;
+    }
+
+    input:focus { border-color: var(--signal); }
+
+    button {
+      width: 100%;
+      padding: 15px 18px;
+      color: var(--ink);
+      border: 0;
+      background: var(--signal);
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s ease, transform .15s ease;
+    }
+
+    button:hover { background: #ff7650; }
+    button:active { transform: translateY(2px); }
+
+    #status {
+      min-height: 1.5em;
+      color: #fff0e6;
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+    }
+
+    @media (max-width: 640px) {
+      main { flex-direction: column; }
+      .hero { min-height: 70vh; border-right: 0; border-bottom: 1px solid var(--ink); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow"><span class="lamp"></span> SchnellUI / Servo 0.4</p>
+        <h1>Engine<br>room.</h1>
+        <p class="lede">A real web document, painted by Servo into an offscreen RGBA frame and composited by SchnellUI.</p>
+      </div>
+      <div class="readout">
+        <span>Profile: shared</span>
+        <span>Surface: software</span>
+        <span>Input: live</span>
+      </div>
+    </section>
+    <aside class="panel">
+      <h2>Signal test</h2>
+      <p>In windowed mode, focus this page and type a callsign. Pointer, keyboard, wheel, focus, and IME events cross the embedding seam.</p>
+      <div>
+        <label for="callsign">Operator callsign</label>
+        <input id="callsign" value="Ada" autocomplete="off">
+      </div>
+      <button id="pulse" type="button">Send impulse</button>
+      <output id="status" aria-live="polite">Awaiting input.</output>
+    </aside>
+  </main>
+  <script>
+    let impulses = 0;
+    document.getElementById('pulse').addEventListener('click', () => {
+      impulses += 1;
+      const name = document.getElementById('callsign').value || 'anonymous';
+      document.getElementById('status').textContent = `Impulse ${impulses} received from ${name}.`;
+    });
+  </script>
+</body>
+</html>

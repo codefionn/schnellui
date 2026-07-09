@@ -1,0 +1,17 @@
+[package]
+name = "layout_gallery"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "layout_gallery"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+clap.workspace = true
+strum.workspace = true

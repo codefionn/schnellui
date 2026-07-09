@@ -1,0 +1,18 @@
+[package]
+name = "playground"
+description = "schnellui example"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "playground"
+path = "src/main.rs"
+
+[dependencies]
+# Umbrella crate: `App`, the `view!` macro, and the re-exported signal/scene/a11y APIs.
+schnellui.workspace = true
+clap.workspace = true
+strum.workspace = true

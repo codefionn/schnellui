@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8b5c2242726f8482a2fb0ee62ca397661bc1053ba9c265b1bae59c7ffa7f7b11 # shrinks to spec = GraphSpec { nodes: [Memo(Sum(0, 0)), Memo(Sum(0, 0)), Input(0), Memo(Sum(0, 0)), Input(0), Mirror { source: 17, factor: 0 }, Memo(Sum(18, 29)), Mirror { source: 20, factor: 0 }, Input(0), Input(0), Input(0), Memo(Sum(40, 33)), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0), Input(0)], watches: [36], ops: [Set { input: 0, value: 0 }, Add { input: 1, delta: 0 }, Flush, Flush] }

@@ -1,0 +1,23 @@
+[package]
+name = "schnellui-macro"
+description = "schnellui view! proc-macro: codegen to a typed builder chain with static/dynamic split (SOUL §3.3)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+schnellui-view-parser.workspace = true
+proc-macro2.workspace = true
+syn.workspace = true
+quote.workspace = true
+
+# The `view!` macro expands to `::schnellui::widgets::…` builder chains. Proving
+# that output compiles against the frozen builder API needs the umbrella crate,
+# which depends on this one — so those expansion tests live in
+# `crates/schnellui/tests/view_expansion.rs` rather than as a dev-dependency here
+# (a dev-dep on `schnellui` would make the crates.io publish order cyclic).

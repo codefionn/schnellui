@@ -1,0 +1,17 @@
+[package]
+name = "dockable_workspace"
+description = "A configurable dockable-tab workspace built with schnellui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "dockable_workspace"
+path = "src/main.rs"
+
+[dependencies]
+schnellui.workspace = true
+clap.workspace = true
+strum.workspace = true
