@@ -177,8 +177,13 @@ pub(crate) fn emit_text_input_paint(
     // The width ignores the value, as an HTML `<input>` does. The build-time
     // measure is fixed while editing never relayouts, so a value-sized field
     // would be wider when mounted with text than after typing the same text.
+    // A requested width also ignores the label, which is cut with an ellipsis
+    // below, so a long label never pushes the field past its row.
     let intrinsic = Size {
-        width: (full_label_sz.width.max(MIN_FIELD_W) + 2.0 * pad_h).max(width.unwrap_or(0.0)),
+        width: width.map_or(
+            full_label_sz.width.max(MIN_FIELD_W) + 2.0 * pad_h,
+            |width| width.max(MIN_FIELD_W + 2.0 * pad_h),
+        ),
         height: if placeholder.is_empty() {
             content_h + 2.0 * pad_v
         } else {
@@ -283,7 +288,8 @@ pub(crate) fn emit_text_input_paint(
         let eased = 1.0 - (1.0 - progress).powi(3);
         let label_size_px = size_px + (float_size_px - size_px) * eased;
         let label_phys = phys_size_px(label_size_px, scale);
-        let label = shaper.shape(&placeholder, label_phys, None);
+        // The label ends at the value's clip edge, with an ellipsis when cut.
+        let label = shaper.truncate_to_width(&placeholder, label_phys, view_w / inv);
         let rest_y = rect.y + (rect.height - full_label_sz.height) * 0.5;
         let float_y = rect.y + pad_v;
         let label_origin = Point {

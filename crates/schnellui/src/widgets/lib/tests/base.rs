@@ -317,6 +317,32 @@ fn text_input_width_expands_the_painted_field() {
 }
 
 #[test]
+fn text_input_width_cuts_a_longer_label_instead_of_growing() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let label = "Path, host:/path, ssh://host/path, tailscale://host/path or a repository URL";
+    let (scene, _layout, _text, _atlas, id) =
+        build_one(runtime, TextInput::new("").label(label).width(200.0));
+    let primitives = &scene.paint(id).unwrap().primitives;
+    let Primitive::SolidRect { rect, .. } = primitives[0] else {
+        panic!("text input border should be a solid rectangle");
+    };
+    assert_eq!(rect.width, 200.0);
+    let glyphs: Vec<_> = primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::GlyphQuad { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    assert!(!glyphs.is_empty());
+    for glyph in glyphs {
+        assert!(glyph.x + glyph.width <= rect.x + rect.width);
+    }
+    assert_eq!(scene.a11y(id).unwrap().name.as_deref(), Some(label));
+}
+
+#[test]
 fn password_input_obscures_semantics_but_not_its_input_callback() {
     let runtime_handle = crate::widgets::Runtime::new();
     #[allow(unused_variables)]

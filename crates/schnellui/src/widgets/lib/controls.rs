@@ -549,7 +549,9 @@ impl TextInput {
         self.on_input = Some(Box::new(f));
         self
     }
-    /// Sets a minimum painted width for the field.
+    /// Sets the painted width of the field, at least the field's minimum. A
+    /// label longer than the field is cut with an ellipsis; the full label
+    /// stays the accessible name.
     pub fn width(mut self, width: f32) -> TextInput {
         self.width = width.is_finite().then_some(width.max(0.0));
         self

@@ -79,7 +79,8 @@ impl ComboBox {
         self
     }
 
-    /// Sets a minimum field and popup width.
+    /// Sets the field and popup width. A longer label is cut with an
+    /// ellipsis instead of widening the field.
     pub fn width(mut self, width: f32) -> Self {
         self.width = width.is_finite().then_some(width.max(0.0));
         self

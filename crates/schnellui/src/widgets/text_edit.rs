@@ -90,7 +90,7 @@ pub(crate) struct EditState {
     pub(crate) caret: usize,
     pub(crate) anchor: usize,
     pub(crate) size_px: f32,
-    /// Optional minimum painted width requested by the view.
+    /// Painted width requested by the view; the label does not widen it.
     pub(crate) width: Option<f32>,
     /// logical→physical scale captured at build (SOUL §7.1 `--scale`).
     pub(crate) scale: f32,
