@@ -10,13 +10,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use schnellui::a11y::{ActionFlags, Role};
 use schnellui::scene::{
     Color, DirtyFlags, PaintData, Point, Primitive, Rect, Scene, Size, TexelRect, WidgetId,
     WidgetKind,
 };
-use schnellui::text::{FontFace, GlyphAtlas, ShapeOptions, ShapedText, TextShaper, WrapMode};
+use schnellui::text::{FontFace, GlyphAtlas, ShapeOptions, TextShaper, WrapMode};
 use slotmap::SecondaryMap;
+use smallvec::SmallVec;
 
 mod interaction;
 mod patch;
@@ -737,7 +739,7 @@ struct TerminalGridState {
     source: Option<DynamicTerminalGridSource>,
     measured: Rc<RefCell<Size>>,
     image_cache: HashMap<u64, CachedImage>,
-    glyph_shape_cache: HashMap<FontFace, HashMap<CompactString, ShapedText>>,
+    glyph_cells: CellGlyphCache,
     paint_cache: TerminalPaintCache,
     /// Rows whose model-dependent cell fragments need rebuilding. A row is the
     /// smallest unit that preserves merged background runs without scanning or
@@ -991,7 +993,7 @@ impl View for TerminalGrid {
             source,
             measured: measured.clone(),
             image_cache: HashMap::new(),
-            glyph_shape_cache: HashMap::new(),
+            glyph_cells: CellGlyphCache::default(),
             paint_cache: TerminalPaintCache::default(),
             dirty_rows: RowSet::default(),
             images_dirty: true,
@@ -1249,6 +1251,156 @@ fn rebuild_background_row(
     );
 }
 
+/// One glyph quad of a cell's grapheme, placed relative to the cell's top-left
+/// corner, without a color.
+#[derive(Clone, Copy)]
+struct CellGlyphQuad {
+    rect: Rect,
+    atlas_uv: Rect,
+}
+
+/// The quads that draw one grapheme in one cell.
+#[derive(Clone, Default)]
+struct CellGlyph {
+    quads: SmallVec<[CellGlyphQuad; 1]>,
+}
+
+/// What [`CellGlyphCache::get`] needs to shape and rasterize a grapheme it has
+/// not seen.
+struct CellGlyphShaping<'a> {
+    shaper: &'a mut TextShaper,
+    atlas: &'a mut GlyphAtlas,
+    font_family: Option<&'a str>,
+    metrics: TerminalCellMetrics,
+    scale: f32,
+    physical_size: f32,
+}
+
+/// Placed glyph quads per grapheme, so a row rebuild costs one lookup per cell
+/// instead of a shape-cache lookup plus one rasterized-glyph lookup per glyph.
+/// Single-width ASCII graphemes, nearly every cell of real output, index a flat
+/// table without hashing. Atlas slots never move (the atlas only grows and keeps
+/// its texels), so an entry stays valid until the font size or cell metrics
+/// change, which clears the cache.
+#[derive(Default)]
+struct CellGlyphCache {
+    physical_size: u32,
+    metrics: Option<TerminalCellMetrics>,
+    /// `[bold]`, each indexed by the ASCII byte. Empty until first used.
+    ascii: [Vec<Option<CellGlyph>>; 2],
+    /// `[bold * 2 + wide]`, every other grapheme.
+    other: [FxHashMap<CompactString, CellGlyph>; 4],
+    /// Reused output of [`rasterize_and_push`] while preparing an entry.
+    scratch: PaintData,
+}
+
+impl CellGlyphCache {
+    /// Drops every entry when the font size or the cell metrics changed.
+    fn prepare(&mut self, physical_size: u32, metrics: TerminalCellMetrics) {
+        if self.physical_size == physical_size && self.metrics == Some(metrics) {
+            return;
+        }
+        self.physical_size = physical_size;
+        self.metrics = Some(metrics);
+        self.ascii.iter_mut().for_each(Vec::clear);
+        self.other.iter_mut().for_each(FxHashMap::clear);
+    }
+
+    fn get(
+        &mut self,
+        bold: bool,
+        wide: bool,
+        grapheme: &CompactString,
+        shaping: CellGlyphShaping<'_>,
+    ) -> &CellGlyph {
+        let byte = match grapheme.as_bytes() {
+            [byte] if byte.is_ascii() && !wide => Some(*byte as usize),
+            _ => None,
+        };
+        let Self {
+            ascii,
+            other,
+            scratch,
+            ..
+        } = self;
+        if let Some(byte) = byte {
+            let table = &mut ascii[bold as usize];
+            if table.is_empty() {
+                table.resize(128, None);
+            }
+            return table[byte]
+                .get_or_insert_with(|| Self::shape(scratch, bold, wide, grapheme, shaping));
+        }
+        let map = &mut other[bold as usize * 2 + wide as usize];
+        if !map.contains_key(grapheme.as_str()) {
+            let glyph = Self::shape(scratch, bold, wide, grapheme, shaping);
+            map.insert(grapheme.clone(), glyph);
+        }
+        map.get(grapheme.as_str())
+            .expect("cell glyph inserted above")
+    }
+
+    /// Shapes and rasterizes a grapheme centered in its cell span. Cold: runs
+    /// once per grapheme, face and width.
+    fn shape(
+        scratch: &mut PaintData,
+        bold: bool,
+        wide: bool,
+        grapheme: &str,
+        shaping: CellGlyphShaping<'_>,
+    ) -> CellGlyph {
+        let CellGlyphShaping {
+            shaper,
+            atlas,
+            font_family,
+            metrics,
+            scale,
+            physical_size,
+        } = shaping;
+        // The embedded mono set has no italic face. Keeping the mono metrics
+        // matters more than silently switching families.
+        let face = if bold {
+            FontFace::MonoBold
+        } else {
+            FontFace::Mono
+        };
+        let opts = ShapeOptions::new(physical_size)
+            .wrap(WrapMode::NoWrap)
+            .face(face);
+        let shaped = match font_family {
+            Some(family) => shaper.shape_with_family(grapheme, &opts, family),
+            None => shaper.shape_with(grapheme, &opts),
+        };
+        let span_width = metrics.width * if wide { 2.0 } else { 1.0 };
+        let origin = Point {
+            x: ((span_width - shaped.width / scale) * 0.5).max(0.0),
+            y: ((metrics.height - shaped.height / scale) * 0.5).max(0.0),
+        };
+        scratch.primitives.clear();
+        rasterize_and_push(
+            scratch,
+            shaper,
+            atlas,
+            &shaped,
+            physical_size as u32,
+            Color::TRANSPARENT,
+            scale,
+            origin,
+        );
+        let quads = scratch
+            .primitives
+            .iter()
+            .filter_map(|primitive| match *primitive {
+                Primitive::GlyphQuad { rect, atlas_uv, .. } => {
+                    Some(CellGlyphQuad { rect, atlas_uv })
+                }
+                _ => None,
+            })
+            .collect();
+        CellGlyph { quads }
+    }
+}
+
 fn rebuild_glyph_row(
     state: &mut TerminalGridState,
     shaper: &mut TextShaper,
@@ -1263,13 +1415,14 @@ fn rebuild_glyph_row(
         metrics,
         font_family,
         scale,
-        glyph_shape_cache,
+        glyph_cells,
         paint_cache,
         ..
     } = state;
     let metrics = *metrics;
     let scale = norm_scale(*scale);
     let physical_size = phys_size_px(metrics.font_size, scale);
+    glyph_cells.prepare(physical_size as u32, metrics);
     let mut paint = PaintData {
         primitives: std::mem::take(&mut paint_cache.rows[row].glyphs),
     };
@@ -1300,53 +1453,6 @@ fn rebuild_glyph_row(
         if cell.attrs.faint {
             foreground = color_with_alpha(foreground, 1, 2);
         }
-        if push_block_element(
-            &mut paint.primitives,
-            cell.grapheme.as_str(),
-            metrics.cell_rect(
-                Point {
-                    x: rect.x,
-                    y: rect.y,
-                },
-                point,
-            ),
-            foreground,
-            scale,
-        ) {
-            continue;
-        }
-
-        let face = if cell.attrs.bold {
-            FontFace::MonoBold
-        } else {
-            // The embedded mono set has no italic face. Keeping the mono metrics
-            // matters more than silently switching families.
-            FontFace::Mono
-        };
-        let face_cache = glyph_shape_cache.entry(face).or_default();
-        // Lookups borrow the inline grapheme as `&str`; only a first-seen
-        // grapheme clones it into the cache.
-        if !face_cache.contains_key(cell.grapheme.as_str()) {
-            let opts = ShapeOptions::new(physical_size)
-                .wrap(WrapMode::NoWrap)
-                .face(face);
-            let shaped = match font_family.as_deref() {
-                Some(family) => shaper.shape_with_family(&cell.grapheme, &opts, family),
-                None => shaper.shape_with(&cell.grapheme, &opts),
-            };
-            face_cache.insert(cell.grapheme.clone(), shaped);
-        }
-        let shaped = face_cache
-            .get(cell.grapheme.as_str())
-            .expect("terminal shape inserted above");
-        let span_columns = if cell.width == TerminalCellWidth::Wide {
-            2
-        } else {
-            1
-        };
-        let span_width = metrics.width * span_columns as f32;
-        let shaped_width = shaped.width / scale;
-        let shaped_height = shaped.height / scale;
         let cell_rect = metrics.cell_rect(
             Point {
                 x: rect.x,
@@ -1354,20 +1460,43 @@ fn rebuild_glyph_row(
             },
             point,
         );
-        let origin = Point {
-            x: cell_rect.x + ((span_width - shaped_width) * 0.5).max(0.0),
-            y: cell_rect.y + ((metrics.height - shaped_height) * 0.5).max(0.0),
-        };
-        rasterize_and_push(
-            &mut paint,
-            shaper,
-            atlas,
-            shaped,
-            physical_size as u32,
+        if push_block_element(
+            &mut paint.primitives,
+            cell.grapheme.as_str(),
+            cell_rect,
             foreground,
             scale,
-            origin,
+        ) {
+            continue;
+        }
+
+        let wide = cell.width == TerminalCellWidth::Wide;
+        let glyph = glyph_cells.get(
+            cell.attrs.bold,
+            wide,
+            &cell.grapheme,
+            CellGlyphShaping {
+                shaper,
+                atlas,
+                font_family: font_family.as_deref(),
+                metrics,
+                scale,
+                physical_size,
+            },
         );
+        for quad in &glyph.quads {
+            paint.primitives.push(Primitive::GlyphQuad {
+                rect: Rect::new(
+                    cell_rect.x + quad.rect.x,
+                    cell_rect.y + quad.rect.y,
+                    quad.rect.width,
+                    quad.rect.height,
+                ),
+                atlas_uv: quad.atlas_uv,
+                color: foreground,
+            });
+        }
+        let span_width = metrics.width * if wide { 2.0 } else { 1.0 };
 
         if cell.attrs.underline {
             let y = cell_rect.y + metrics.height - 1.5;
@@ -1652,6 +1781,15 @@ fn patch_dirty_rows(
         return;
     }
     let pd = scene.paint_mut(id);
+    if dirty.len() > 1 {
+        // Each splice moves every primitive after its row, so splicing many
+        // rows is quadratic in the grid. Composing the cached fragments once is
+        // linear and is what a full emit does anyway.
+        compose_full(pd, paint_cache);
+        paint_cache.reindex();
+        work.scene_range_writes += 1;
+        return;
+    }
     for &row in dirty.iter().rev().filter(|&&row| row < rows) {
         replace_range(
             pd,
@@ -2527,6 +2665,59 @@ mod tests {
         let value = scene.a11y(id).unwrap().value.clone().unwrap();
         assert_eq!(value, model_text(runtime, id));
         assert_eq!(value.lines().nth(12).unwrap().trim_end(), "world");
+
+        let incremental = scene.paint(id).unwrap().primitives.clone();
+        runtime.terminal_grid.with(|grids| {
+            grids.borrow_mut().get_mut(id).unwrap().mark_all_dirty();
+        });
+        emit_terminal_grids(runtime, &mut scene, &mut text, &mut atlas);
+        assert_eq!(scene.paint(id).unwrap().primitives, incremental);
+    }
+
+    #[test]
+    fn scrolling_by_copied_rows_matches_a_forced_full_emit() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let revision = Rc::new(std::cell::Cell::new(0_u64));
+        let pending: Pending = Rc::default();
+        let calls = Rc::new(std::cell::Cell::new(0_u32));
+        pending
+            .borrow_mut()
+            .push(Box::new(|patch| patch.resize(20, 4)));
+        pending.borrow_mut().push(write_row("one", 0));
+        pending.borrow_mut().push(write_row("two two", 1));
+        pending.borrow_mut().push(write_row("three three three", 2));
+        let grid = patched_grid(&revision, &pending, &calls);
+        let rect = Rect::new(0.0, 0.0, 160.0, 64.0);
+        let (mut scene, mut text, mut atlas, id) = build_grid(runtime, grid, rect);
+        emit_terminal_grids(runtime, &mut scene, &mut text, &mut atlas);
+        scene.clear_dirty();
+
+        // Scroll up by one: every row takes its lower neighbor, and the last
+        // row gets a new line. Rows change primitive counts.
+        pending.borrow_mut().push(Box::new(|patch| {
+            for row in 0..3 {
+                patch.copy_row(row + 1, row);
+            }
+            patch.copy_row(0, 0);
+            patch.copy_row(0, 9);
+        }));
+        pending.borrow_mut().push(write_row("four", 3));
+        revision.set(1);
+        poll_dynamic_sources(runtime, &mut scene);
+        emit_terminal_grids(runtime, &mut scene, &mut text, &mut atlas);
+        let work = last_work(runtime, id);
+        assert_eq!(work.full_rebuilds, 0);
+        assert_eq!(work.glyph_rows, 4);
+        let rows: Vec<String> = model_text(runtime, id)
+            .lines()
+            .map(|line| line.trim_end().to_owned())
+            .collect();
+        assert_eq!(rows, ["two two", "three three three", "", "four"]);
+        assert_eq!(
+            scene.a11y(id).unwrap().value.as_deref(),
+            Some(model_text(runtime, id).as_str())
+        );
 
         let incremental = scene.paint(id).unwrap().primitives.clone();
         runtime.terminal_grid.with(|grids| {

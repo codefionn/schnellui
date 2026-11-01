@@ -1337,6 +1337,74 @@ pub(crate) fn make_terminal_patch_row() -> Box<dyn FnMut()> {
     terminal_patch_closure(24)
 }
 
+/// An 80x50 `TerminalGrid::patched` that scrolls a full screen of output on every
+/// revision, as `cat` of a long log or a busy build does: each row takes the next
+/// line from a pool of lines of different lengths with colored runs, so every row
+/// is rewritten and most change their primitive counts.
+pub(crate) fn make_terminal_scroll_screen() -> Box<dyn FnMut()> {
+    use schnellui::widgets::{TerminalCellMetrics, TerminalGrid, TerminalGridPatch};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    const ROWS: usize = 50;
+    const LINES: [&str; 7] = [
+        "   Compiling schnellui v0.1.0 (/home/user/src/schnellui/crates/schnellui)",
+        "warning: unused variable: `rows`",
+        "  --> src/widgets/terminal_grid.rs:1583:9",
+        "",
+        "test widgets::terminal_grid::tests::one_cell_update ... ok",
+        "drwxr-xr-x  4 user user  4096 Oct 31 12:00 crates",
+        "error[E0308]: mismatched types",
+    ];
+    let palette = [
+        Color::rgb(220, 50, 47),
+        Color::rgb(133, 153, 0),
+        Color::rgb(181, 137, 0),
+        Color::rgb(38, 139, 210),
+    ];
+    let revision = Rc::new(Cell::new(0_u64));
+    let source = revision.clone();
+    let host = revision.clone();
+    let grid = TerminalGrid::patched(
+        move || source.get(),
+        move |patch: &mut TerminalGridPatch<'_>| {
+            patch.resize(80, ROWS);
+            let (fg, bg) = (patch.model().foreground, patch.model().background);
+            let shift = host.get() as usize;
+            for row in 0..ROWS {
+                let line = (row + shift) % 101;
+                let text = LINES[line % LINES.len()];
+                let color = palette[line % palette.len()];
+                let mut chars = text.char_indices();
+                for (column, cell) in patch.row_mut(row).iter_mut().enumerate() {
+                    cell.grapheme.clear();
+                    cell.foreground = if column < 12 { color } else { fg };
+                    cell.background = if line.is_multiple_of(5) && column < 8 {
+                        color
+                    } else {
+                        bg
+                    };
+                    match chars.next() {
+                        Some((at, ch)) if ch != ' ' => {
+                            cell.grapheme.push_str(&text[at..at + ch.len_utf8()]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        },
+    )
+    .metrics(TerminalCellMetrics::new(8.0, 16.0, 13.0));
+    let mut app = App::mount_with_size(grid, 640, (ROWS * 16) as u32);
+    for _ in 0..4 {
+        revision.set(revision.get() + 1);
+        app.frame();
+    }
+    Box::new(move || {
+        revision.set(black_box(revision.get() + 1));
+        app.frame();
+    })
+}
+
 /// A 640x360 RGBA browser frame streamed through `Image::dynamic_rgba_versioned`:
 /// every iteration publishes the other of two same-size frames and runs the
 /// frame. The new pixels overwrite the image's atlas region in place.

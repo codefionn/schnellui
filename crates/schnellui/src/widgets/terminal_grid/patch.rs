@@ -100,6 +100,28 @@ impl TerminalGridPatch<'_> {
         &mut model.cells[start..start + model.columns]
     }
 
+    /// Copies the cells of row `from` over row `to` and marks `to` dirty like
+    /// [`row_mut`](Self::row_mut). A host showing scrolled output moves the rows
+    /// it already wrote instead of converting them again. Cloning a cell never
+    /// allocates. Rows outside the grid, or `from == to`, do nothing.
+    pub fn copy_row(&mut self, from: usize, to: usize) {
+        let model = &mut self.state.model;
+        if from >= model.rows || to >= model.rows || from == to {
+            return;
+        }
+        self.state.dirty_rows.insert(to);
+        self.state.a11y_rows.insert(to);
+        let columns = model.columns;
+        let (source, target) = if from < to {
+            let (head, tail) = model.cells.split_at_mut(to * columns);
+            (&head[from * columns..][..columns], &mut tail[..columns])
+        } else {
+            let (head, tail) = model.cells.split_at_mut(from * columns);
+            (&tail[..columns], &mut head[to * columns..][..columns])
+        };
+        target.clone_from_slice(source);
+    }
+
     /// Moves, restyles, shows or hides the cursor. Only a real change dirties
     /// anything: the old and the new cursor rows and the cursor fragment.
     pub fn set_cursor(&mut self, cursor: Option<TerminalCursor>) {

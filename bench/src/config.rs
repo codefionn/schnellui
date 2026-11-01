@@ -318,6 +318,13 @@ pub(crate) fn paths() -> Vec<BenchPath> {
             make: make_terminal_patch_row,
         },
         BenchPath {
+            name: "terminal_scroll_screen",
+            budget: Budget::Report,
+            note: "TerminalGrid::patched, 80x50: the host rewrites every row with the next line of scrolling output (colored runs, varying lengths) + frame. The full-screen output path: cost is per row and per cell, and rows that change primitive count must not make the scene splice quadratic.",
+            iters_cap: None,
+            make: make_terminal_scroll_screen,
+        },
+        BenchPath {
             name: "browser_frame_stream",
             budget: Budget::Zero,
             note: "Image::dynamic_rgba_versioned shows a 640x360 RGBA frame stream: a new same-size frame + frame overwrites the image's atlas region in place (ImageAtlas::write_rect, logged as a sub-rect upload). No remount. The 900 KB memcpy into the atlas mirror dominates the time.",
