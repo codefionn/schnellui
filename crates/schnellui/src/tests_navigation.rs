@@ -750,6 +750,42 @@ fn tab_context_menu_opens_through_the_generic_accessibility_action() {
 }
 
 #[test]
+fn list_row_context_menu_opens_and_runs_its_command() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::a11y::accesskit_reexport::{Action, ActionRequest, TreeId};
+    use schnellui::a11y::to_access_id;
+    use schnellui::a11y::ActionFlags;
+    use schnellui::widgets::{ContextMenuItem, ListRow};
+
+    let ran = Rc::new(Cell::new(0));
+    let sink = ran.clone();
+    let mut app = App::mount_with_size(
+        ListRow::new("feature").on_click(|| {}).context_menu_item(
+            ContextMenuItem::new("Remove").on_select(move || sink.set(sink.get() + 1)),
+        ),
+        400,
+        300,
+    );
+    app.frame();
+    let row = app.find_widget(Role::Button, Some("feature")).unwrap();
+    assert!(ActionFlags(app.scene().a11y(row).unwrap().actions)
+        .contains(ActionFlags::SHOW_CONTEXT_MENU));
+    assert!(app.dispatch_action(&ActionRequest {
+        action: Action::ShowContextMenu,
+        target_tree: TreeId::ROOT,
+        target_node: to_access_id(row),
+        data: None,
+    }));
+    assert!(app.context_menu_is_open());
+    let item = app.find_widget(Role::MenuItem, Some("Remove")).unwrap();
+    assert!(app.activate_context_menu_item(item).is_some());
+    assert_eq!(ran.get(), 1);
+    assert!(!app.context_menu_is_open());
+}
+
+#[test]
 fn combobox_search_filters_retained_rows_without_a_remount() {
     use std::cell::RefCell;
     use std::rc::Rc;

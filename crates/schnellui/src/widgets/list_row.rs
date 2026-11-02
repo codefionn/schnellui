@@ -2,7 +2,8 @@
 //! and command lists. It paints a background, an optional leading accent bar
 //! and dot, a title, an optional right-aligned trailing text (plain or on a
 //! pill) and an optional muted second line, all as one retained node (one
-//! `Role::Button`).
+//! `Role::Button`). An optional [`ContextMenu`] opens on a secondary click or
+//! the accessibility `ShowContextMenu` action.
 //!
 //! The row is chrome, not a button: the label is not centered and the resting
 //! background is transparent. Hover, focus and press feedback come from the
@@ -16,7 +17,7 @@ use schnellui::text::ShapedText;
 
 use crate::widgets::{
     node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers, BuildCtx,
-    ClickHandler, View,
+    ClickHandler, ContextMenu, ContextMenuItem, View,
 };
 
 const DEFAULT_HEIGHT: f32 = 28.0;
@@ -51,6 +52,7 @@ pub struct ListRow {
     subtitle_color: Option<Color>,
     value: Option<Cow<'static, str>>,
     on_click: Option<ClickHandler>,
+    context_menu: Option<ContextMenu>,
 }
 
 impl ListRow {
@@ -74,6 +76,7 @@ impl ListRow {
             subtitle_color: None,
             value: None,
             on_click: None,
+            context_menu: None,
         }
     }
 
@@ -179,6 +182,21 @@ impl ListRow {
         self
     }
 
+    /// Attaches a context menu, opened by a secondary click or the
+    /// accessibility `ShowContextMenu` action.
+    pub fn context_menu(mut self, menu: ContextMenu) -> ListRow {
+        self.context_menu = Some(menu);
+        self
+    }
+
+    /// Appends one command to this row's context menu.
+    pub fn context_menu_item(mut self, item: ContextMenuItem) -> ListRow {
+        self.context_menu
+            .get_or_insert_with(ContextMenu::new)
+            .push(item);
+        self
+    }
+
     pub fn role(&self) -> Role {
         Role::Button
     }
@@ -240,6 +258,13 @@ impl View for ListRow {
             let mut actions = ActionFlags::default();
             actions.insert(ActionFlags::CLICK);
             actions.insert(ActionFlags::FOCUS);
+            if this
+                .context_menu
+                .as_ref()
+                .is_some_and(|menu| !menu.is_empty())
+            {
+                actions.insert(ActionFlags::SHOW_CONTEXT_MENU);
+            }
             a.actions = actions.0;
             if this.selected {
                 let mut state = StateFlags::default();
@@ -392,6 +417,9 @@ impl View for ListRow {
         ctx.layout.set_measure(id, Box::new(move |_available| size));
         if let Some(handler) = this.on_click {
             with_handlers(&ctx.runtime, id, |h| h.click = Some(handler));
+        }
+        if let Some(menu) = this.context_menu {
+            crate::widgets::context_menu::register_context_menu(&ctx.runtime, id, menu);
         }
         id
     }
