@@ -273,7 +273,10 @@ pub fn emit_button_paint(
     let t = theme_for(runtime, id);
     let sh = t.shape;
     let solid = appearance == ButtonAppearance::Solid;
+    // Every disabled button is drawn alike, the disabled fill inside a thin
+    // outline, so solid, outlined and ghost buttons read as off the same way.
     let frame = match appearance {
+        _ if disabled => OUTLINE_FRAME.max(sh.frame),
         ButtonAppearance::Solid => sh.frame,
         ButtonAppearance::Outline => OUTLINE_FRAME,
         ButtonAppearance::Ghost => 0.0,
@@ -328,11 +331,12 @@ pub fn emit_button_paint(
         atlas,
         &shaped,
         phys as u32,
-        // A disabled button's label steps back to the muted text color:
-        // on the disabled fill, the accent's contrast color would vanish
-        // and the ordinary text color would read as enabled.
+        // A disabled button's label steps back from the muted text color
+        // toward its fill: on the disabled fill, the accent's contrast color
+        // would vanish, and the ordinary or the muted text color would read
+        // as enabled beside an outlined button.
         if disabled {
-            t.text_muted
+            crate::widgets::theme::mix_color(t.text_muted, t.disabled, DISABLED_LABEL_FADE)
         } else if appearance != ButtonAppearance::Solid {
             t.text
         } else {
@@ -354,6 +358,10 @@ pub fn emit_button_paint(
     );
     ts
 }
+
+/// How far a disabled button's label fades from the muted text color toward
+/// the disabled fill.
+const DISABLED_LABEL_FADE: f32 = 0.2;
 
 /// Height of capital letters as a share of the font size, close to that of
 /// the bundled sans faces.

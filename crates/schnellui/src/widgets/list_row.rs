@@ -49,6 +49,7 @@ pub struct ListRow {
     title_size: f32,
     meta_size: f32,
     trailing_inline: bool,
+    trailing_centered: bool,
     pill: Option<Color>,
     subtitle_color: Option<Color>,
     value: Option<Cow<'static, str>>,
@@ -74,6 +75,7 @@ impl ListRow {
             title_size: 13.0,
             meta_size: 11.5,
             trailing_inline: false,
+            trailing_centered: false,
             pill: None,
             subtitle_color: None,
             value: None,
@@ -131,6 +133,14 @@ impl ListRow {
     /// edge.
     pub fn trailing_after_title(mut self) -> ListRow {
         self.trailing_inline = true;
+        self
+    }
+
+    /// Centers the trailing text on the whole row, subtitle included,
+    /// instead of on the title line: for a mark such as a chevron that
+    /// belongs to the row rather than to its title.
+    pub fn trailing_centered(mut self) -> ListRow {
+        self.trailing_centered = true;
         self
     }
 
@@ -386,7 +396,12 @@ impl View for ListRow {
                 rect.x + rect.width - this.pad_h - this.end_room - trailing_width
             };
             let text_height = trailing.height * inv;
-            let y = rect.y + (this.height - text_height) * 0.5;
+            let line = if this.trailing_centered {
+                rect.height
+            } else {
+                this.height
+            };
+            let y = rect.y + (line - text_height) * 0.5;
             let color = match this.pill {
                 Some(pill) => {
                     let height = text_height + 2.0 * PILL_PAD_V;
@@ -555,6 +570,34 @@ mod tests {
         assert_eq!(scene.a11y(id).unwrap().value.as_deref(), Some("input"));
         let (scene, id) = build(ListRow::new("main").trailing("input").value("Waiting"));
         assert_eq!(scene.a11y(id).unwrap().value.as_deref(), Some("Waiting"));
+    }
+
+    #[test]
+    fn centered_trailing_text_sits_on_the_middle_of_a_two_line_row() {
+        let (scene, id) = build(
+            ListRow::new("title")
+                .subtitle("second line")
+                .trailing("›")
+                .trailing_centered(),
+        );
+        // The first primitive is the row's background, over its whole box.
+        let row = rects(&scene, id)[0].0;
+        let glyphs: Vec<Rect> = scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::GlyphQuad { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        let rightmost = glyphs.iter().max_by(|a, b| a.x.total_cmp(&b.x)).unwrap();
+        let middle = rightmost.y + rightmost.height * 0.5;
+        assert!(
+            (middle - (row.y + row.height * 0.5)).abs() < row.height * 0.2,
+            "{middle} in {row:?}"
+        );
     }
 
     #[test]

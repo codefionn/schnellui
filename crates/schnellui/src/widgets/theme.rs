@@ -439,7 +439,7 @@ impl Theme {
     }
 }
 
-fn mix_color(a: Color, b: Color, amount: f32) -> Color {
+pub(crate) fn mix_color(a: Color, b: Color, amount: f32) -> Color {
     let t = amount.clamp(0.0, 1.0);
     let channel = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
     Color::rgba(
