@@ -12,6 +12,8 @@ pub struct ComboBox {
     hint: bool,
     allow_free_text: bool,
     width: Option<f32>,
+    /// Logical size of the field's value and hint.
+    text_size: f32,
     max_popup_height: Option<f32>,
     on_input: Option<InputHandler>,
     on_toggle: Option<ClickHandler>,
@@ -52,6 +54,7 @@ impl ComboBox {
             hint: false,
             allow_free_text: false,
             width: None,
+            text_size: BUTTON_TEXT_SIZE,
             max_popup_height: None,
             on_input: None,
             on_toggle: None,
@@ -95,6 +98,14 @@ impl ComboBox {
     /// ellipsis instead of widening the field.
     pub fn width(mut self, width: f32) -> Self {
         self.width = width.is_finite().then_some(width.max(0.0));
+        self
+    }
+
+    /// Sets the logical size of the field's value and hint, so the field
+    /// matches the text inputs and dropdowns beside it. The default is the
+    /// button text size.
+    pub fn text_size(mut self, size: f32) -> Self {
+        self.text_size = size;
         self
     }
 
@@ -181,7 +192,7 @@ impl View for ComboBox {
             field,
             this.value.clone(),
             label,
-            BUTTON_TEXT_SIZE,
+            this.text_size,
             ctx.scale,
             this.width,
             false,
