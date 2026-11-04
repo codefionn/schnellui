@@ -439,6 +439,49 @@ impl App {
         changed
     }
 
+    /// Whether the focused widget wears the keyboard focus ring. A focused
+    /// terminal counts as not wearing one: keys typed into it are text for
+    /// its program, not navigation, so an overlay opened from it starts
+    /// without a ring until the first navigation key.
+    pub(crate) fn focus_ring_shown(&self) -> bool {
+        self.focused_widget().is_some_and(|id| {
+            self.scene
+                .node(id)
+                .is_some_and(|node| node.kind != scene::WidgetKind::TerminalGrid)
+                && schnellui::widgets::focus_ring_visible(&self.widgets, id)
+        })
+    }
+
+    /// Focuses `target` without the keyboard focus ring, as a pointer press
+    /// would: for a host that puts focus into an overlay it opened itself.
+    /// The first navigation key shows the ring.
+    pub fn focus_without_ring(&mut self, target: Option<scene::WidgetId>) -> bool {
+        match target {
+            Some(target) => self.focus_after_replacement(target, false),
+            None => self.focus(None),
+        }
+    }
+
+    /// Focuses `target` after a structural replacement, with the ring shown
+    /// only when `ring_visible`: the state of the focus before the
+    /// replacement. Opening an overlay with the pointer or from a terminal
+    /// then focuses its first control without a keyboard ring, as native
+    /// `:focus-visible` does; Tab or an arrow key brings the ring back.
+    pub(crate) fn focus_after_replacement(
+        &mut self,
+        target: scene::WidgetId,
+        ring_visible: bool,
+    ) -> bool {
+        let changed = self.focus(Some(target));
+        changed
+            | schnellui::widgets::set_focus_ring_visible(
+                &self.widgets,
+                &mut self.scene,
+                target,
+                ring_visible,
+            )
+    }
+
     /// The widget currently holding keyboard focus, if any (SOUL §6.2).
     pub fn focused_widget(&self) -> Option<scene::WidgetId> {
         schnellui::a11y::focused(&self.scene)

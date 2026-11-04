@@ -6,6 +6,9 @@ pub struct Dropdown {
     pub(crate) options: Vec<DropdownOption>,
     pub(crate) open: bool,
     pub(crate) on_toggle: Option<ClickHandler>,
+    pub(crate) text_size: Option<f32>,
+    pub(crate) min_width: f32,
+    pub(crate) placeholder: Option<Cow<'static, str>>,
 }
 
 impl Dropdown {
@@ -17,7 +20,32 @@ impl Dropdown {
             options: Vec::new(),
             open: false,
             on_toggle: None,
+            text_size: None,
+            min_width: 0.0,
+            placeholder: None,
         }
+    }
+    /// Shows `text` on the trigger while no option is selected, instead of
+    /// the first option, for a menu of actions rather than a choice.
+    pub fn placeholder(mut self, text: impl Into<Cow<'static, str>>) -> Dropdown {
+        self.placeholder = Some(text.into());
+        self
+    }
+    /// Sets the least logical width of the trigger and its option list, so
+    /// the dropdowns of one form can line up. The widest option still wins.
+    pub fn min_width(mut self, width: f32) -> Dropdown {
+        self.min_width = if width.is_finite() {
+            width.max(0.0)
+        } else {
+            0.0
+        };
+        self
+    }
+    /// Sets the logical size of the trigger's and the options' labels. The
+    /// default is the button text size.
+    pub fn text_size(mut self, size: f32) -> Dropdown {
+        self.text_size = (size.is_finite() && size > 0.0).then_some(size);
+        self
     }
     /// Appends one option (SOUL §3.3 `.child(…)` discipline, typed to options).
     pub fn option(mut self, o: DropdownOption) -> Dropdown {
@@ -69,9 +97,10 @@ fn emit_dropdown_trigger_paint(
     open: bool,
     scale: f32,
     min_width: f32,
+    text_size: f32,
 ) -> Size {
     let inv = 1.0 / norm_scale(scale);
-    let phys = phys_size_px(BUTTON_TEXT_SIZE, scale);
+    let phys = phys_size_px(text_size, scale);
     let shaped = shaper.shape(value, phys, None);
     let ts = Size {
         width: shaped.width * inv,
@@ -152,29 +181,36 @@ impl View for Dropdown {
             .set_container(wrap, ContainerStyle::new(Container::Column));
         let id = ctx.scene.insert(WidgetKind::Dropdown, Some(wrap));
         let label: String = this.label.into_owned();
-        // The trigger shows the chosen option (falling back to the first).
-        let value: String = this
-            .options
-            .iter()
-            .find(|o| o.selected)
-            .or(this.options.first())
-            .map(|o| o.label.clone().into_owned())
-            .unwrap_or_default();
+        // The trigger shows the chosen option, falling back to the
+        // placeholder, then to the first.
+        let chosen = this.options.iter().find(|o| o.selected);
+        let value: String = match (chosen, &this.placeholder) {
+            (Some(o), _) => o.label.clone().into_owned(),
+            (None, Some(text)) => text.clone().into_owned(),
+            (None, None) => this
+                .options
+                .first()
+                .map(|o| o.label.clone().into_owned())
+                .unwrap_or_default(),
+        };
         // One shared width for the trigger and every option — the widest label
         // plus the trigger's padding + caret. The trigger never resizes when the
         // choice changes, and the open popup is a single flush-edged opaque panel
         // instead of per-label ragged rows that let content bleed through.
         let inv = 1.0 / norm_scale(ctx.scale);
-        let phys = phys_size_px(BUTTON_TEXT_SIZE, ctx.scale);
+        let text_size = this.text_size.unwrap_or(BUTTON_TEXT_SIZE);
+        let phys = phys_size_px(text_size, ctx.scale);
         let widest = this
             .options
             .iter()
-            .map(|o| ctx.text.shape(o.label.as_ref(), phys, None).width * inv)
+            .map(|o| o.label.as_ref())
+            .chain(this.placeholder.as_deref())
+            .map(|text| ctx.text.shape(text, phys, None).width * inv)
             .fold(0.0f32, f32::max);
         let sh = theme_for(runtime, id).shape;
         let (pad_h, pad_v) = (sh.pad(PAD_H), sh.pad(PAD_V));
         let f = sh.frame;
-        let shared_width = widest + 2.0 * (pad_h + f) + CARET_SPACE;
+        let shared_width = (widest + 2.0 * (pad_h + f) + CARET_SPACE).max(this.min_width);
         {
             let a = ctx.scene.a11y_mut(id);
             a.role = Role::ComboBox.as_u16();
@@ -201,6 +237,7 @@ impl View for Dropdown {
             this.open,
             ctx.scale,
             shared_width,
+            text_size,
         );
         ctx.layout.set_measure(
             id,
@@ -229,6 +266,7 @@ impl View for Dropdown {
             ctx.scene.set_overlay(popup);
             for mut opt in this.options {
                 opt.min_width = shared_width;
+                opt.text_size = this.text_size;
                 Box::new(opt).build(ctx, Some(popup));
             }
         }
@@ -247,6 +285,8 @@ pub struct DropdownOption {
     /// The popup's shared width, stamped by [`Dropdown::build`] so every option
     /// row spans the same flush-edged panel width (0 = label-intrinsic).
     pub(crate) min_width: f32,
+    /// The dropdown's label size, stamped like `min_width`.
+    pub(crate) text_size: Option<f32>,
 }
 
 impl DropdownOption {
@@ -257,6 +297,7 @@ impl DropdownOption {
             selected: false,
             on_select: None,
             min_width: 0.0,
+            text_size: None,
         }
     }
     /// Marks this option as the initially chosen one.
@@ -284,6 +325,13 @@ impl View for DropdownOption {
         let id = ctx.scene.insert(WidgetKind::DropdownOption, parent);
         let label: String = this.label.into_owned();
         write_selectable_semantics(ctx.scene, id, Role::ListBoxOption, &label, this.selected);
+        if this.text_size.is_some() {
+            let style = TabStyle {
+                text_size: this.text_size,
+                ..TabStyle::default()
+            };
+            runtime.with(|runtime| runtime.borrow_mut().tab_styles.insert(id, style));
+        }
         let min_width = this.min_width;
         let ts = emit_selectable_paint(
             &ctx.runtime,

@@ -567,6 +567,7 @@ impl WindowedApp {
         let before = self.interaction_snapshot(point);
         let mut applied = Vec::with_capacity(replacements.len());
         let mut focus_after = None;
+        let ring = self.app.focus_ring_shown();
         for replacement in replacements {
             let target = replacement.target;
             let reason = replacement.reason;
@@ -592,7 +593,7 @@ impl WindowedApp {
 
         if let Some(target) = focus_after {
             if let Some(widget) = self.app.scene().resolve_ref(target) {
-                let _ = self.app.focus(Some(widget));
+                let _ = self.app.focus_after_replacement(widget, ring);
             }
         }
 

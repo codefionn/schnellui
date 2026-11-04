@@ -301,12 +301,15 @@ fn apply_disabled_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, disa
     };
     let theme = theme_for(runtime, id);
     let solid = appearance == ButtonAppearance::Solid;
+    let outline = appearance == ButtonAppearance::Outline;
     let index = usize::from(solid && theme.shape.shadow > 0.0)
-        + usize::from(solid && theme.shape.frame > 0.0);
+        + usize::from((solid && theme.shape.frame > 0.0) || outline);
     let color = if disabled {
         theme.disabled
     } else if solid {
         theme.accent
+    } else if outline {
+        theme.surface
     } else {
         Color::TRANSPARENT
     };

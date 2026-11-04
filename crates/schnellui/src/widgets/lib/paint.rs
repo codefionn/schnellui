@@ -1,4 +1,5 @@
 use super::*;
+use crate::text::{FontFace, ShapeOptions};
 
 pub fn node_rect(scene: &Scene, id: WidgetId, intrinsic: Size) -> Rect {
     match scene.layout(id) {
@@ -143,9 +144,35 @@ pub fn emit_text_paint(
     color: Color,
     scale: f32,
 ) -> Size {
+    emit_text_paint_face(
+        scene,
+        shaper,
+        atlas,
+        id,
+        text,
+        size_px,
+        color,
+        scale,
+        FontFace::default(),
+    )
+}
+
+/// [`emit_text_paint`] in a chosen face, for a bold [`Text`] label.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_text_paint_face(
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    text: &str,
+    size_px: f32,
+    color: Color,
+    scale: f32,
+    face: FontFace,
+) -> Size {
     let inv = 1.0 / norm_scale(scale);
     let phys = phys_size_px(size_px, scale);
-    let shaped = shaper.shape(text, phys, None);
+    let shaped = shaper.shape_with(text, &ShapeOptions::new(phys).face(face));
     let logical = Size {
         width: shaped.width * inv,
         height: shaped.height * inv,
@@ -177,10 +204,10 @@ fn button_intrinsic(
     appearance: ButtonAppearance,
 ) -> Size {
     let sh = theme_for(runtime, id).shape;
-    let chrome = if appearance == ButtonAppearance::Solid {
-        2.0 * sh.frame + sh.shadow
-    } else {
-        0.0
+    let chrome = match appearance {
+        ButtonAppearance::Solid => 2.0 * sh.frame + sh.shadow,
+        ButtonAppearance::Outline => 2.0 * OUTLINE_FRAME,
+        ButtonAppearance::Ghost => 0.0,
     };
     Size {
         width: ts.width + 2.0 * sh.pad(PAD_H) + chrome,
@@ -246,11 +273,16 @@ pub fn emit_button_paint(
     let t = theme_for(runtime, id);
     let sh = t.shape;
     let solid = appearance == ButtonAppearance::Solid;
-    let frame = if solid { sh.frame } else { 0.0 };
+    let frame = match appearance {
+        ButtonAppearance::Solid => sh.frame,
+        ButtonAppearance::Outline => OUTLINE_FRAME,
+        ButtonAppearance::Ghost => 0.0,
+    };
     let shadow = if solid { sh.shadow } else { 0.0 };
     let bg = match (disabled, appearance) {
         (true, _) => t.disabled,
         (false, ButtonAppearance::Solid) => t.accent,
+        (false, ButtonAppearance::Outline) => t.surface,
         (false, ButtonAppearance::Ghost) => Color::TRANSPARENT,
     };
     // The body is the layout box minus the shadow's offset strip.
@@ -296,7 +328,12 @@ pub fn emit_button_paint(
         atlas,
         &shaped,
         phys as u32,
-        if appearance == ButtonAppearance::Ghost {
+        // A disabled button's label steps back to the muted text color:
+        // on the disabled fill, the accent's contrast color would vanish
+        // and the ordinary text color would read as enabled.
+        if disabled {
+            t.text_muted
+        } else if appearance != ButtonAppearance::Solid {
             t.text
         } else {
             t.on_accent
@@ -304,10 +341,35 @@ pub fn emit_button_paint(
         scale,
         Point {
             x: body.x + (body.width - ts.width) * 0.5,
-            y: body.y + frame + sh.pad(PAD_V),
+            // Centered on its capital letters, so a button given a fixed
+            // height taller than its label keeps the label in the middle.
+            y: label_top(
+                body.y,
+                body.height,
+                &shaped,
+                inv,
+                text_size.unwrap_or(BUTTON_TEXT_SIZE),
+            ),
         },
     );
     ts
 }
+
+/// Height of capital letters as a share of the font size, close to that of
+/// the bundled sans faces.
+const CAP_HEIGHT: f32 = 0.7;
+
+/// Top of a one-line label of `size` logical px that puts its capital
+/// letters in the middle of a box `height` tall at `top`. The line box
+/// holds the descent and the line gap below the baseline, so centering it
+/// leaves the letters a pixel or two high. Stays inside the box.
+pub(crate) fn label_top(top: f32, height: f32, shaped: &ShapedText, inv: f32, size: f32) -> f32 {
+    let line = shaped.height * inv;
+    let centered = top + height * 0.5 - shaped.baseline * inv + CAP_HEIGHT * size * 0.5;
+    centered.clamp(top, (top + height - line).max(top))
+}
+
+/// Width of an [`ButtonAppearance::Outline`] button's outline.
+pub const OUTLINE_FRAME: f32 = 1.0;
 
 pub const TOOLTIP_TEXT_SIZE: f32 = 12.0;

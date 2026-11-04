@@ -122,14 +122,17 @@ pub(crate) fn emit_text_input_paint(
         password,
         scroll_x,
         hold_scroll,
+        hint,
+        min_height,
     )) = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         rt.edits.get_mut(id).map(|e| {
-            e.label_target = if e.placeholder.is_empty() || (!focused && e.value.is_empty()) {
-                0.0
-            } else {
-                1.0
-            };
+            e.label_target =
+                if e.hint || e.placeholder.is_empty() || (!focused && e.value.is_empty()) {
+                    0.0
+                } else {
+                    1.0
+                };
             (
                 e.value.clone(),
                 e.placeholder.clone(),
@@ -141,6 +144,8 @@ pub(crate) fn emit_text_input_paint(
                 e.password,
                 e.scroll_x,
                 std::mem::take(&mut e.hold_scroll),
+                e.hint,
+                e.min_height,
             )
         })
     })
@@ -184,17 +189,18 @@ pub(crate) fn emit_text_input_paint(
             full_label_sz.width.max(MIN_FIELD_W) + 2.0 * pad_h,
             |width| width.max(MIN_FIELD_W + 2.0 * pad_h),
         ),
-        height: if placeholder.is_empty() {
+        height: if hint || placeholder.is_empty() {
             content_h + 2.0 * pad_v
         } else {
             content_h + float_label_sz.height + 3.0 * pad_v
-        },
+        }
+        .max(min_height),
     };
     let rect = node_rect(scene, id, intrinsic);
     let value_origin = Point {
         x: rect.x + pad_h,
-        y: if placeholder.is_empty() {
-            rect.y + pad_v
+        y: if hint || placeholder.is_empty() {
+            rect.y + ((rect.height - content_h) * 0.5).max(pad_v)
         } else {
             rect.y + float_label_sz.height + 2.0 * pad_v
         },
@@ -283,8 +289,13 @@ pub(crate) fn emit_text_input_paint(
     // A label begins where a conventional placeholder would sit, then eases
     // upward and shrinks when focused or populated. Geometry remains inside the
     // field so themes with thick frames and hard shadows still compose cleanly.
-    if !placeholder.is_empty() {
-        let progress = label_progress.clamp(0.0, 1.0);
+    // A hint shows only in an empty field, at the rest position.
+    if !placeholder.is_empty() && !(hint && !value.is_empty()) {
+        let progress = if hint {
+            0.0
+        } else {
+            label_progress.clamp(0.0, 1.0)
+        };
         let eased = 1.0 - (1.0 - progress).powi(3);
         let label_size_px = size_px + (float_size_px - size_px) * eased;
         let label_phys = phys_size_px(label_size_px, scale);
@@ -292,8 +303,10 @@ pub(crate) fn emit_text_input_paint(
         let label = shaper.truncate_to_width(&placeholder, label_phys, view_w / inv);
         let rest_y = rect.y + (rect.height - full_label_sz.height) * 0.5;
         let float_y = rect.y + pad_v;
+        // A hint starts after the caret, so the caret never covers its
+        // first letter.
         let label_origin = Point {
-            x: rect.x + pad_h,
+            x: rect.x + pad_h + if hint { CARET_W + 2.0 } else { 0.0 },
             y: rest_y + (float_y - rest_y) * eased,
         };
         rasterize_and_push(
@@ -302,7 +315,9 @@ pub(crate) fn emit_text_input_paint(
             atlas,
             &label,
             label_phys as u32,
-            if focused { t.accent } else { t.text_muted },
+            // Muted even when focused: the accent outline marks focus, and
+            // an accent label over an empty field reads as typed text.
+            t.text_muted,
             scale,
             label_origin,
         );

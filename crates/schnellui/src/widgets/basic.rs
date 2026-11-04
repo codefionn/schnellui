@@ -219,7 +219,11 @@ fn emit_switch_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: W
     });
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(knob_x, rect.y + SWITCH_INSET, knob, knob),
-        color: t.surface,
+        // An on knob takes the color drawn on the accent, so it stands out
+        // from the track whatever the scheme; an off knob in muted text
+        // stands out from a dark track, so an off switch still reads as a
+        // control.
+        color: if on { t.on_accent } else { t.text_muted },
         corner_radius: t.shape.pill(knob),
     });
 }

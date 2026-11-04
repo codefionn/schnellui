@@ -1,4 +1,5 @@
 use super::*;
+use crate::text::FontFace;
 
 pub struct Text {
     pub(crate) content: TextContent,
@@ -11,6 +12,8 @@ pub struct Text {
     pub(crate) align: TextAlign,
     /// single-line ellipsis truncation to the available width (SOUL §8.1).
     pub(crate) ellipsis: bool,
+    /// Shapes a static single-line label in the bold face.
+    pub(crate) bold: bool,
 }
 
 /// The two text-slot flavors (SOUL §3.3).
@@ -31,6 +34,7 @@ impl Text {
             wrap: WrapMode::NoWrap,
             align: TextAlign::Start,
             ellipsis: false,
+            bold: false,
         }
     }
 
@@ -54,6 +58,7 @@ impl Text {
             wrap: WrapMode::NoWrap,
             align: TextAlign::Start,
             ellipsis: false,
+            bold: false,
         }
     }
 
@@ -81,6 +86,13 @@ impl Text {
     /// fit the available width (SOUL §8.1). Implies a width-aware, single-line layout.
     pub fn ellipsis(mut self) -> Text {
         self.ellipsis = true;
+        self
+    }
+
+    /// Sets a static, single-line label in the bold face, for headings. A
+    /// dynamic, wrapped, aligned or ellipsized text stays regular.
+    pub fn bold(mut self) -> Text {
+        self.bold = true;
         self
     }
 
@@ -152,7 +164,7 @@ impl View for Text {
                     );
                 } else {
                     // Shape once → real glyph quads + the glyph-exact intrinsic size.
-                    let sz = emit_text_paint(
+                    let sz = emit_text_paint_face(
                         ctx.scene,
                         ctx.text,
                         ctx.atlas,
@@ -161,6 +173,11 @@ impl View for Text {
                         size_px,
                         theme_for(&ctx.runtime, id).text,
                         scale,
+                        if this.bold {
+                            FontFace::SansBold
+                        } else {
+                            FontFace::Sans
+                        },
                     );
                     // Intrinsic measure returns the shaped size (SOUL §8.1) — invariant.
                     ctx.layout.set_measure(id, Box::new(move |_avail| sz));

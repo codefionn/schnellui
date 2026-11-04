@@ -23,9 +23,9 @@ use schnellui::text::{GlyphAtlas, TextShaper};
 use smallvec::SmallVec;
 
 use crate::widgets::{
-    node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers, AnyView,
-    BuildCtx, ClickHandler, ContextMenu, ContextMenuItem, InputHandler, View, BUTTON_TEXT_SIZE,
-    PAD_H, PAD_V,
+    label_top, node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers,
+    AnyView, BuildCtx, ClickHandler, ContextMenu, ContextMenuItem, InputHandler, View,
+    BUTTON_TEXT_SIZE, PAD_H, PAD_V,
 };
 
 mod navigation;
@@ -73,6 +73,8 @@ pub(crate) struct TabStyle {
     pub(crate) pad_h: Option<f32>,
     pub(crate) min_height: Option<f32>,
     pub(crate) indicator: Option<(Color, f32)>,
+    /// Empty room before the label, for an icon the caller lays over it.
+    pub(crate) lead: f32,
 }
 
 fn tab_style(runtime: &crate::widgets::Runtime, id: WidgetId) -> TabStyle {
@@ -198,7 +200,7 @@ fn emit_selectable_paint(
     disclosure: TabDisclosure,
 ) -> Size {
     let inv = 1.0 / norm_scale(scale);
-    let style = if kind == WidgetKind::Tab {
+    let style = if kind == WidgetKind::Tab || kind == WidgetKind::DropdownOption {
         tab_style(runtime, id)
     } else {
         TabStyle::default()
@@ -213,9 +215,9 @@ fn emit_selectable_paint(
     let (pad_h, pad_v) = (style.pad_h.unwrap_or(sh.pad(PAD_H)), sh.pad(PAD_V));
     let f = selectable_frame(runtime, id, kind);
     let disclosure_width = if disclosure == TabDisclosure::None {
-        0.0
+        style.lead
     } else {
-        TAB_DISCLOSURE_SPACE
+        TAB_DISCLOSURE_SPACE + style.lead
     };
     let intrinsic = Size {
         width: (ts.width + 2.0 * (pad_h + f) + disclosure_width).max(min_width),
@@ -338,7 +340,13 @@ fn emit_selectable_paint(
         scale,
         Point {
             x: rect.x + f + pad_h + disclosure_width,
-            y: rect.y + (intrinsic.height - ts.height) * 0.5,
+            y: label_top(
+                rect.y,
+                intrinsic.height,
+                &shaped,
+                inv,
+                style.text_size.unwrap_or(BUTTON_TEXT_SIZE),
+            ),
         },
     );
     ts

@@ -72,6 +72,10 @@ fn raster_pool() -> Option<&'static Mutex<Sender<SvgJob>>> {
                                     Arc::from([])
                                 }
                             };
+                        let image_key = job
+                            .cache_key
+                            .as_ref()
+                            .map(|key| key.source.image_key(key.width, key.height, key.mask));
                         if let Some(key) = job.cache_key {
                             retain_raster(key, Arc::clone(&pixels));
                         }
@@ -80,6 +84,7 @@ fn raster_pool() -> Option<&'static Mutex<Sender<SvgJob>>> {
                             rect: job.rect,
                             generation: job.generation,
                             pixels,
+                            image_key,
                         });
                     }
                 })
@@ -143,15 +148,29 @@ fn submit_svg_raster(
 /// Lands one completion: drops it when stale (a prior mount's generation, or a
 /// widget no longer in the scene), otherwise writes the reserved rect (revision
 /// bump ⇒ the renderer re-uploads, SOUL §3.2) and flags the widget paint-dirty.
+///
+/// A stale completion still lands when its rect is the shared atlas entry
+/// of its cache key: a later mount found that entry reserved and points its
+/// own quads at it without a job of its own, so these are the only pixels
+/// it will ever get.
 fn land_svg_done(scene: &mut Scene, rt: &mut crate::widgets::WidgetRuntime, done: SvgDone) -> bool {
     rt.svg_pending = rt.svg_pending.saturating_sub(1);
-    if done.generation != rt.svg_generation || scene.node(done.widget).is_none() {
+    let current = done.generation == rt.svg_generation && scene.node(done.widget).is_some();
+    let shared = done
+        .image_key
+        .as_ref()
+        .is_some_and(|key| scene.images().cached(key) == Some(done.rect));
+    if !current && !shared {
         return false;
     }
     if !scene.images_mut().write_rect(done.rect, &done.pixels) {
         return false;
     }
-    scene.mark_dirty(done.widget, DirtyFlags::PAINT);
+    match (current, scene.root()) {
+        (true, _) => scene.mark_dirty(done.widget, DirtyFlags::PAINT),
+        (false, Some(root)) => scene.mark_dirty(root, DirtyFlags::PAINT),
+        (false, None) => {}
+    }
     true
 }
 

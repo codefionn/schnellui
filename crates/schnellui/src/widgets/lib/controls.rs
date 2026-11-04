@@ -111,6 +111,10 @@ pub enum ButtonAppearance {
     Solid,
     /// A transparent, text-colored action suitable for toolbars and tab rows.
     Ghost,
+    /// A medium-emphasis action: the surface color inside a one-pixel
+    /// outline, with text-colored label. Sits beside a [`Solid`](Self::Solid)
+    /// primary action or stands alone in forms and lists.
+    Outline,
 }
 
 /// A push button (SOUL §8.1). Carries `Role::Button`; its `on_click` is the same
@@ -520,6 +524,9 @@ pub struct TextInput {
     pub(crate) context_menu: Option<ContextMenu>,
     pub(crate) width: Option<f32>,
     pub(crate) password: bool,
+    pub(crate) text_size: Option<f32>,
+    pub(crate) hint: bool,
+    pub(crate) min_height: f32,
 }
 
 impl TextInput {
@@ -531,7 +538,34 @@ impl TextInput {
             context_menu: None,
             width: None,
             password: false,
+            text_size: None,
+            hint: false,
+            min_height: 0.0,
         }
+    }
+    /// Sets the least height of the field, so it lines up with buttons
+    /// beside it. A hint and the value center in the taller field.
+    pub fn height(mut self, height: f32) -> TextInput {
+        self.min_height = if height.is_finite() {
+            height.max(0.0)
+        } else {
+            0.0
+        };
+        self
+    }
+    /// Sets a plain hint instead of a floating label. The hint rests in the
+    /// empty field and disappears once the value is not empty, so the field
+    /// keeps one line of height. It is still the accessible name.
+    pub fn hint(mut self, hint: impl Into<Cow<'static, str>>) -> TextInput {
+        self.placeholder = hint.into();
+        self.hint = true;
+        self
+    }
+    /// Sets the logical size of the value; the floating label scales with it,
+    /// and so does the field's height. The default is the button text size.
+    pub fn text_size(mut self, size: f32) -> TextInput {
+        self.text_size = (size.is_finite() && size > 0.0).then_some(size);
+        self
     }
     /// Sets the Material-style floating label.
     ///
@@ -613,11 +647,13 @@ impl View for TextInput {
             id,
             this.value.clone(),
             placeholder,
-            BUTTON_TEXT_SIZE,
+            this.text_size.unwrap_or(BUTTON_TEXT_SIZE),
             ctx.scale,
             this.width,
             this.password,
+            this.hint,
         );
+        text_edit::set_min_height(&ctx.runtime, id, this.min_height);
         context_menu::register_context_menu(&ctx.runtime, id, context_menu);
         let intrinsic =
             text_edit::emit_text_input_paint(&ctx.runtime, ctx.scene, ctx.text, ctx.atlas, id);
@@ -648,9 +684,22 @@ impl PasswordInput {
     pub fn label(self, label: impl Into<Cow<'static, str>>) -> PasswordInput {
         self.placeholder(label)
     }
+    /// Shows `hint` only while the field is empty, one line high, as
+    /// [`TextInput::hint`] does.
+    pub fn hint(self, hint: impl Into<Cow<'static, str>>) -> PasswordInput {
+        PasswordInput(self.0.hint(hint))
+    }
+    /// Sets the least height of the field, as [`TextInput::height`] does.
+    pub fn height(self, height: f32) -> PasswordInput {
+        PasswordInput(self.0.height(height))
+    }
     pub fn on_input(mut self, f: impl FnMut(&str) + 'static) -> PasswordInput {
         self.0.on_input = Some(Box::new(f));
         self
+    }
+    /// Sets the logical size of the value, as [`TextInput::text_size`] does.
+    pub fn text_size(self, size: f32) -> PasswordInput {
+        PasswordInput(self.0.text_size(size))
     }
     pub fn width(mut self, width: f32) -> PasswordInput {
         self.0.width = width.is_finite().then_some(width.max(0.0));

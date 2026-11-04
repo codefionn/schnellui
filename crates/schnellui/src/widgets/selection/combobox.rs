@@ -7,6 +7,9 @@ pub struct ComboBox {
     label: Cow<'static, str>,
     options: Vec<DropdownOption>,
     open: bool,
+    /// The label shows only while the field is empty, and the field keeps
+    /// one line's height, as [`TextInput::hint`] does.
+    hint: bool,
     allow_free_text: bool,
     width: Option<f32>,
     max_popup_height: Option<f32>,
@@ -46,6 +49,7 @@ impl ComboBox {
             label: Cow::Borrowed(""),
             options: Vec::new(),
             open: false,
+            hint: false,
             allow_free_text: false,
             width: None,
             max_popup_height: None,
@@ -53,6 +57,14 @@ impl ComboBox {
             on_toggle: None,
             on_accept_free_text: None,
         }
+    }
+
+    /// Sets the accessible label, shown in the field only while it is
+    /// empty, with the field one line high: for a combo box under a
+    /// heading that already names it.
+    pub fn hint(mut self, label: impl Into<Cow<'static, str>>) -> Self {
+        self.hint = true;
+        self.label(label)
     }
 
     /// Sets the persistent floating and accessible label.
@@ -173,6 +185,7 @@ impl View for ComboBox {
             ctx.scale,
             this.width,
             false,
+            this.hint,
         );
         crate::widgets::context_menu::register_context_menu(&ctx.runtime, field, context_menu);
         let intrinsic = crate::widgets::text_edit::emit_text_input_paint(

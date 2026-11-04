@@ -1704,3 +1704,58 @@ fn a_dropdown_popup_in_a_dialog_hits_above_the_dialog_content_below_it() {
     assert!(covered, "the test needs a button under the option");
     assert_eq!(app.hit_test(center), Some(three));
 }
+
+#[test]
+fn a_bold_label_is_shaped_in_the_bold_face() {
+    use widgets::{Column, Text};
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Text::new("Allowed hosts ").size(14.0))
+            .child(Text::new("Allowed hosts").size(14.0).bold()),
+        400,
+        200,
+    );
+    app.frame();
+    let width = |name| {
+        let id = app.find_widget(Role::Label, Some(name)).unwrap();
+        app.scene().layout(id).unwrap().rect.width
+    };
+    // Liberation Sans Bold runs wider than the regular face, even with a
+    // space added to the regular label so the two names differ.
+    assert!(width("Allowed hosts") > width("Allowed hosts "));
+}
+
+#[test]
+fn a_dropdown_is_at_least_its_min_width() {
+    use schnellui::widgets::{Column, Dropdown, DropdownOption};
+    let view = Column::new()
+        .child(Dropdown::new("Short").option(DropdownOption::new("a").selected(true)))
+        .child(
+            Dropdown::new("Wide")
+                .min_width(240.0)
+                .option(DropdownOption::new("a").selected(true)),
+        );
+    let mut app = App::mount_with_size(view, 800, 600);
+    app.frame();
+    let width = |name| {
+        let id = app.find_widget(Role::ComboBox, Some(name)).unwrap();
+        app.scene().composited_rect(id).width
+    };
+    assert!(width("Short") < 240.0);
+    assert!((width("Wide") - 240.0).abs() < 0.5, "{}", width("Wide"));
+}
+
+#[test]
+fn a_hint_keeps_the_field_one_line_high_and_names_it() {
+    use schnellui::widgets::{Column, TextInput};
+    let view = Column::new()
+        .child(TextInput::new("").label("Labelled"))
+        .child(TextInput::new("").hint("Hinted"));
+    let mut app = App::mount_with_size(view, 800, 600);
+    app.frame();
+    let height = |name| {
+        let id = app.find_widget(Role::TextInput, Some(name)).unwrap();
+        app.scene().composited_rect(id).height
+    };
+    assert!(height("Hinted") < height("Labelled"));
+}

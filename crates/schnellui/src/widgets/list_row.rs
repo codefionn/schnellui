@@ -45,6 +45,7 @@ pub struct ListRow {
     width: f32,
     height: f32,
     pad_h: f32,
+    end_room: f32,
     title_size: f32,
     meta_size: f32,
     trailing_inline: bool,
@@ -69,6 +70,7 @@ impl ListRow {
             width: 240.0,
             height: DEFAULT_HEIGHT,
             pad_h: DEFAULT_PAD_H,
+            end_room: 0.0,
             title_size: 13.0,
             meta_size: 11.5,
             trailing_inline: false,
@@ -95,6 +97,14 @@ impl ListRow {
     /// Horizontal padding on both sides.
     pub fn padding(mut self, pad_h: f32) -> ListRow {
         self.pad_h = pad_h;
+        self
+    }
+
+    /// Keeps `room` logical pixels free at the right edge, inside the row's
+    /// background, for a control the caller places over it. The trailing
+    /// text ends before it and the title and subtitle stop short of it.
+    pub fn end_room(mut self, room: f32) -> ListRow {
+        self.end_room = if room.is_finite() { room.max(0.0) } else { 0.0 };
         self
     }
 
@@ -294,6 +304,7 @@ impl View for ListRow {
         let title_room = this.width
             - lead
             - this.pad_h
+            - this.end_room
             - if trailing.is_some() {
                 trailing_width + TRAILING_GAP
             } else {
@@ -311,7 +322,7 @@ impl View for ListRow {
                 ctx.text,
                 text,
                 meta_phys,
-                (this.width - lead - this.pad_h).max(8.0),
+                (this.width - lead - this.pad_h - this.end_room).max(8.0),
                 ctx.scale,
             )
         });
@@ -372,7 +383,7 @@ impl View for ListRow {
             let x = if this.trailing_inline {
                 rect.x + lead + title.width * inv + TRAILING_GAP
             } else {
-                rect.x + rect.width - this.pad_h - trailing_width
+                rect.x + rect.width - this.pad_h - this.end_room - trailing_width
             };
             let text_height = trailing.height * inv;
             let y = rect.y + (this.height - text_height) * 0.5;
@@ -561,6 +572,27 @@ mod tests {
             .fold(0.0f32, f32::max);
         assert!(right <= 200.0 - 12.0 + 1.0, "{right}");
         assert!(right > 200.0 - 12.0 - 12.0, "{right}");
+    }
+
+    #[test]
+    fn end_room_moves_the_trailing_text_left_of_it() {
+        let (scene, id) = build(
+            ListRow::new("branch")
+                .trailing("↑1")
+                .width(200.0)
+                .end_room(30.0),
+        );
+        let right = scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::GlyphQuad { rect, .. } => Some(rect.x + rect.width),
+                _ => None,
+            })
+            .fold(0.0f32, f32::max);
+        assert!(right <= 200.0 - 12.0 - 30.0 + 1.0, "{right}");
     }
 
     #[test]

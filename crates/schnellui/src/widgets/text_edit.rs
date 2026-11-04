@@ -87,6 +87,11 @@ pub(crate) struct EditState {
     /// Whether paint and accessibility surfaces must obscure `value`.
     pub(crate) password: bool,
     pub(crate) placeholder: String,
+    /// A hint is a plain placeholder: it shows only while the value is empty
+    /// and never floats, so the field keeps the compact one-line height.
+    pub(crate) hint: bool,
+    /// Least height of the field; the value and hint center in it.
+    pub(crate) min_height: f32,
     pub(crate) caret: usize,
     pub(crate) anchor: usize,
     pub(crate) size_px: f32,
@@ -514,6 +519,15 @@ impl EditState {
     }
 }
 
+/// Sets the least height of the field `id`, registered before.
+pub(crate) fn set_min_height(runtime: &crate::widgets::Runtime, id: WidgetId, height: f32) {
+    runtime.with(|rt| {
+        if let Some(e) = rt.borrow_mut().edits.get_mut(id) {
+            e.min_height = height;
+        }
+    });
+}
+
 /// Registers a text input's edit state at build (caret parked at the end).
 pub(crate) fn register_edit_state(
     runtime: &crate::widgets::Runtime,
@@ -524,9 +538,10 @@ pub(crate) fn register_edit_state(
     scale: f32,
     width: Option<f32>,
     password: bool,
+    hint: bool,
 ) {
     let end = value.len();
-    let label_progress = if placeholder.is_empty() || value.is_empty() {
+    let label_progress = if hint || placeholder.is_empty() || value.is_empty() {
         0.0
     } else {
         1.0
@@ -537,6 +552,8 @@ pub(crate) fn register_edit_state(
             value,
             password,
             placeholder,
+            hint,
+            min_height: 0.0,
             caret: end,
             anchor: end,
             size_px,

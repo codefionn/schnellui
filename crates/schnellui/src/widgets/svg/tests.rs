@@ -710,6 +710,34 @@ mod tests {
         }
     }
 
+    /// A cached icon's atlas entry outlives its mount: a remount finds the
+    /// entry reserved and draws from it without a job of its own, so the first
+    /// mount's late completion still fills it.
+    #[test]
+    fn stale_rasters_still_fill_a_shared_cached_entry() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let key = SvgCacheKey::new("cache-test", "stale-shared", "unique");
+        let (mut scene, id) = build_one(
+            runtime,
+            Svg::new(r##"<svg viewBox="0 0 8 8"><rect width="8" height="8" fill="red"/></svg>"##)
+                .cache(key),
+        );
+        let Primitive::ImageQuad { atlas_uv, .. } = scene.paint(id).unwrap().primitives[0] else {
+            panic!("expected an ImageQuad");
+        };
+        reset(runtime);
+        assert_eq!(settle_svg_rasters(runtime, &mut scene), 1);
+        let atlas = scene.images();
+        let stride = atlas.width() as usize * 4;
+        let (ax, ay) = (atlas_uv.x as usize, atlas_uv.y as usize);
+        let row = &atlas.pixels()[ay * stride + ax * 4..][..8 * 4];
+        assert!(
+            row.iter().any(|b| *b != 0),
+            "the shared entry has its pixels"
+        );
+    }
+
     #[test]
     fn bad_markup_falls_back_to_placeholder() {
         let runtime_handle = crate::widgets::Runtime::new();

@@ -517,4 +517,6 @@ pub(crate) struct SvgDone {
     pub(crate) rect: TexelRect,
     pub(crate) generation: u64,
     pub(crate) pixels: Arc<[u8]>,
+    /// The shared atlas entry the pixels fill, for an Svg with a cache key.
+    pub(crate) image_key: Option<schnellui::scene::ImageCacheKey>,
 }

@@ -113,11 +113,12 @@ impl App {
         replacement: SubtreeReplacement,
     ) -> Result<scene::WidgetId, MissingSubtreeTarget> {
         let focus_after = replacement.focus_after;
+        let ring = self.focus_ring_shown();
         let root = self.replace_subtree_boxed(replacement.target, replacement.view)?;
         if let Some(target) = focus_after {
             if let Some(widget) = self.scene.resolve_ref(target) {
                 let widget = self.first_focusable_in(widget).unwrap_or(widget);
-                let _ = self.focus(Some(widget));
+                let _ = self.focus_after_replacement(widget, ring);
             }
         }
         Ok(root)

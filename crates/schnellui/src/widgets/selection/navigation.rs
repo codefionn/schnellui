@@ -196,6 +196,12 @@ impl Tab {
         self.style.pad_h = Some(pad_h);
         self
     }
+    /// Empty room before the label, in logical pixels, inside the tab's
+    /// hover, selection and click area. A caller lays an icon over it.
+    pub fn lead(mut self, room: f32) -> Tab {
+        self.style.lead = room.max(0.0);
+        self
+    }
     /// Minimum height of the tab, so an indicator can sit on a strip's edge.
     pub fn min_height(mut self, height: f32) -> Tab {
         self.style.min_height = Some(height);
@@ -314,6 +320,7 @@ impl View for Tab {
             Box::new(move |_avail| Size {
                 width: (ts.width
                     + 2.0 * pad_h
+                    + this.style.lead
                     + if this.disclosure == TabDisclosure::None {
                         0.0
                     } else {
