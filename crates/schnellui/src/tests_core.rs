@@ -556,6 +556,25 @@ fn application_shortcuts_dispatch_by_normalized_chord() {
 }
 
 #[test]
+fn navigation_reaches_the_registered_handler() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut app = App::new(100, 100);
+    assert!(!app.dispatch_navigation(Navigation::Back));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    app.register_navigation_handler(move |navigation| {
+        sink.borrow_mut().push(navigation);
+        navigation == Navigation::Back
+    });
+
+    assert!(app.dispatch_navigation(Navigation::Back));
+    assert!(!app.dispatch_navigation(Navigation::Forward));
+    assert_eq!(*seen.borrow(), [Navigation::Back, Navigation::Forward]);
+}
+
+#[test]
 fn dump_a11y_reflects_scene() {
     let mut app = App::new(100, 100);
     let root = app.scene_mut().insert(WidgetKind::Button, None);

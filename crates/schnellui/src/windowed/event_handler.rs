@@ -361,6 +361,19 @@ impl WindowedApp {
             return EventTail::Skip;
         }
         if event.state == ElementState::Pressed {
+            let navigation = match event.logical_key {
+                Key::Named(NamedKey::BrowserBack) => Some(crate::Navigation::Back),
+                Key::Named(NamedKey::BrowserForward) => Some(crate::Navigation::Forward),
+                _ => None,
+            };
+            if let Some(navigation) = navigation {
+                if self.app.dispatch_navigation(navigation) {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                return EventTail::Normal;
+            }
             // Escape dismisses the top-most dialog first. A
             // persistent dialog still consumes it; only an
             // overlay-less application exits the window.
@@ -623,6 +636,20 @@ impl WindowedApp {
                 }
                 return EventTail::Skip;
             }
+        }
+        // Back and forward step the application's history where no raw
+        // surface took them. The epilogue applies the remount it asks for.
+        if let Some(navigation) = pointer_navigation(button) {
+            if state == ElementState::Pressed && self.app.dispatch_navigation(navigation) {
+                self.trace_with(
+                    "pointer_button_result",
+                    |_| json!({ "route": "navigation", "handled": true }),
+                );
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            return EventTail::Normal;
         }
         if scrollbar_released {
             let _ = self.app.set_active_interaction(None);

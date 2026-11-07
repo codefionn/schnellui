@@ -496,13 +496,17 @@ mod dropdown_pointer {
     }
 
     fn click(host: &mut WindowedApp, x: f32, y: f32) {
+        press(host, x, y, MouseButton::Left);
+    }
+
+    fn press(host: &mut WindowedApp, x: f32, y: f32, button: MouseButton) {
         let scale = f64::from(host.app.scale());
         host.on_cursor_moved(PhysicalPosition::new(
             f64::from(x) * scale,
             f64::from(y) * scale,
         ));
         for state in [ElementState::Pressed, ElementState::Released] {
-            if host.on_mouse_input(state, MouseButton::Left) == EventTail::Normal {
+            if host.on_mouse_input(state, button) == EventTail::Normal {
                 host.poll_remount();
             }
             host.on_redraw_requested();
@@ -550,6 +554,33 @@ mod dropdown_pointer {
             assert!(!state.get().open);
             assert!(!expanded(&host));
         }
+    }
+
+    #[test]
+    fn the_back_button_steps_back_without_clicking() {
+        let (state, mut host) = host(Update::Remount);
+        let steps = Rc::new(Cell::new(Vec::new()));
+        let sink = steps.clone();
+        host.app.register_navigation_handler(move |navigation| {
+            let mut seen = sink.take();
+            seen.push(navigation);
+            sink.set(seen);
+            true
+        });
+        let banana = host
+            .app
+            .find_widget(Role::ListBoxOption, Some("Banana"))
+            .unwrap();
+        let rect = host.app.scene().layout(banana).unwrap().rect;
+        let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        press(&mut host, x, y, MouseButton::Back);
+        press(&mut host, x, y, MouseButton::Forward);
+        assert_eq!(
+            steps.take(),
+            [crate::Navigation::Back, crate::Navigation::Forward]
+        );
+        assert_eq!(state.get().chosen, 0);
+        assert!(expanded(&host));
     }
 
     #[test]

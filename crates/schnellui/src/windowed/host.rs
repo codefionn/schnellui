@@ -946,6 +946,8 @@ impl WindowedApp {
             "page_up" => self.app.dispatch_key(UiKey::PageUp),
             "page_down" => self.app.dispatch_key(UiKey::PageDown),
             "escape" => self.app.dispatch_key(UiKey::Escape),
+            "browser_back" => self.app.dispatch_navigation(crate::Navigation::Back),
+            "browser_forward" => self.app.dispatch_navigation(crate::Navigation::Forward),
             "select_all" => self.app.dispatch_key(UiKey::SelectAll),
             "text" => {
                 let Some(text) = request.text.as_deref() else {

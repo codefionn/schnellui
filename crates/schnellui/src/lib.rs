@@ -203,7 +203,16 @@ impl Shortcut {
     }
 }
 
+/// A step back or forward through an application's own history, which the
+/// mouse's back and forward buttons and the keyboard's browser keys ask for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Navigation {
+    Back,
+    Forward,
+}
+
 type ShortcutHandler = Box<dyn FnMut() + 'static>;
+type NavigationHandler = Box<dyn FnMut(Navigation) -> bool + 'static>;
 type FocusedKeyHandler = Box<dyn for<'a> FnMut(UiKey<'a>) -> bool + 'static>;
 type FocusedInputHandler = Box<dyn FnMut(FocusedInputEvent) -> FocusedInputResult + 'static>;
 type CursorProvider = Box<dyn Fn() -> widgets::CursorIcon + 'static>;
@@ -448,6 +457,9 @@ pub struct App {
     /// host resolves winit modifiers before dispatch; headless tests can drive
     /// the same path directly.
     shortcut_registry: HashMap<Shortcut, ShortcutHandler>,
+    /// What the mouse's back and forward buttons do where no raw surface
+    /// takes them.
+    navigation_handler: Option<NavigationHandler>,
     /// Raw key handlers scoped to a focused semantic surface. Applications use
     /// this for controls such as terminal emulators that consume keyboard input
     /// directly instead of editing through a text-input widget.

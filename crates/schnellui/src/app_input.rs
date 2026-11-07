@@ -38,6 +38,25 @@ impl App {
             .insert(shortcut.normalized(), Box::new(handler));
     }
 
+    /// Registers the handler for the mouse's back and forward buttons and the
+    /// keyboard's browser back and forward keys, replacing any earlier one. A
+    /// focused raw surface under the pointer gets the buttons first. The
+    /// handler returns whether it moved.
+    pub fn register_navigation_handler(
+        &mut self,
+        handler: impl FnMut(Navigation) -> bool + 'static,
+    ) {
+        self.navigation_handler = Some(Box::new(handler));
+    }
+
+    /// Dispatches one step back or forward. Returns `true` when the
+    /// registered handler moved.
+    pub fn dispatch_navigation(&mut self, navigation: Navigation) -> bool {
+        self.navigation_handler
+            .as_mut()
+            .is_some_and(|handler| handler(navigation))
+    }
+
     /// Registers a raw-key handler for a focused widget identified by its
     /// accessible role and optional name. The handler runs before built-in
     /// widget editing, activation, and page scrolling and returns whether it

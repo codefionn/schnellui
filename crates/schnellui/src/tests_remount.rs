@@ -305,6 +305,12 @@ fn theme_remount_preserves_interaction_state_and_host_registrations() {
     app.register_shortcut(Shortcut::command('r'), move || {
         invoked_shortcuts.set(invoked_shortcuts.get() + 1);
     });
+    let navigations = Rc::new(Cell::new(0));
+    let invoked_navigations = navigations.clone();
+    app.register_navigation_handler(move |_| {
+        invoked_navigations.set(invoked_navigations.get() + 1);
+        true
+    });
     let raw_events = Rc::new(Cell::new(0));
     let observed_raw_events = raw_events.clone();
     app.register_focused_input_handler(Role::ScrollView, Some("Raw surface"), move |_| {
@@ -324,6 +330,8 @@ fn theme_remount_preserves_interaction_state_and_host_registrations() {
     assert_eq!(app.focused_widget(), Some(surface));
     assert!(app.dispatch_shortcut(Shortcut::command('r')));
     assert_eq!(shortcuts.get(), 1);
+    assert!(app.dispatch_navigation(Navigation::Back));
+    assert_eq!(navigations.get(), 1);
     assert_eq!(
         app.dispatch_focused_input(FocusedInputEvent::Focus(RawFocusEvent::WindowGained)),
         FocusedInputResult::Handled

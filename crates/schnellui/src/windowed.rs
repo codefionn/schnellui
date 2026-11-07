@@ -240,6 +240,15 @@ fn window_event_name(event: &WindowEvent) -> &'static str {
     }
 }
 
+/// The history step a mouse button asks for, if any.
+fn pointer_navigation(button: MouseButton) -> Option<crate::Navigation> {
+    match button {
+        MouseButton::Back => Some(crate::Navigation::Back),
+        MouseButton::Forward => Some(crate::Navigation::Forward),
+        _ => None,
+    }
+}
+
 fn raw_pointer_button(button: MouseButton) -> RawPointerButton {
     match button {
         MouseButton::Left => RawPointerButton::Left,
