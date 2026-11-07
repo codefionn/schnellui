@@ -827,6 +827,13 @@ fn a_menu_with_a_smaller_text_size_has_shorter_rows() {
             .item(ContextMenuItem::new("1 shell")),
     );
     assert!(small < default, "{small} < {default}");
+    let tall = row_height(
+        ContextMenu::new()
+            .text_size(13.0)
+            .row_height(28.0)
+            .item(ContextMenuItem::new("1 shell")),
+    );
+    assert_eq!(tall, 28.0);
 }
 
 #[test]

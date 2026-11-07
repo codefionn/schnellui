@@ -116,6 +116,7 @@ impl ContextMenuItem {
 pub struct ContextMenu {
     items: Vec<ContextMenuItem>,
     text_size: Option<f32>,
+    row_height: Option<f32>,
 }
 
 impl ContextMenu {
@@ -127,6 +128,13 @@ impl ContextMenu {
     /// smaller text of the control it opens from, such as tab titles.
     pub fn text_size(mut self, size: f32) -> ContextMenu {
         self.text_size = Some(size);
+        self
+    }
+
+    /// Sets the least height of a row in logical px, so a menu in a small
+    /// text size can keep rows as easy to hit as its neighbours' lists.
+    pub fn row_height(mut self, height: f32) -> ContextMenu {
+        self.row_height = Some(height);
         self
     }
 
@@ -324,13 +332,14 @@ pub fn open_context_menu(
             .a11y(source)
             .and_then(|semantics| semantics.value.as_deref())
             .is_some_and(|value| !value.is_empty());
-    let size = runtime.context_menu.with(|state| {
-        state
-            .borrow()
-            .menus
-            .get(source)
-            .and_then(|menu| menu.text_size)
-            .unwrap_or(BUTTON_TEXT_SIZE)
+    let (size, least_row) = runtime.context_menu.with(|state| {
+        let state = state.borrow();
+        let menu = state.menus.get(source);
+        (
+            menu.and_then(|menu| menu.text_size)
+                .unwrap_or(BUTTON_TEXT_SIZE),
+            menu.and_then(|menu| menu.row_height).unwrap_or(0.0),
+        )
     });
     let phys = phys_size_px(size, scale);
     let inv = 1.0 / norm_scale(scale);
@@ -381,7 +390,9 @@ pub fn open_context_menu(
     let row_height = items
         .iter()
         .map(|item| item.shaped.height * inv + 2.0 * pad_v)
-        .fold(0.0f32, f32::max);
+        .fold(least_row, f32::max);
+    // A row taller than its text keeps the text in its middle.
+    let text_top = |item: &RenderItem| (row_height - item.shaped.height * inv) * 0.5;
     let desired_width = items
         .iter()
         .map(|item| item.shaped.width * inv + 2.0 * pad_h)
@@ -509,7 +520,7 @@ pub fn open_context_menu(
                 scale,
                 Point {
                     x: rect.x + pad_h,
-                    y: rect.y + pad_v,
+                    y: rect.y + text_top(item),
                 },
             );
         }
