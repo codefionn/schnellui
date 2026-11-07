@@ -59,6 +59,21 @@ pub fn scrollbar_rects(metrics: ScrollMetrics) -> Option<(Rect, Rect)> {
     Some((track, thumb))
 }
 
+/// How far the painted thumb stays inside its track on each side. The
+/// pointer still grabs the whole track width; only the drawn bar is slimmer,
+/// so it does not outweigh the content beside it.
+pub(crate) const THUMB_PAINT_INSET: f32 = 2.0;
+
+/// The part of `thumb` that is drawn.
+pub(crate) fn thumb_paint(thumb: Rect) -> Rect {
+    Rect::new(
+        thumb.x + THUMB_PAINT_INSET,
+        thumb.y,
+        (thumb.width - 2.0 * THUMB_PAINT_INSET).max(1.0),
+        thumb.height,
+    )
+}
+
 /// Re-emits optional scroll chrome from final layout geometry. Scrollbar paint is
 /// attached to the viewport node and composited after its descendants by the WGPU
 /// renderer, so it stays fixed while content moves underneath it.
@@ -81,9 +96,9 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
                 corner_radius: theme.shape.pill(track.width),
             },
             Primitive::SolidRect {
-                rect: thumb,
+                rect: thumb_paint(thumb),
                 color: theme.outline,
-                corner_radius: theme.shape.pill(thumb.width),
+                corner_radius: theme.shape.pill(thumb.width - 2.0 * THUMB_PAINT_INSET),
             },
         ]
     });

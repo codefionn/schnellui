@@ -95,6 +95,39 @@ fn scroll_can_start_at_a_virtualized_content_offset() {
 }
 
 #[test]
+fn the_drawn_thumb_is_slimmer_than_the_part_the_pointer_grabs() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, _layout, _text, _atlas, scroll) = build_and_layout(
+        runtime,
+        scroll_with_rows(25, 320.0, 220.0).scrollbar(true),
+        Size {
+            width: 400.0,
+            height: 300.0,
+        },
+    );
+    let (_, thumb) = scrollbar_rects(scroll_metrics(&scene, scroll).unwrap()).unwrap();
+    assert!(emit_scrollbar_paint(runtime, &mut scene, scroll));
+    let drawn = scene
+        .paint(scroll)
+        .unwrap()
+        .primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::SolidRect { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    assert_eq!(
+        drawn.width,
+        thumb.width - 2.0 * super::super::scroll::THUMB_PAINT_INSET
+    );
+    assert_eq!(drawn.x, thumb.x + super::super::scroll::THUMB_PAINT_INSET);
+    assert_eq!((drawn.y, drawn.height), (thumb.y, thumb.height));
+}
+
+#[test]
 fn scrollbar_thumb_drag_and_edge_auto_scroll_use_the_shared_scroll_path() {
     let runtime_handle = crate::widgets::Runtime::new();
     let runtime = &runtime_handle;
