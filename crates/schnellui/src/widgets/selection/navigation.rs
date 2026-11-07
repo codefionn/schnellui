@@ -140,6 +140,8 @@ fn first_tab_in_subtree(scene: &Scene, id: WidgetId) -> Option<WidgetId> {
 /// fires `on_select` — the same handler an inbound AccessKit `Click` fires.
 pub struct Tab {
     pub(crate) label: Cow<'static, str>,
+    /// Painted instead of `label`, which stays the accessible name.
+    pub(crate) display: Option<Cow<'static, str>>,
     pub(crate) selected: bool,
     pub(crate) width: Option<f32>,
     pub(crate) appearance: TabAppearance,
@@ -158,6 +160,7 @@ impl Tab {
     pub fn new(label: impl Into<Cow<'static, str>>) -> Tab {
         Tab {
             label: label.into(),
+            display: None,
             selected: false,
             width: None,
             appearance: TabAppearance::Classic,
@@ -170,6 +173,13 @@ impl Tab {
             on_close: None,
             context_menu: None,
         }
+    }
+    /// Paints `text` in place of the label, which stays the accessible name
+    /// and the close button's subject: for a title shortened to fit a full
+    /// tab strip.
+    pub fn display(mut self, text: impl Into<Cow<'static, str>>) -> Tab {
+        self.display = Some(text.into());
+        self
     }
     /// Marks this tab as the initially selected one.
     pub fn selected(mut self, selected: bool) -> Tab {
@@ -211,6 +221,12 @@ impl Tab {
     /// theme accent for this tab only.
     pub fn indicator(mut self, color: Color, thickness: f32) -> Tab {
         self.style.indicator = Some((color, thickness));
+        self
+    }
+    /// Fills a selected [`TabAppearance::Underline`] tab, so the shown tab
+    /// reads as joined to the content under it and not only by its line.
+    pub fn selected_fill(mut self, color: Color) -> Tab {
+        self.style.selected_fill = Some(color);
         self
     }
     /// Reserves the tree disclosure gutter and optionally paints a branch chevron.
@@ -282,6 +298,7 @@ impl View for Tab {
         let id = ctx.scene.insert(WidgetKind::Tab, compound.or(parent));
         let label: String = this.label.into_owned();
         write_selectable_semantics(ctx.scene, id, Role::Tab, &label, this.selected);
+        let painted: Cow<'static, str> = this.display.unwrap_or_else(|| label.clone().into());
         if this
             .context_menu
             .as_ref()
@@ -306,7 +323,7 @@ impl View for Tab {
             ctx.atlas,
             id,
             WidgetKind::Tab,
-            &label,
+            &painted,
             this.selected,
             ctx.scale,
             this.width.unwrap_or(0.0),

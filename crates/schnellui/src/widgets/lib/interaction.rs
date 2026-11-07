@@ -206,9 +206,12 @@ pub fn set_focus_ring_visible(
     id: WidgetId,
     visible: bool,
 ) -> bool {
-    if scene.node(id).is_none() {
+    let Some(kind) = scene.node(id).map(|node| node.kind) else {
         return false;
-    }
+    };
+    // A field shows its ring however it got focus, as CSS :focus-visible
+    // does for text inputs: typing goes there next, whatever moved focus.
+    let visible = visible || matches!(kind, WidgetKind::TextInput | WidgetKind::TextArea);
     let wearing = runtime.with(|rt| {
         rt.borrow()
             .ring

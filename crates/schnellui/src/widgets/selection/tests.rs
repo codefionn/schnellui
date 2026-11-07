@@ -84,6 +84,28 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_paints_its_display_text_and_keeps_its_label_as_name() {
+        let glyphs = |tab: Tab| {
+            let runtime_handle = crate::widgets::Runtime::new();
+            let (scene, _l, _t, _a, id) = build_one(&runtime_handle, tab);
+            let name = scene.a11y(id).unwrap().name.clone();
+            let count = scene
+                .paint(id)
+                .unwrap()
+                .primitives
+                .iter()
+                .filter(|p| matches!(p, crate::scene::Primitive::GlyphQuad { .. }))
+                .count();
+            (name, count)
+        };
+        let (name, full) = glyphs(Tab::new("a long title"));
+        let (short_name, short) = glyphs(Tab::new("a long title").display("a l…"));
+        assert_eq!(name.as_deref(), Some("a long title"));
+        assert_eq!(short_name.as_deref(), Some("a long title"));
+        assert!(short < full, "{short} glyphs, {full} without display");
+    }
+
+    #[test]
     fn tabbar_trailing_view_follows_tabs_but_stays_outside_the_tablist() {
         let runtime_handle = crate::widgets::Runtime::new();
         #[allow(unused_variables)]
@@ -1308,5 +1330,30 @@ mod tests {
             }
             ref p => panic!("{p:?}"),
         }
+    }
+
+    #[test]
+    fn a_selected_underline_tab_takes_its_fill_and_the_others_stay_flat() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let fill = Color::rgb(0x16, 0x20, 0x27);
+        let (scene, _l, _t, _a, id) = build_one(
+            runtime,
+            TabBar::new()
+                .child(
+                    Tab::new("shell")
+                        .appearance(TabAppearance::Underline)
+                        .selected_fill(fill)
+                        .selected(true),
+                )
+                .child(
+                    Tab::new("logs")
+                        .appearance(TabAppearance::Underline)
+                        .selected_fill(fill),
+                ),
+        );
+        let kids = scene.node(id).unwrap().children.clone();
+        assert_eq!(color_of(&scene, kids[0], 0), fill);
+        assert_eq!(color_of(&scene, kids[1], 0), Color::TRANSPARENT);
     }
 }

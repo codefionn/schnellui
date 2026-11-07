@@ -120,6 +120,7 @@ impl App {
             layout_consumed_epoch: 0,
             layout_runs: 0,
             pointer_hit: std::cell::Cell::new(None),
+            hover_hold: std::cell::Cell::new(None),
             paint_bindings: bindings::PaintBindings::new(),
             theme_factory: None,
             theme_mode: ThemeMode::Fixed(active_theme),

@@ -1285,6 +1285,35 @@ fn pointer_focus_is_semantic_but_keyboard_promotes_focus_visible() {
 }
 
 #[test]
+fn a_field_wears_the_focus_ring_however_it_got_focus() {
+    use schnellui::widgets::{Button, Column, TextInput};
+
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("Save"))
+            .child(TextInput::new("").hint("Path")),
+        240,
+        120,
+    );
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Save")).unwrap();
+    let field = app.find_widget(Role::TextInput, None).unwrap();
+    assert!(app.pointer_focus(Some(button)));
+    assert!(!schnellui::widgets::focus_ring_visible(
+        &app.widgets,
+        button
+    ));
+    // An overlay opened by pointer focuses its field the same way; typing
+    // goes there next, so the field still wears the ring.
+    assert!(app.focus_without_ring(Some(field)));
+    assert_eq!(app.focused_widget(), Some(field));
+    assert!(
+        schnellui::widgets::focus_ring_visible(&app.widgets, field),
+        "a field shows its ring however it got focus"
+    );
+}
+
+#[test]
 fn terminal_like_scroll_surface_focuses_from_content_and_receives_raw_keys() {
     use schnellui::widgets::{Scroll, Text};
     use std::cell::RefCell;
@@ -1758,4 +1787,27 @@ fn a_hint_keeps_the_field_one_line_high_and_names_it() {
         app.scene().composited_rect(id).height
     };
     assert!(height("Hinted") < height("Labelled"));
+}
+
+#[test]
+fn keyboard_navigation_holds_hover_until_the_pointer_moves() {
+    use widgets::{Button, Column};
+
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("first").width(100.0).height(30.0))
+            .child(Button::new("second").width(100.0).height(30.0)),
+        200,
+        100,
+    );
+    app.frame();
+    let rest = scene::Point { x: 20.0, y: 10.0 };
+    // The pointer lights the row under it.
+    assert!(app.update_pointer_proximity(rest));
+    // A navigation key takes the hover away from the resting pointer.
+    assert!(app.hold_pointer_hover());
+    // A remount re-evaluates at the same point and lights nothing.
+    assert!(!app.update_pointer_proximity(rest));
+    // The first move hands hover back.
+    assert!(app.update_pointer_proximity(scene::Point { x: 21.0, y: 10.0 }));
 }

@@ -893,6 +893,26 @@ impl WindowedApp {
 
     pub(super) fn handle_debug_key(&mut self, request: DebugKey) -> DebugReply {
         let name = request.key.to_ascii_lowercase().replace('-', "_");
+        // As the windowed host does: keys that move a highlight take hover
+        // from the resting pointer.
+        if matches!(
+            name.as_str(),
+            "tab" | "up" | "down" | "home" | "end" | "page_up" | "page_down"
+        ) {
+            let _ = self.app.hold_pointer_hover();
+        }
+        // As the windowed host does: a raw surface with its own key handler
+        // (a terminal grid) gets the key first.
+        if let Some(raw) = debug_raw_key(&name, &request) {
+            let result = self.app.dispatch_focused_input(FocusedInputEvent::Key(raw));
+            if self.apply_focused_input_result(result) {
+                self.settle_debug_command();
+                return DebugReply::json(
+                    200,
+                    json!({ "changed": true, "status": self.debug_status() }),
+                );
+            }
+        }
         let changed = match name.as_str() {
             "tab" => self.app.dispatch_key(UiKey::Tab {
                 shift: request.shift,
@@ -1397,4 +1417,49 @@ pub(crate) fn run_headless(
         }
     }
     Ok(())
+}
+
+/// The raw key event a named debug key stands for, as a keyboard would send
+/// it; `None` for names without one.
+fn debug_raw_key(name: &str, request: &DebugKey) -> Option<RawKeyEvent> {
+    use crate::raw_keyboard::{Key, KeyCode, KeyLocation, NamedKey, PhysicalKey};
+    let (named, code) = match name {
+        "tab" => (NamedKey::Tab, KeyCode::Tab),
+        "enter" => (NamedKey::Enter, KeyCode::Enter),
+        "space" => (NamedKey::Space, KeyCode::Space),
+        "backspace" => (NamedKey::Backspace, KeyCode::Backspace),
+        "delete" => (NamedKey::Delete, KeyCode::Delete),
+        "left" => (NamedKey::ArrowLeft, KeyCode::ArrowLeft),
+        "right" => (NamedKey::ArrowRight, KeyCode::ArrowRight),
+        "up" => (NamedKey::ArrowUp, KeyCode::ArrowUp),
+        "down" => (NamedKey::ArrowDown, KeyCode::ArrowDown),
+        "home" => (NamedKey::Home, KeyCode::Home),
+        "end" => (NamedKey::End, KeyCode::End),
+        "page_up" => (NamedKey::PageUp, KeyCode::PageUp),
+        "page_down" => (NamedKey::PageDown, KeyCode::PageDown),
+        "escape" => (NamedKey::Escape, KeyCode::Escape),
+        _ => return None,
+    };
+    let text = match named {
+        NamedKey::Enter => Some("\r".to_owned()),
+        NamedKey::Tab => Some("\t".to_owned()),
+        NamedKey::Space => Some(" ".to_owned()),
+        _ => None,
+    };
+    Some(RawKeyEvent {
+        logical_key: Key::Named(named),
+        physical_key: PhysicalKey::Code(code),
+        key_without_modifiers: Key::Named(named),
+        location: KeyLocation::Standard,
+        modifiers: RawModifiers {
+            shift: request.shift,
+            control: request.ctrl,
+            alt: false,
+            super_key: false,
+        },
+        state: RawInputState::Pressed,
+        repeat: false,
+        text: text.clone(),
+        text_with_all_modifiers: text,
+    })
 }

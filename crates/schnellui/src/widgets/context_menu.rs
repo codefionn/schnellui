@@ -44,6 +44,7 @@ enum ItemAction {
 pub struct ContextMenuItem {
     label: Cow<'static, str>,
     enabled: bool,
+    selected: bool,
     action: ItemAction,
 }
 
@@ -54,6 +55,7 @@ impl ContextMenuItem {
         ContextMenuItem {
             label: label.into(),
             enabled: true,
+            selected: false,
             action: ItemAction::Custom(None),
         }
     }
@@ -78,6 +80,7 @@ impl ContextMenuItem {
         ContextMenuItem {
             label: Cow::Borrowed(label),
             enabled: true,
+            selected: false,
             action: ItemAction::BuiltIn(action),
         }
     }
@@ -86,6 +89,14 @@ impl ContextMenuItem {
     /// state.
     pub fn enabled(mut self, enabled: bool) -> ContextMenuItem {
         self.enabled = enabled;
+        self
+    }
+
+    /// Marks this item as the current one of a menu that picks among
+    /// choices, such as the shown tab in a list of tabs: it gets the theme's
+    /// selection fill and the selected state.
+    pub fn selected(mut self, selected: bool) -> ContextMenuItem {
+        self.selected = selected;
         self
     }
 
@@ -104,11 +115,19 @@ impl ContextMenuItem {
 #[derive(Default)]
 pub struct ContextMenu {
     items: Vec<ContextMenuItem>,
+    text_size: Option<f32>,
 }
 
 impl ContextMenu {
     pub fn new() -> ContextMenu {
-        ContextMenu { items: Vec::new() }
+        ContextMenu::default()
+    }
+
+    /// Sets the items' text size in logical px, for a menu that lists the
+    /// smaller text of the control it opens from, such as tab titles.
+    pub fn text_size(mut self, size: f32) -> ContextMenu {
+        self.text_size = Some(size);
+        self
     }
 
     pub fn default_text() -> ContextMenu {
@@ -254,6 +273,7 @@ pub struct ContextMenuActivation {
 struct RenderItem {
     label: String,
     enabled: bool,
+    selected: bool,
     action: ContextMenuAction,
     custom_index: Option<usize>,
     shaped: ShapedText,
@@ -304,7 +324,15 @@ pub fn open_context_menu(
             .a11y(source)
             .and_then(|semantics| semantics.value.as_deref())
             .is_some_and(|value| !value.is_empty());
-    let phys = phys_size_px(BUTTON_TEXT_SIZE, scale);
+    let size = runtime.context_menu.with(|state| {
+        state
+            .borrow()
+            .menus
+            .get(source)
+            .and_then(|menu| menu.text_size)
+            .unwrap_or(BUTTON_TEXT_SIZE)
+    });
+    let phys = phys_size_px(size, scale);
     let inv = 1.0 / norm_scale(scale);
     let mut items = runtime.context_menu.with(|state| {
         let state = state.borrow();
@@ -335,6 +363,7 @@ pub fn open_context_menu(
                             has_text,
                             has_callback,
                         ),
+                        selected: item.selected,
                         action,
                         custom_index,
                     }
@@ -451,12 +480,19 @@ pub fn open_context_menu(
             } else {
                 semantics.state = StateFlags::DISABLED.0;
             }
+            if item.selected {
+                semantics.state |= StateFlags::SELECTED.0;
+            }
         }
         {
             let paint = scene.paint_mut(id);
             paint.primitives.push(Primitive::SolidRect {
                 rect,
-                color: Color::TRANSPARENT,
+                color: if item.selected {
+                    theme.selection
+                } else {
+                    Color::TRANSPARENT
+                },
                 corner_radius: 0.0,
             });
             rasterize_and_push(

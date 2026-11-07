@@ -786,6 +786,80 @@ fn list_row_context_menu_opens_and_runs_its_command() {
 }
 
 #[test]
+fn a_button_with_a_menu_opens_it_on_click_and_runs_the_chosen_item() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let ran = Rc::new(Cell::new(0));
+    let sink = ran.clone();
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("Tab 3").on_select(move || sink.set(sink.get() + 1)));
+    let mut app = App::mount_with_size(Button::new("2 more tabs").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("2 more tabs")).unwrap();
+    assert!(!app.context_menu_is_open());
+    assert!(app.dispatch_click(button));
+    assert!(app.context_menu_is_open());
+    let item = app.find_widget(Role::MenuItem, Some("Tab 3")).unwrap();
+    assert!(app.activate_context_menu_item(item).is_some());
+    assert_eq!(ran.get(), 1);
+    assert!(!app.context_menu_is_open());
+}
+
+#[test]
+fn a_menu_with_a_smaller_text_size_has_shorter_rows() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let row_height = |menu: ContextMenu| {
+        let mut app = App::mount_with_size(Button::new("Tabs").menu(menu), 400, 300);
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Tabs")).unwrap();
+        assert!(app.dispatch_click(button));
+        let item = app.find_widget(Role::MenuItem, Some("1 shell")).unwrap();
+        app.scene().layout(item).unwrap().rect.height
+    };
+    let default = row_height(ContextMenu::new().item(ContextMenuItem::new("1 shell")));
+    let small = row_height(
+        ContextMenu::new()
+            .text_size(13.0)
+            .item(ContextMenuItem::new("1 shell")),
+    );
+    assert!(small < default, "{small} < {default}");
+}
+
+#[test]
+fn a_selected_menu_item_wears_the_selection_fill_and_state() {
+    use schnellui::a11y::StateFlags;
+    use schnellui::scene::Primitive;
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("1 shell"))
+        .item(ContextMenuItem::new("2 shell").selected(true));
+    let mut app = App::mount_with_size(Button::new("Tabs").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Tabs")).unwrap();
+    assert!(app.dispatch_click(button));
+    let fill = |name: &str| {
+        let item = app.find_widget(Role::MenuItem, Some(name)).unwrap();
+        let selected =
+            StateFlags(app.scene().a11y(item).unwrap().state).contains(StateFlags::SELECTED);
+        let color = match app.scene().paint(item).unwrap().primitives[0] {
+            Primitive::SolidRect { color, .. } => color,
+            _ => panic!("a menu row starts with its fill"),
+        };
+        (selected, color)
+    };
+    let (plain, plain_fill) = fill("1 shell");
+    let (current, current_fill) = fill("2 shell");
+    assert!(!plain && current);
+    assert_eq!(plain_fill.a, 0);
+    assert!(current_fill.a > 0);
+}
+
+#[test]
 fn combobox_search_filters_retained_rows_without_a_remount() {
     use std::cell::RefCell;
     use std::rc::Rc;

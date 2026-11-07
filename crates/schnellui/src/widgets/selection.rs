@@ -75,6 +75,8 @@ pub(crate) struct TabStyle {
     pub(crate) indicator: Option<(Color, f32)>,
     /// Empty room before the label, for an icon the caller lays over it.
     pub(crate) lead: f32,
+    /// Fill of a selected underline tab, which is otherwise transparent.
+    pub(crate) selected_fill: Option<Color>,
 }
 
 fn tab_style(runtime: &crate::widgets::Runtime, id: WidgetId) -> TabStyle {
@@ -125,7 +127,13 @@ fn selection_colors(
     let underline =
         kind == WidgetKind::Tab && tab_appearance(runtime, id) == TabAppearance::Underline;
     let bg = if underline {
-        Color::TRANSPARENT
+        if selected {
+            tab_style(runtime, id)
+                .selected_fill
+                .unwrap_or(Color::TRANSPARENT)
+        } else {
+            Color::TRANSPARENT
+        }
     } else if selected && kind == WidgetKind::DropdownOption {
         // An option row is a floating popup's only surface: a translucent
         // selection tint would show the content under the popup through it.

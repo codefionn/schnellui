@@ -482,6 +482,11 @@ pub struct App {
     /// The hit resolved by the last [`App::update_pointer_proximity`], so the
     /// cursor lookup for the same pointer position reuses it.
     pointer_hit: std::cell::Cell<Option<PointerHit>>,
+    /// Where the pointer rested when the keyboard last moved a highlight
+    /// ([`App::hold_pointer_hover`]). Until the pointer leaves that point, it
+    /// lights nothing, so a list never shows a stale hover beside the row the
+    /// keys picked.
+    hover_hold: std::cell::Cell<Option<scene::Point>>,
     /// reactive paint bindings: `(node, || -> Color)`. Each runs under a tracked
     /// subscription, so a frame evaluates only the bindings whose signals changed
     /// (a clean frame calls none); each writes ONE node's fill via `scene.set_color` (PAINT-only,

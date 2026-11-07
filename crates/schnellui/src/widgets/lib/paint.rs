@@ -260,7 +260,18 @@ pub fn emit_button_paint(
 ) -> Size {
     let inv = 1.0 / norm_scale(scale);
     let phys = phys_size_px(text_size.unwrap_or(BUTTON_TEXT_SIZE), scale);
-    let shaped = shaper.shape(if show_label { label } else { "" }, phys, None);
+    // A filled button's label is bold: dark strokes on a light fill thin out
+    // under antialiasing, and the heavier face keeps the main action as
+    // legible as the outlined ones beside it.
+    let face = if appearance == ButtonAppearance::Solid && !disabled {
+        FontFace::SansBold
+    } else {
+        FontFace::Sans
+    };
+    let shaped = shaper.shape_with(
+        if show_label { label } else { "" },
+        &ShapeOptions::new(phys).face(face),
+    );
     let ts = Size {
         width: shaped.width * inv,
         height: shaped.height * inv,
@@ -308,7 +319,14 @@ pub fn emit_button_paint(
     if frame > 0.0 {
         pd.primitives.push(Primitive::SolidRect {
             rect: body,
-            color: t.outline,
+            // A disabled button's frame sits halfway between the divider
+            // and the outline: weaker than one that takes clicks, but still
+            // a visible edge on the disabled fill.
+            color: if disabled {
+                crate::widgets::theme::mix_color(t.separator, t.outline, DISABLED_FRAME_SHARE)
+            } else {
+                t.outline
+            },
             corner_radius: radius,
         });
     }
@@ -359,9 +377,13 @@ pub fn emit_button_paint(
     ts
 }
 
+/// How far a disabled button's frame moves from the divider color toward
+/// the outline.
+const DISABLED_FRAME_SHARE: f32 = 0.5;
+
 /// How far a disabled button's label fades from the muted text color toward
 /// the disabled fill.
-const DISABLED_LABEL_FADE: f32 = 0.2;
+const DISABLED_LABEL_FADE: f32 = 0.42;
 
 /// Height of capital letters as a share of the font size, close to that of
 /// the bundled sans faces.

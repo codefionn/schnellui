@@ -798,11 +798,21 @@ impl App {
     /// Returns `true` when their paint changed and a redraw is needed.
     pub fn update_pointer_proximity(&mut self, point: scene::Point) -> bool {
         let hit = schnellui::widgets::hit_test(&self.widgets, &self.scene, point);
+        // A pointer that has not moved since the keyboard took over lights
+        // nothing; the first move hands hover back to it.
+        let held = match self.hover_hold.get() {
+            Some(rest) if rest == point => true,
+            Some(_) => {
+                self.hover_hold.set(None);
+                false
+            }
+            None => false,
+        };
         let changed = schnellui::widgets::update_pointer_proximity_hit(
             &self.widgets,
             &mut self.scene,
             point,
-            hit,
+            if held { None } else { hit },
         );
         // Hover decoration is paint-only, so the hit still stands afterwards.
         // Remember it with the scene state it is valid for; `cursor_at` for the
@@ -814,6 +824,19 @@ impl App {
             hit,
         }));
         changed
+    }
+
+    /// Takes hover away from the resting pointer while the keyboard moves a
+    /// highlight, as native lists do: a row the pointer happens to rest on no
+    /// longer competes with the row the keys picked. Hover comes back when
+    /// the pointer moves. Hosts call this for navigation keys (arrows, Page
+    /// Up and Down, Home, End, Tab). Returns whether paint changed.
+    pub fn hold_pointer_hover(&mut self) -> bool {
+        let Some(rest) = self.pointer_hit.get().map(|hit| hit.point) else {
+            return false;
+        };
+        self.hover_hold.set(Some(rest));
+        schnellui::widgets::strip_hover_decoration(&self.widgets, &mut self.scene)
     }
 
     /// The hit at `point`, reused from the last pointer update when nothing it

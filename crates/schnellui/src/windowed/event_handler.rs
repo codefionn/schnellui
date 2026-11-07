@@ -331,6 +331,26 @@ impl WindowedApp {
         if is_control_key(&event.logical_key, event.physical_key) {
             self.control_pressed = event.state == ElementState::Pressed;
         }
+        // Keys that move a highlight take hover from the resting pointer.
+        if event.state == ElementState::Pressed
+            && matches!(
+                event.logical_key,
+                Key::Named(
+                    NamedKey::ArrowUp
+                        | NamedKey::ArrowDown
+                        | NamedKey::PageUp
+                        | NamedKey::PageDown
+                        | NamedKey::Home
+                        | NamedKey::End
+                        | NamedKey::Tab
+                )
+            )
+            && self.app.hold_pointer_hover()
+        {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
         // Full-fidelity raw surfaces see modifiers, releases, repeats,
         // F/keypad identities and layout text before any browser-like
         // SchnellUI shortcut or editing behavior can consume them.

@@ -32,6 +32,9 @@ const SUBTITLE_DROP: f32 = 4.0;
 const PILL_PAD_H: f32 = 6.0;
 /// Vertical padding inside a trailing pill.
 const PILL_PAD_V: f32 = 2.0;
+/// How far a selected row's muted texts move toward the text color, so
+/// they keep their contrast on the selected background.
+const SELECTED_META_LIFT: f32 = 0.35;
 
 /// A left-aligned clickable row. See the module docs.
 pub struct ListRow {
@@ -348,6 +351,11 @@ impl View for ListRow {
         } else {
             Color::TRANSPARENT
         };
+        let meta = if this.selected {
+            crate::widgets::theme::mix_color(theme.text_muted, theme.text, SELECTED_META_LIFT)
+        } else {
+            theme.text_muted
+        };
         let pd = ctx.scene.paint_mut(id);
         pd.primitives.clear();
         // [0] background, always present so the row has stable bounds.
@@ -412,7 +420,7 @@ impl View for ListRow {
                     });
                     theme.on_accent
                 }
-                None => theme.text_muted,
+                None => meta,
             };
             rasterize_and_push(
                 pd,
@@ -432,7 +440,7 @@ impl View for ListRow {
                 ctx.atlas,
                 subtitle,
                 meta_phys as u32,
-                this.subtitle_color.unwrap_or(theme.text_muted),
+                this.subtitle_color.unwrap_or(meta),
                 ctx.scale,
                 Point {
                     x: rect.x + lead,
@@ -518,6 +526,36 @@ mod tests {
         assert!(StateFlags(scene.a11y(id).unwrap().state).contains(StateFlags::SELECTED));
         let (scene, id) = build(ListRow::new("a"));
         assert_eq!(rects(&scene, id)[0].1, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_selected_rows_subtitle_is_lighter_than_the_muted_color() {
+        let colors = |selected: bool| -> Vec<Color> {
+            let (scene, id) = build(
+                ListRow::new("a")
+                    .subtitle("b")
+                    .selected(selected)
+                    .width(200.0),
+            );
+            scene
+                .paint(id)
+                .unwrap()
+                .primitives
+                .iter()
+                .filter_map(|p| match p {
+                    Primitive::GlyphQuad { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .collect()
+        };
+        // The title's glyphs come first, the subtitle's last.
+        let (plain, selected) = (colors(false), colors(true));
+        let (title, muted) = (plain[0], *plain.last().unwrap());
+        assert_ne!(title, muted);
+        assert_eq!(selected[0], title);
+        let lifted = crate::widgets::theme::mix_color(muted, title, SELECTED_META_LIFT);
+        assert_eq!(*selected.last().unwrap(), lifted);
+        assert_ne!(lifted, muted);
     }
 
     #[test]

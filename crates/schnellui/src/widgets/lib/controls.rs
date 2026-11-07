@@ -133,6 +133,7 @@ pub struct Button {
     pub(crate) tooltip: Option<Cow<'static, str>>,
     pub(crate) text_size: Option<f32>,
     pub(crate) display: Option<Cow<'static, str>>,
+    pub(crate) menu: Option<crate::widgets::ContextMenu>,
 }
 
 impl Button {
@@ -152,7 +153,15 @@ impl Button {
             tooltip: None,
             text_size: None,
             display: None,
+            menu: None,
         }
+    }
+
+    /// Opens `menu` under the button when it is clicked, by pointer or
+    /// keyboard, in place of an `on_click` handler.
+    pub fn menu(mut self, menu: crate::widgets::ContextMenu) -> Button {
+        self.menu = Some(menu);
+        self
     }
 
     /// Paints `text` instead of the label, such as a `+` glyph. The label stays
@@ -265,6 +274,9 @@ impl View for Button {
             let mut acts = ActionFlags::default();
             acts.insert(ActionFlags::CLICK);
             acts.insert(ActionFlags::FOCUS);
+            if this.menu.is_some() {
+                acts.insert(ActionFlags::SHOW_CONTEXT_MENU);
+            }
             a.actions = acts.0;
             if this.disabled {
                 let mut st = StateFlags::default();
@@ -303,6 +315,10 @@ impl View for Button {
             this.height,
             this.appearance,
         );
+        if let Some(menu) = this.menu {
+            crate::widgets::context_menu::register_context_menu(&ctx.runtime, id, menu);
+            crate::widgets::context_menu::register_context_menu_trigger(&ctx.runtime, id, id);
+        }
         if let Some(tooltip) = this.tooltip {
             register_hover_tooltip(
                 &ctx.runtime,
