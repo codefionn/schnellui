@@ -40,6 +40,12 @@ enum ItemAction {
     Custom(Option<ClickHandler>),
 }
 
+/// The layers of a menu's shadow: how far each reaches past the menu and
+/// its alpha. Wider layers are fainter.
+const MENU_SHADOW: [(f32, u8); 3] = [(8.0, 0x18), (4.0, 0x28), (1.0, 0x40)];
+/// How far the shadow sits below the menu, as if lit from above.
+const MENU_SHADOW_DROP: f32 = 3.0;
+
 /// One row in a context menu.
 pub struct ContextMenuItem {
     label: Cow<'static, str>,
@@ -439,6 +445,20 @@ pub fn open_context_menu(
         let radius = theme.shape.radius(4.0, menu_rect.height);
         let frame = theme.shape.frame.max(1.0);
         let paint = scene.paint_mut(root);
+        // A soft shadow under the menu, in layers that widen and fade, so
+        // it lifts off whatever it covers, a terminal's text included.
+        for (grow, alpha) in MENU_SHADOW {
+            paint.primitives.push(Primitive::SolidRect {
+                rect: Rect::new(
+                    menu_rect.x - grow,
+                    menu_rect.y - grow + MENU_SHADOW_DROP,
+                    menu_rect.width + 2.0 * grow,
+                    menu_rect.height + 2.0 * grow,
+                ),
+                color: Color::rgba(0, 0, 0, alpha),
+                corner_radius: radius + grow,
+            });
+        }
         paint.primitives.push(Primitive::SolidRect {
             rect: menu_rect,
             color: theme.surface_muted,

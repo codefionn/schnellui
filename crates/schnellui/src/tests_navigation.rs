@@ -837,6 +837,39 @@ fn a_menu_with_a_smaller_text_size_has_shorter_rows() {
 }
 
 #[test]
+fn an_open_menu_casts_a_shadow_past_its_edges() {
+    use schnellui::scene::Primitive;
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new().item(ContextMenuItem::new("1 shell"));
+    let mut app = App::mount_with_size(Button::new("Tabs").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Tabs")).unwrap();
+    assert!(app.dispatch_click(button));
+    let item = app.find_widget(Role::MenuItem, Some("1 shell")).unwrap();
+    let menu = app.scene().node(item).unwrap().parent.unwrap();
+    let rects: Vec<_> = app
+        .scene()
+        .paint(menu)
+        .unwrap()
+        .primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::SolidRect { rect, color, .. } => Some((*rect, *color)),
+            _ => None,
+        })
+        .collect();
+    let body = app.scene().layout(menu).unwrap().rect;
+    // Translucent layers come first and reach past the menu on every side.
+    let (shadow, color) = rects[0];
+    assert!(color.a > 0 && color.a < 255);
+    assert!(shadow.x < body.x && shadow.y + shadow.height > body.y + body.height);
+    assert!(rects
+        .iter()
+        .any(|(rect, color)| *rect == body && color.a == 255));
+}
+
+#[test]
 fn a_selected_menu_item_wears_the_selection_fill_and_state() {
     use schnellui::a11y::StateFlags;
     use schnellui::scene::Primitive;
