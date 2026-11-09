@@ -6394,6 +6394,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "schnellui-fuzz"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "schnellui",
+]
+
+[[package]]
 name = "schnellui-icons-md"
 version = "0.1.0"
 dependencies = [

@@ -82,3 +82,6 @@ debug-instrumentation = []
 count-allocations = ["dep:allocation-counter"]
 # Server-side rendering entry points of the HTML renderer.
 ssr = []
+# Headless host and retained-state checks for property-based fuzzing
+# (`schnellui::testing::fuzz`, used by the `schnellui-fuzz` crate).
+fuzzing = []

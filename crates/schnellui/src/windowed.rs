@@ -479,6 +479,8 @@ struct WindowedApp {
 }
 
 mod event_handler;
+#[cfg(feature = "fuzzing")]
+pub(crate) mod headless;
 mod host;
 pub(crate) use host::{run, run_headless};
 #[cfg(test)]

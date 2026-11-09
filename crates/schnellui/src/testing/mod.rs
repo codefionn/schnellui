@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "fuzzing")]
+pub mod fuzz;
 mod sim;
 pub use sim::{
     for_each_seed, paint_layout, structure, PaintBox, SimError, SimHost, SimRng, Simulator,

@@ -833,7 +833,7 @@ pub fn strip_hover_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
         })
 }
 
-fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
+pub(crate) fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
     strip_hover_decoration(runtime, scene);
     let Some(component) = interaction_component(scene, id) else {
         return false;
@@ -869,7 +869,7 @@ pub fn strip_active_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
         })
 }
 
-fn apply_active_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
+pub(crate) fn apply_active_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
     strip_active_decoration(runtime, scene);
     let Some(component) = interaction_component(scene, id) else {
         return false;

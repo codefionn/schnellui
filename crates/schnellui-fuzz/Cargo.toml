@@ -1,0 +1,13 @@
+[package]
+name = "schnellui-fuzz"
+description = "Property-based fuzzing of schnellui: window resizes and input sequences replayed through the headless host, checked against fresh mounts and an undecorated twin"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+schnellui = { workspace = true, features = ["fuzzing"] }
+proptest.workspace = true
