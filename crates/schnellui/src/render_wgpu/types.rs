@@ -96,7 +96,8 @@ pub struct QuadInstance {
     /// straight RGBA in [0,1].
     pub color: [f32; 4],
     /// `.0` = corner radius (px), `.1` = rotation (radians, about the rect centre);
-    /// `.2..` reserved.
+    /// `.2` = stroke width (px, `0` = filled);
+    /// `.3` reserved.
     pub params: [f32; 4],
     /// per-instance clip rect `[x, y, w, h]` in **logical** px (the same space as
     /// `rect` before the vertex stage applies scale). [`UNCLIPPED_CLIP`] disables it.
@@ -123,6 +124,20 @@ impl QuadInstance {
             params: [corner_radius, 0.0, 0.0, 0.0],
             clip,
         }
+    }
+
+    /// Builds a rounded outline: the rect's rounded shape with only a band
+    /// `width` wide inside its edge filled (`params.z`).
+    pub fn stroke_clipped(
+        rect: Rect,
+        color: Color,
+        corner_radius: f32,
+        width: f32,
+        clip: [f32; 4],
+    ) -> QuadInstance {
+        let mut quad = QuadInstance::solid_clipped(rect, color, corner_radius, clip);
+        quad.params[2] = width;
+        quad
     }
 
     /// Builds a **line** instance: an oriented quad from `from` to `to` with stroke

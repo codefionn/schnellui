@@ -46,6 +46,8 @@ struct QuadOut {
     // compared in the fragment stage to clip scrolled content (SOUL §3.2).
     @location(4) clip: vec4<f32>,
     @location(5) logical: vec2<f32>,
+    // stroke width (physical px); 0 draws the whole rounded rect.
+    @location(6) stroke: f32,
 };
 
 // Discards the fragment when its logical position falls outside the clip rect. The
@@ -84,6 +86,7 @@ fn vs_quad(@builtin(vertex_index) vid: u32,
     out.local = local_off * s;
     out.half_size = rect.zw * 0.5 * s;
     out.radius = params.x * s;
+    out.stroke = params.z * s;
     out.clip = clip;
     out.logical = logical;
     return out;
@@ -99,7 +102,11 @@ fn fs_quad(in: QuadOut) -> @location(0) vec4<f32> {
     let outside = length(max(qd, vec2<f32>(0.0, 0.0)));
     let inside = min(max(qd.x, qd.y), 0.0);
     let sd = outside + inside - r;
-    let cov = 1.0 - smoothstep(-0.5, 0.5, sd);
+    var cov = 1.0 - smoothstep(-0.5, 0.5, sd);
+    if (in.stroke > 0.0) {
+        // Keep only a band of `stroke` px just inside the edge.
+        cov = cov * smoothstep(-0.5, 0.5, sd + in.stroke);
+    }
     let lin = srgb_to_linear(in.color.rgb);
     return vec4<f32>(lin, in.color.a * cov);
 }

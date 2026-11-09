@@ -20,6 +20,7 @@ pub(crate) struct PanelState {
     rail_width: f32,
     frame: f32,
     radius: f32,
+    shadow: bool,
 }
 
 /// A padded surface whose outer height follows its child's measured height.
@@ -42,6 +43,7 @@ pub struct Panel {
     rail_width: f32,
     frame: f32,
     radius: f32,
+    shadow: bool,
 }
 
 impl Panel {
@@ -61,6 +63,7 @@ impl Panel {
             rail_width: 2.0,
             frame: 1.0,
             radius: 1.0,
+            shadow: false,
         }
     }
 
@@ -144,6 +147,14 @@ impl Panel {
         self
     }
 
+    /// Lifts the panel off the page with a shadow: soft layers in a flat
+    /// design, the hard block offset of [`Shape::shadow`](crate::widgets::Shape)
+    /// in a design that has one.
+    pub fn shadow(mut self) -> Self {
+        self.shadow = true;
+        self
+    }
+
     pub fn kind(&self) -> WidgetKind {
         WidgetKind::Pad
     }
@@ -183,6 +194,7 @@ impl View for Panel {
                     rail_width: this.rail_width,
                     frame: this.frame,
                     radius: this.radius,
+                    shadow: this.shadow,
                 },
             );
         });
@@ -214,6 +226,9 @@ fn emit_paint(
     );
     let paint = scene.paint_mut(id);
     paint.primitives.clear();
+    if state.shadow && !rect.is_empty() {
+        push_shadow(&mut paint.primitives, rect, state.radius, theme);
+    }
     if state.draw_outline && frame > 0.0 {
         paint.primitives.push(Primitive::SolidRect {
             rect,
@@ -237,6 +252,75 @@ fn emit_paint(
         }
     }
 }
+
+/// The layers of a floating surface's soft shadow: how far each reaches past
+/// the surface and its alpha. Wider layers are fainter.
+const SOFT_SHADOW: [(f32, u8); 3] = [(6.0, 0x0a), (3.0, 0x12), (1.0, 0x22)];
+/// How far a soft shadow sits below its surface, as if lit from above.
+const SOFT_SHADOW_DROP: f32 = 3.0;
+
+/// Pushes the shadow of a floating surface at `rect`: a hard ink block under
+/// a design with [`Shape::shadow`](crate::widgets::Shape), soft fading layers
+/// otherwise.
+pub(crate) fn push_shadow(
+    primitives: &mut Vec<Primitive>,
+    rect: Rect,
+    radius: f32,
+    theme: crate::widgets::Theme,
+) {
+    if theme.shape.shadow > 0.0 {
+        let offset = theme.shape.shadow;
+        primitives.push(Primitive::SolidRect {
+            rect: Rect::new(rect.x + offset, rect.y + offset, rect.width, rect.height),
+            color: theme.text,
+            corner_radius: radius,
+        });
+        return;
+    }
+    for (grow, alpha) in SOFT_SHADOW {
+        primitives.push(Primitive::SolidRect {
+            rect: Rect::new(
+                rect.x - grow,
+                rect.y - grow + SOFT_SHADOW_DROP,
+                rect.width + 2.0 * grow,
+                rect.height + 2.0 * grow,
+            ),
+            color: Color::rgba(0, 0, 0, alpha),
+            corner_radius: radius + grow,
+        });
+    }
+}
+
+/// Registers `id` (an already-inserted padded container) as a floating
+/// popup surface: theme surface, outline, rounded corners and a shadow,
+/// repainted from its final layout box like any [`Panel`].
+pub(crate) fn register_popup_surface(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut schnellui::scene::Scene,
+    id: WidgetId,
+) {
+    let theme = theme_for(runtime, id);
+    runtime.with(|runtime| {
+        runtime.borrow_mut().panels.insert(
+            id,
+            PanelState {
+                surface: None,
+                outline: Some(theme.outline),
+                draw_outline: true,
+                rail: None,
+                rail_width: 0.0,
+                frame: theme.shape.frame.max(1.0),
+                radius: theme.shape.radius(6.0, 24.0).min(POPUP_MAX_RADIUS),
+                shadow: true,
+            },
+        );
+    });
+    emit_paint(runtime, scene, id);
+}
+
+/// The largest corner radius a popup takes, so a very round design still
+/// leaves its rows square enough to read as a list.
+const POPUP_MAX_RADIUS: f32 = 10.0;
 
 /// Repaints a panel from its final layout rectangle.
 pub(crate) fn reposition(

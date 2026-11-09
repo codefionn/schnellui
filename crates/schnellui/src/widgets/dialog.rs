@@ -492,7 +492,7 @@ impl View for Dialog {
         content_style.align = Align::Stretch;
         ctx.layout.set_container(content, content_style);
         let chrome = if this.decoration == DialogDecoration::Decorated && !title.is_empty() {
-            let title = Box::new(Text::new(title).size(18.0)).build(ctx, Some(content));
+            let title = Box::new(Text::new(title).size(18.0).bold()).build(ctx, Some(content));
             let divider = Box::new(Divider::new()).build(ctx, Some(content));
             Some((title, divider))
         } else {
@@ -577,13 +577,22 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
     });
     let t = theme_for(runtime, id);
     let shape = t.shape;
-    let radius = shape.radius(12.0, rect.height);
+    // A very round design still keeps a dialog a rounded rectangle: past this
+    // the corners would eat the title and the body copy.
+    let radius = shape.radius(12.0, rect.height).min(DIALOG_MAX_RADIUS);
     // Window chrome includes a real outline even under otherwise frameless
     // themes. An undecorated dialog remains a plain raised surface.
-    let frame = if chrome.is_some() {
+    // A soft shadow alone barely lifts a surface off the page, so an
+    // undecorated dialog keeps a hairline edge in the separator colour.
+    let frame = if chrome.is_some() || shape.frame == 0.0 {
         shape.frame.max(1.0)
     } else {
         shape.frame
+    };
+    let edge = if chrome.is_none() && shape.frame == 0.0 {
+        t.separator
+    } else {
+        t.outline
     };
     let inner = Rect::new(
         rect.x + frame,
@@ -591,31 +600,24 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
         (rect.width - frame * 2.0).max(0.0),
         (rect.height - frame * 2.0).max(0.0),
     );
-    let chrome_bar_height = chrome.map(|(_title, divider)| {
-        let divider_top = scene
+    let chrome_bar = chrome.map(|(_title, divider)| {
+        let (divider_top, divider_height) = scene
             .layout(divider)
-            .map(|layout| layout.rect.y)
-            .unwrap_or(inner.y);
-        (divider_top - inner.y).clamp(0.0, inner.height)
+            .map_or((inner.y, 0.0), |layout| (layout.rect.y, layout.rect.height));
+        (
+            (divider_top - inner.y).clamp(0.0, inner.height),
+            divider_height,
+        )
     });
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
-    if shape.shadow > 0.0 {
-        pd.primitives.push(Primitive::SolidRect {
-            rect: Rect::new(
-                rect.x + shape.shadow,
-                rect.y + shape.shadow,
-                rect.width,
-                rect.height,
-            ),
-            color: t.text,
-            corner_radius: radius,
-        });
-    }
+    // A dialog floats over the page: a hard block in a design with one, a
+    // soft fading shadow otherwise.
+    crate::widgets::panel::push_shadow(&mut pd.primitives, rect, radius, t);
     if frame > 0.0 {
         pd.primitives.push(Primitive::SolidRect {
             rect,
-            color: t.outline,
+            color: edge,
             corner_radius: radius,
         });
     }
@@ -628,7 +630,7 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
     // A decorated dialog reads as a framed window: a contrasting, full-width
     // title bar bounded by the real child divider, plus a strong accent rail.
     // The undecorated variant emits none of this chrome.
-    if let Some(bar_height) = chrome_bar_height {
+    if let Some((bar_height, rule_height)) = chrome_bar {
         let inner_radius = (radius - frame).max(0.0);
         pd.primitives.push(Primitive::SolidRect {
             rect: Rect::new(inner.x, inner.y, inner.width, bar_height),
@@ -648,9 +650,13 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
                 color: t.surface_muted,
                 corner_radius: 0.0,
             });
+        }
+        // The bar's rule runs edge to edge; the child divider only spans
+        // the padded content column.
+        if rule_height > 0.0 {
             pd.primitives.push(Primitive::SolidRect {
-                rect: Rect::new(inner.x, inner.y, 5.0f32.min(inner.width), bar_height),
-                color: t.accent,
+                rect: Rect::new(inner.x, inner.y + bar_height, inner.width, rule_height),
+                color: t.separator,
                 corner_radius: 0.0,
             });
         }
@@ -674,6 +680,9 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
         }
     }
 }
+
+/// The largest corner radius a dialog takes.
+const DIALOG_MAX_RADIUS: f32 = 16.0;
 
 /// Re-sizes dialog paint after layout; generic repositioning only translates
 /// primitives and therefore cannot update viewport scrims or auto-sized panels.

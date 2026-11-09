@@ -105,7 +105,7 @@ fn hover_over_the_focused_control_restores_paint_exactly() {
     assert!(
         tail[tail.len() - FOCUS_RING_PRIMS..]
             .iter()
-            .all(|p| matches!(p, Primitive::Line { width, .. } if *width == FOCUS_RING_W)),
+            .all(|p| matches!(p, Primitive::StrokeRect { width, .. } if *width == FOCUS_RING_W)),
         "the ring stays the outermost decoration"
     );
     hover(runtime, &mut scene, b);

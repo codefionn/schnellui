@@ -1027,6 +1027,10 @@ impl WindowedApp {
                 ) else {
                     return DebugReply::error(404, "no widget at pointer coordinates");
                 };
+                // A pointer press moves focus first, as a real mouse press
+                // does: text typed next lands in a clicked field, and a
+                // clicked row or button takes focus from the field.
+                self.app.pointer_focus(Some(target));
                 let request = DebugAction {
                     action: "click".into(),
                     target: DebugTarget {

@@ -7,9 +7,24 @@ fn ring_lines(scene: &Scene, id: WidgetId) -> usize {
             .iter()
             .rev()
             .take_while(
-                |primitive| matches!(primitive, Primitive::Line { width, .. } if *width == FOCUS_RING_W),
+                |primitive| matches!(primitive, Primitive::StrokeRect { width, .. } if *width == FOCUS_RING_W),
             )
             .count()
+}
+
+/// The focus ring on `id`: its stroked rect and radius.
+fn ring_stroke(scene: &Scene, id: WidgetId) -> (Rect, f32, f32, Color) {
+    let prims = &scene.paint(id).unwrap().primitives;
+    let Some(&Primitive::StrokeRect {
+        rect,
+        corner_radius,
+        width,
+        color,
+    }) = prims.last()
+    else {
+        panic!("focus ring is the last primitive");
+    };
+    (rect, corner_radius, width, color)
 }
 
 /// Focus wears the same inset box as native HTML; blur removes it; a
@@ -71,6 +86,15 @@ fn focused_editable_gets_browser_outline_and_keeps_it_while_editing() {
             .filter(|p| matches!(p, Primitive::Line { .. }))
             .count()
     };
+    let ring_count = |scene: &Scene, id: WidgetId| {
+        scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter(|p| matches!(p, Primitive::StrokeRect { .. }))
+            .count()
+    };
     let (mut scene, _l, mut text, mut atlas, id) = build_one(runtime, TextInput::new("hi"));
     // Browser `:focus-visible` applies to pointer-focused controls that
     // accept text input, because the interaction immediately needs a caret.
@@ -81,10 +105,11 @@ fn focused_editable_gets_browser_outline_and_keeps_it_while_editing() {
         &mut atlas,
         Some(id)
     ));
+    assert_eq!(line_count(&scene, id), 1, "the caret");
     assert_eq!(
-        line_count(&scene, id),
-        1 + FOCUS_RING_PRIMS,
-        "caret plus browser-equivalent outline"
+        ring_count(&scene, id),
+        FOCUS_RING_PRIMS,
+        "browser-equivalent outline"
     );
     assert!(dispatch_edit_key(
         runtime,
@@ -94,11 +119,13 @@ fn focused_editable_gets_browser_outline_and_keeps_it_while_editing() {
         id,
         EditKey::Insert("!")
     ));
-    assert_eq!(line_count(&scene, id), 1 + FOCUS_RING_PRIMS);
+    assert_eq!(line_count(&scene, id), 1);
+    assert_eq!(ring_count(&scene, id), FOCUS_RING_PRIMS);
     assert!(dispatch_focus(
         runtime, &mut scene, &mut text, &mut atlas, None
     ));
     assert_eq!(line_count(&scene, id), 0);
+    assert_eq!(ring_count(&scene, id), 0);
 }
 
 #[test]
@@ -115,26 +142,71 @@ fn focus_outline_matches_css_width_offset_and_contrast_color() {
         &mut atlas,
         Some(id)
     ));
-    let outline = &scene.paint(id).unwrap().primitives;
-    let top = outline[outline.len() - FOCUS_RING_PRIMS];
-    let Primitive::Line {
-        from,
-        to,
-        width,
-        color,
-    } = top
-    else {
-        panic!("focus outline starts with a line");
-    };
-    assert_eq!(width, 3.0);
+    let (rect, _radius, width, color) = ring_stroke(&scene, id);
+    // The ring sits its width plus a gap outside the control.
+    let out = FOCUS_RING_W + FOCUS_RING_GAP;
+    assert_eq!(width, FOCUS_RING_W);
     assert_eq!(color, theme_for(runtime, id).focus_color());
-    assert_eq!(from.y - width * 0.5, bounds.y);
-    assert_eq!(from.x - width * 0.5, bounds.x);
-    assert_eq!(to.x + width * 0.5, bounds.right());
+    assert_eq!(rect.y, bounds.y - out);
+    assert_eq!(rect.x, bounds.x - out);
+    assert_eq!(rect.right(), bounds.right() + out);
+    assert_eq!(rect.bottom(), bounds.bottom() + out);
+}
+
+/// The ring follows the control's own shape: a button's outset ring is its
+/// corner radius plus the outset, a round radio gets a circle.
+#[test]
+fn focus_ring_follows_the_controls_corner_radius() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    #[allow(unused_variables)]
+    let runtime = &runtime_handle;
+    let out = FOCUS_RING_W + FOCUS_RING_GAP;
+
+    let (mut scene, _l, mut text, mut atlas, id) = build_one(runtime, Button::new("Save"));
+    let surface = scene
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .find_map(|p| match *p {
+            Primitive::SolidRect {
+                rect,
+                corner_radius,
+                ..
+            } if rect.width > 0.0 => Some((rect, corner_radius)),
+            _ => None,
+        })
+        .expect("button surface");
+    assert!(surface.1 > 0.0, "the button is rounded");
+    assert!(dispatch_focus(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        Some(id)
+    ));
+    let (_, radius, _, _) = ring_stroke(&scene, id);
+    assert_eq!(radius, surface.1 + out);
+
+    let (mut scene, _l, mut text, mut atlas, id) = build_one(runtime, Radio::new(true));
+    let bounds = paint_bounds(runtime, &scene, id).unwrap();
+    assert!(dispatch_focus(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        Some(id)
+    ));
+    let (rect, radius, _, _) = ring_stroke(&scene, id);
+    assert_eq!(rect.width, bounds.width + 2.0 * out);
+    assert!(
+        radius >= rect.width * 0.5 && radius >= rect.height * 0.5,
+        "a radio's ring is a circle: radius {radius}, ring {rect:?}"
+    );
 }
 
 #[test]
-fn inset_focus_outline_stays_inside_retained_control_paint() {
+fn outset_focus_outline_follows_retained_control_paint() {
     let runtime_handle = crate::widgets::Runtime::new();
     #[allow(unused_variables)]
     let runtime = &runtime_handle;
@@ -161,10 +233,10 @@ fn inset_focus_outline_stays_inside_retained_control_paint() {
     assert_eq!(ordinary.x, target.x);
     assert_eq!(ordinary.y, target.y);
     let outline = &scene.paint(id).unwrap().primitives;
-    let Primitive::Line { from, width, .. } = outline[outline.len() - FOCUS_RING_PRIMS] else {
-        panic!("focus outline starts with a line");
+    let Primitive::StrokeRect { rect, .. } = outline[outline.len() - FOCUS_RING_PRIMS] else {
+        panic!("focus outline is a stroked rect");
     };
-    assert_eq!(from.y - width * 0.5, target.y);
+    assert_eq!(rect.y, target.y - FOCUS_RING_W - FOCUS_RING_GAP);
 }
 
 #[test]
@@ -208,7 +280,8 @@ fn pointer_hover_decorates_enabled_controls_and_clears_on_leave_or_disable() {
     ));
     assert_eq!(
         scene.paint(enabled).unwrap().primitives.len(),
-        base + 1 + HOVER_BORDER_PRIMS
+        base + 1,
+        "hover lays one wash, no border"
     );
 
     // Moving onto a disabled control removes the old feedback but never
@@ -283,8 +356,11 @@ fn interaction_channels_compose_and_restore_without_rebuilding_paint() {
     };
     let assert_channels = |scene: &Scene, style: InteractionStyle, border_width: f32| {
         let paint = scene.paint(id).unwrap();
+        // The wash keeps its colour; its alpha is re-weighted for the
+        // linear-light blend over the button fill.
+        let rgb = |c: Color| (c.r, c.g, c.b);
         assert!(paint.primitives.iter().any(
-                |primitive| matches!(primitive, Primitive::SolidRect { color, .. } if Some(*color) == style.background)
+                |primitive| matches!(primitive, Primitive::SolidRect { color, .. } if style.background.map(rgb) == Some(rgb(*color)))
             ));
         assert!(paint.primitives.iter().any(
                 |primitive| matches!(primitive, Primitive::GlyphQuad { color, .. } if Some(*color) == style.foreground)
@@ -293,7 +369,7 @@ fn interaction_channels_compose_and_restore_without_rebuilding_paint() {
                 paint
                     .primitives
                     .iter()
-                    .filter(|primitive| matches!(primitive, Primitive::Line { width, color, .. } if *width == border_width && Some(*color) == style.border))
+                    .filter(|primitive| matches!(primitive, Primitive::StrokeRect { width, color, .. } if *width == border_width && Some(*color) == style.border))
                     .count(),
                 FOCUS_RING_PRIMS
             );

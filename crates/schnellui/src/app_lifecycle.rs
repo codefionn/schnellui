@@ -325,6 +325,12 @@ impl App {
             &mut self.text,
             &mut self.atlas,
         );
+        schnellui::widgets::relabel_dropdown_triggers(
+            &self.widgets,
+            &mut self.scene,
+            &mut self.text,
+            &mut self.atlas,
+        );
         schnellui::widgets::poll_dynamic_images(&self.widgets, &mut self.scene);
         // Pointer-edge scrolling is an input-driven animation. It remains active
         // under reduced-motion preferences because it directly tracks a held

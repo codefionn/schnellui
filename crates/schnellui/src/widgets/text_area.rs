@@ -2199,6 +2199,20 @@ mod tests {
                 },
             ) => rc(r1, r2) && c1 == c2 && k1 == k2,
             (
+                Primitive::StrokeRect {
+                    rect: r1,
+                    color: c1,
+                    corner_radius: k1,
+                    width: w1,
+                },
+                Primitive::StrokeRect {
+                    rect: r2,
+                    color: c2,
+                    corner_radius: k2,
+                    width: w2,
+                },
+            ) => rc(r1, r2) && c1 == c2 && k1 == k2 && w1 == w2,
+            (
                 Primitive::GlyphQuad {
                     rect: r1,
                     atlas_uv: u1,
@@ -2678,6 +2692,20 @@ mod tests {
     fn ancestor_hover_decoration_does_not_leave_stale_colors_in_the_area() {
         let runtime = crate::widgets::Runtime::new();
         crate::widgets::reset(&runtime);
+        // A hover that recolors text, so the item's hover reaches the area.
+        let base = crate::widgets::Theme::default();
+        crate::widgets::set_theme(
+            &runtime,
+            crate::widgets::Theme {
+                interactions: crate::widgets::InteractionStates {
+                    hover: crate::widgets::InteractionStyle::foreground(
+                        schnellui::scene::Color::rgb(200, 0, 0),
+                    ),
+                    ..base.interactions
+                },
+                ..base
+            },
+        );
         let mut scene = Scene::new();
         let mut layout = LayoutEngine::new();
         let mut text = TextShaper::new();

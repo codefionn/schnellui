@@ -64,6 +64,23 @@ fn encode_prims(
                     ));
                 }
             }
+            Primitive::StrokeRect {
+                rect,
+                color,
+                corner_radius,
+                width,
+            } => {
+                let rect = shifted(rect, offset);
+                if !rect.intersect(&clip).is_empty() {
+                    quads.push(QuadInstance::stroke_clipped(
+                        rect,
+                        color,
+                        corner_radius,
+                        width,
+                        clip_arr,
+                    ));
+                }
+            }
             Primitive::GlyphQuad {
                 rect,
                 atlas_uv,

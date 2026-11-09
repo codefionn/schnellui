@@ -287,6 +287,33 @@ impl Theme {
         style
     }
 
+    /// The unfilled part of a slider or progress bar, and the edge of an
+    /// empty image well: the media grey, darkened toward the outline until it
+    /// reads at 3:1 against the page (WCAG 1.4.11).
+    pub fn track_color(self) -> Color {
+        for step in 0..=10 {
+            let candidate = mix_color(self.media, self.outline, step as f32 / 10.0);
+            if contrast_ratio(candidate, self.page) >= 3.0 {
+                return candidate;
+            }
+        }
+        self.outline
+    }
+
+    /// The colour of small state marks drawn on the page or on a selection
+    /// fill: tab underlines, selection rails, progress and slider fills, the
+    /// spinner. The accent when it reads against the page and the selection
+    /// fill, else the text colour (a yellow accent on a cream page).
+    pub fn indicator_color(self) -> Color {
+        if contrast_ratio(self.accent, self.page) >= 3.0
+            && contrast_ratio(self.accent, self.selection) >= 2.0
+        {
+            self.accent
+        } else {
+            self.text
+        }
+    }
+
     /// Focus-indicator color shared by the native HTML and wgpu renderers.
     ///
     /// The brand accent is preserved when it already has at least 3:1 contrast
@@ -297,13 +324,10 @@ impl Theme {
     /// accents on light surfaces) from making keyboard focus disappear.
     pub fn focus_color(self) -> Color {
         const MIN_CONTRAST: f32 = 3.0;
-        let backgrounds = [
-            self.page,
-            self.surface,
-            self.surface_muted,
-            self.selection,
-            self.accent,
-        ];
+        // The ring sits beside a control (outside it, past a gap) or inside a
+        // row, tab or field, so it meets these backgrounds, never an accent
+        // fill.
+        let backgrounds = [self.page, self.surface, self.surface_muted, self.selection];
         let minimum_contrast = |candidate| {
             backgrounds
                 .iter()
@@ -329,6 +353,40 @@ impl Theme {
             }
         }
         pole
+    }
+
+    /// Text color for links and other accent-colored text.
+    ///
+    /// The accent is kept when it reads as text (4.5:1) on both the page and
+    /// the surface. A pale or bright accent (a yellow or pastel brand) is moved
+    /// toward the theme's text color until it does, so links stay legible
+    /// without a palette having to carry a second accent.
+    pub fn link_color(self) -> Color {
+        const MIN_CONTRAST: f32 = 4.5;
+        let worst = |candidate| {
+            contrast_ratio(candidate, self.page).min(contrast_ratio(candidate, self.surface))
+        };
+        if worst(self.accent) >= MIN_CONTRAST {
+            return self.accent;
+        }
+        for step in 1..=20 {
+            let candidate = mix_color(self.accent, self.text, step as f32 / 20.0);
+            if worst(candidate) >= MIN_CONTRAST {
+                return candidate;
+            }
+        }
+        self.text
+    }
+
+    /// White or near-black, whichever reads better on `fill`: the label color
+    /// for badges and other text painted on a status color.
+    pub fn ink_on(self, fill: Color) -> Color {
+        let dark = Color::rgb(0x14, 0x12, 0x0e);
+        if contrast_ratio(Color::WHITE, fill) >= contrast_ratio(dark, fill).min(4.5) {
+            Color::WHITE
+        } else {
+            dark
+        }
     }
 
     /// Linearly interpolates all colour and physical tokens.
@@ -450,20 +508,46 @@ pub(crate) fn mix_color(a: Color, b: Color, amount: f32) -> Color {
     )
 }
 
+fn linear_channel(channel: u8) -> f32 {
+    let value = channel as f32 / 255.0;
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Relative luminance in linear-light sRGB.
+fn luminance(color: Color) -> f32 {
+    0.2126 * linear_channel(color.r)
+        + 0.7152 * linear_channel(color.g)
+        + 0.0722 * linear_channel(color.b)
+}
+
+/// A translucent `wash` re-weighted for a renderer that blends in linear
+/// light (the wgpu sRGB target). Theme alphas are authored like CSS, which
+/// blends in sRGB: there a 12% ink wash over white darkens it visibly, while
+/// in linear light it barely moves and a 12% white wash over a dark surface
+/// glares. The returned alpha gives the luminance the sRGB blend would give
+/// over `backdrop`.
+pub(crate) fn wash_over(wash: Color, backdrop: Color) -> Color {
+    if wash.a == 0 || wash.a == 255 {
+        return wash;
+    }
+    let target = mix_color(backdrop, Color { a: 255, ..wash }, wash.a as f32 / 255.0);
+    let (b, w, t) = (luminance(backdrop), luminance(wash), luminance(target));
+    if (b - w).abs() < 1e-4 {
+        return wash;
+    }
+    let alpha = ((b - t) / (b - w)).clamp(0.0, 1.0);
+    Color {
+        a: ((alpha * 255.0).round() as u8).max(1),
+        ..wash
+    }
+}
+
 /// WCAG contrast ratio using relative luminance in linear-light sRGB.
 pub fn contrast_ratio(a: Color, b: Color) -> f32 {
-    fn linear(channel: u8) -> f32 {
-        let value = channel as f32 / 255.0;
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    fn luminance(color: Color) -> f32 {
-        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
-    }
-
     let a = luminance(a);
     let b = luminance(b);
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
@@ -472,32 +556,45 @@ pub fn contrast_ratio(a: Color, b: Color) -> f32 {
 // The widget crate owns a deterministic fallback because runtime theme selection
 // must work without depending on a concrete-theme crate. `schnellui::theme::LIGHT`
 // is tested against this value so the separately packaged default stays aligned.
-const DEFAULT_THEME: Theme = Theme {
+pub const DEFAULT_THEME: Theme = Theme {
     text: Color::rgb(0x1d, 0x24, 0x2e),
-    text_muted: Color::rgb(0x5d, 0x6a, 0x7a),
+    text_muted: Color::rgb(0x55, 0x61, 0x70),
     surface: Color::WHITE,
     surface_muted: Color::rgb(0xf1, 0xf3, 0xf7),
-    separator: Color::rgb(0xd3, 0xd9, 0xe2),
-    outline: Color::rgb(0x8a, 0x96, 0xa8),
+    separator: Color::rgb(0xcd, 0xd4, 0xde),
+    outline: Color::rgb(0x7a, 0x86, 0x99),
     accent: Color::rgb(0x2e, 0x63, 0xd4),
     on_accent: Color::WHITE,
-    selection: Color::rgb(0xdb, 0xe6, 0xf9),
+    selection: Color::rgb(0xb5, 0xc9, 0xf3),
     interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgba(0x2e, 0x63, 0xd4, 0x18),
-            Color::rgb(0x1d, 0x24, 0x2e),
-            Color::rgba(0x2e, 0x63, 0xd4, 0xb8),
-        ),
+        // Hover lays a faint neutral ink wash over a row, well below the
+        // accent selection fill; press a stronger one. Neither borrows the
+        // focus ring's outline.
+        hover: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x1c)),
         focus: InteractionStyle::border(Color::rgb(0x2e, 0x63, 0xd4)),
-        active: InteractionStyle::background(Color::rgb(0xdb, 0xe6, 0xf9)),
+        active: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x38)),
     },
-    component_interactions: ComponentInteractions::NONE,
+    component_interactions: ComponentInteractions {
+        // A filled button needs a stronger wash than a row before the change
+        // of its colour reads.
+        button: Some(InteractionStates {
+            hover: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x40)),
+            focus: InteractionStyle::border(Color::rgb(0x2e, 0x63, 0xd4)),
+            active: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x60)),
+        }),
+        editable: Some(InteractionStates {
+            hover: InteractionStyle::border(Color::rgb(0x4c, 0x55, 0x64)),
+            focus: InteractionStyle::border(Color::rgb(0x2e, 0x63, 0xd4)),
+            active: InteractionStyle::NONE,
+        }),
+        ..ComponentInteractions::NONE
+    },
     text_selection: Color::rgb(0xb7, 0xd2, 0xf8),
-    disabled: Color::rgb(0x9d, 0xa7, 0xb5),
+    disabled: Color::rgb(0xdd, 0xe2, 0xea),
     positive: Color::rgb(0x17, 0x87, 0x45),
-    attention: Color::rgb(0xcf, 0x3d, 0x3d),
-    media: Color::rgb(0xc2, 0xc9, 0xd4),
-    page: Color::rgb(0xe7, 0xea, 0xf0),
+    attention: Color::rgb(0xc4, 0x37, 0x37),
+    media: Color::rgb(0xa9, 0xb2, 0xbf),
+    page: Color::rgb(0xe9, 0xec, 0xf1),
     shape: Shape::CLASSIC,
 };
 
@@ -946,7 +1043,7 @@ mod tests {
         let outer = Theme::default();
         let scoped = Theme {
             surface: Color::rgb(4, 5, 6),
-            positive: Color::rgb(7, 8, 9),
+            accent: Color::rgb(7, 8, 9),
             ..outer
         };
         set_theme(runtime, outer);
@@ -969,14 +1066,15 @@ mod tests {
         };
 
         assert_eq!(theme(runtime,), outer);
+        // [0] the edge, [1] the box face in the scoped surface
         assert!(matches!(
-            scene.paint(id).unwrap().primitives[0],
+            scene.paint(id).unwrap().primitives[1],
             Primitive::SolidRect { color, .. } if color == scoped.surface
         ));
         crate::widgets::dispatch_click(runtime, &mut scene, id);
         assert!(matches!(
             scene.paint(id).unwrap().primitives[1],
-            Primitive::SolidRect { color, .. } if color == scoped.positive
+            Primitive::SolidRect { color, .. } if color == scoped.accent
         ));
     }
 

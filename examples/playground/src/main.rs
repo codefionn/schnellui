@@ -41,6 +41,11 @@ use strum::IntoEnumIterator;
 
 /// Page padding around every scenario — the playground's outer gutter (SOUL §8.1).
 const PAGE_PADDING: f32 = 20.0;
+/// Size of each dialog preview canvas on the Dialogs page.
+const DIALOG_CANVAS_W: f32 = 290.0;
+const DIALOG_CANVAS_H: f32 = 250.0;
+/// Side padding of a page-switcher tab, the same in every design.
+const NAV_TAB_PAD_H: f32 = 8.0;
 
 /// The selectable design systems (SOUL §8.1 [`Theme`]) — the chrome dropdown's
 /// option set and the `--theme` CLI value. One row per built-in palette.
@@ -152,7 +157,7 @@ struct Cli {
     scenario: Option<Scenario>,
     #[arg(long)]
     out: Option<String>,
-    #[arg(long, default_value_t = 520)]
+    #[arg(long, default_value_t = 640)]
     width: u32,
     #[arg(long, default_value_t = 700)]
     height: u32,
@@ -190,38 +195,46 @@ struct Cli {
 // ---------------------------------------------------------------------------
 
 /// Every component on one screen. Static skeleton throughout, except the one
-/// `Status` slot bound to the demo button's click count (SOUL §3.3). The
-/// dropdown has no literal form in `view!` yet, so it is appended with the
-/// builder chain the macro lowers to (SOUL §3.3 — both idioms interoperate).
-fn gallery_view() -> impl View {
-    use schnellui::widgets::{Column, Dropdown, DropdownOption};
+/// `Status` slot bound to the demo button's click count (SOUL §3.3). Each
+/// toggle has a visible label beside it and the same text as its accessible
+/// name. The Density dropdown opens and picks in windowed mode (`live`) by
+/// parking a remount, like the Fruit dropdown; headless it stays closed.
+fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> impl View {
+    use schnellui::widgets::{BadgeTone, Column, Dropdown, DropdownOption, Row, Text};
     let clicks = create_signal(0i32);
+    let project = runtime.project();
+    let project_runtime = runtime.clone();
     let inner = view! {
-        column(gap = 10.0) {
-            text(size = 22.0) { "schnellui playground" }
-            divider
-            // actions: button (live + disabled), link, badge
-            row(gap = 8.0) {
+        column(gap = 12.0) {
+            text(size = 22.0, bold) { "schnellui playground" }
+            // actions: button (live + disabled), link, badge, and the live
+            // click counter the button drives (SOUL §3.3)
+            row(gap = 10.0, align = center) {
                 button(on:click = move || clicks.update(|v| *v += 1)) { "increment" }
                 button(disabled = true) { "disabled" }
                 link(on:click = move || {}) { "docs" }
-                badge { "NEW" }
+                badge(tone = BadgeTone::Accent) { "NEW" }
+                flex(basis = 6.0)
+                text(role = Role::Status) { (format!("clicks: {}", clicks.get())) }
             }
-            // toggles: checkbox, switch, an exclusive radio pair — labels
-            // cross-axis centered on the control visuals (SOUL §8.1)
+            // toggles, each with its own label, centered on the control
             row(gap = 8.0, align = center) {
-                checkbox(checked = true)
-                text { "checkbox" }
-                switch(on = true)
-                text { "switch" }
+                checkbox(checked = true, name = "Email updates")
+                text { "Email updates" }
+                flex(basis = 6.0)
+                switch(on = true, name = "Sync")
+                text { "Sync" }
             }
+            // an exclusive radio pair: one Tab stop, arrows move the choice
             row(gap = 8.0, align = center) {
-                radio(selected = true)
-                radio
-                text { "radio group" }
+                radio(selected = true, name = "Daily")
+                text { "Daily" }
+                flex(basis = 6.0)
+                radio(name = "Weekly")
+                text { "Weekly" }
             }
             // ranges: stepped input, determinate status, indeterminate status
-            row(gap = 12.0, align = center) {
+            row(gap = 16.0, align = center) {
                 slider(
                     value = 40.0,
                     min = 0.0,
@@ -235,43 +248,84 @@ fn gallery_view() -> impl View {
                     max = 100.0,
                     name = "Upload"
                 )
-                spinner(size = 24.0, name = "Syncing")
+                spinner(size = 20.0, name = "Syncing")
             }
-            // text entry + media leaves
-            row(gap = 8.0) {
-                text_input(value = "", label = "Project name")
+            // text entry + an image that has no pixels yet
+            row(gap = 8.0, align = center) {
+                text_input(
+                    value = project,
+                    label = "Project name",
+                    on:input = move |value: &str| project_runtime.set_project(value)
+                )
                 text_input(value = "Ada", label = "Owner")
-                image(src = "photo", alt = "photo")
-                icon(name = "gear")
+                image(src = "photo", alt = "Project photo")
             }
             divider
-            // selection: tabs + list
-            tabs(gap = 2.0) {
-                tab(selected = true) { "General" }
-                tab { "Privacy" }
-                tab { "About" }
+            // selection: tabs + list beside the table (header + two data
+            // rows, first row pre-selected)
+            row(gap = 40.0) {
+                column(gap = 12.0) {
+                    tabs(gap = 2.0) {
+                        tab(selected = true) { "General" }
+                        tab { "Privacy" }
+                        tab { "About" }
+                    }
+                    column(width = 200.0, align = stretch) {
+                        list {
+                            list_item(selected = true) { "Inbox" }
+                            list_item { "Archive" }
+                        }
+                    }
+                }
+                table(selected_row = 0) {
+                    table_row(header) { "Name" "Age" }
+                    table_row { "Ada Lovelace" "36" }
+                    table_row { "Grace Hopper" "85" }
+                }
             }
-            list {
-                list_item(selected = true) { "Inbox" }
-                list_item { "Archive" }
-            }
-            divider
-            // the table: header + two data rows, first row pre-selected
-            table(selected_row = 0) {
-                table_row(header) { "Name" "Age" }
-                table_row { "Ada Lovelace" "36" }
-                table_row { "Grace Hopper" "85" }
-            }
-            // the one dynamic site: a live click counter (SOUL §3.3)
-            text(role = Role::Status) { (format!("clicks: {}", clicks.get())) }
         }
     };
-    // the dropdown (closed — its trigger announces the chosen option's label)
-    Column::new().gap(10.0).child(inner).child(
-        Dropdown::new("Density")
-            .option(DropdownOption::new("Compact"))
-            .option(DropdownOption::new("Comfortable").selected(true))
-            .option(DropdownOption::new("Spacious")),
+    // the Density dropdown, labelled, live in windowed mode
+    let density = runtime.density();
+    let mut dropdown = Dropdown::new("Density").open(density.open);
+    for label in ["Compact", "Comfortable", "Spacious"] {
+        let mut option = DropdownOption::new(label).selected(label == density.chosen);
+        if live {
+            let option_runtime = runtime.clone();
+            option = option.on_select(move || {
+                option_runtime.set_density(DensityState {
+                    open: false,
+                    chosen: label,
+                });
+                option_runtime.request_mount(MountState {
+                    scenario: Scenario::Gallery,
+                    theme,
+                    theme_open: false,
+                });
+            });
+        }
+        dropdown = dropdown.option(option);
+    }
+    if live {
+        let toggle_runtime = runtime.clone();
+        dropdown = dropdown.on_toggle(move || {
+            toggle_runtime.set_density(DensityState {
+                open: !density.open,
+                ..density
+            });
+            toggle_runtime.request_mount(MountState {
+                scenario: Scenario::Gallery,
+                theme,
+                theme_open: false,
+            });
+        });
+    }
+    Column::new().gap(12.0).child(inner).child(
+        Row::new()
+            .gap(10.0)
+            .align(schnellui::layout::Align::Center)
+            .child(Text::new("Density"))
+            .child(dropdown),
     )
 }
 
@@ -280,7 +334,7 @@ fn counter_view() -> impl View {
     let clicks = create_signal(0i32);
     view! {
         column(gap = 10.0) {
-            text(size = 22.0) { "Button" }
+            text(size = 22.0, bold) { "Button" }
             button(on:click = move || clicks.update(|v| *v += 1)) { "increment" }
             text(role = Role::Status) { (format!("clicks: {}", clicks.get())) }
         }
@@ -293,7 +347,7 @@ fn tabs_view() -> impl View {
     let chosen = create_signal(String::from("General"));
     view! {
         column(gap = 10.0) {
-            text(size = 22.0) { "Tabs" }
+            text(size = 22.0, bold) { "Tabs" }
             tabs(gap = 2.0) {
                 tab(selected = true, on:select = move || chosen.set("General".to_string())) { "General" }
                 tab(on:select = move || chosen.set("Privacy".to_string())) { "Privacy" }
@@ -309,7 +363,7 @@ fn list_view() -> impl View {
     let chosen = create_signal(String::from("Inbox"));
     view! {
         column(gap = 10.0) {
-            text(size = 22.0) { "List" }
+            text(size = 22.0, bold) { "List" }
             list {
                 list_item(selected = true, on:select = move || chosen.set("Inbox".to_string())) { "Inbox" }
                 list_item(on:select = move || chosen.set("Archive".to_string())) { "Archive" }
@@ -383,7 +437,7 @@ fn dropdown_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> 
     }
     Column::new()
         .gap(10.0)
-        .child(Text::new("Dropdown").size(22.0))
+        .child(Text::new("Dropdown").size(22.0).bold())
         .child(dropdown)
         .child(Text::dynamic(move || format!("fruit: {}", chosen.get())).role(Role::Status))
 }
@@ -394,7 +448,7 @@ fn table_view() -> impl View {
     let selected = create_signal(0usize);
     view! {
         column(gap = 10.0) {
-            text(size = 22.0) { "Table" }
+            text(size = 22.0, bold) { "Table" }
             table(selected_row = 0, on:select_row = move |i: usize| selected.set(i)) {
                 table_row(header) { "Name" "Age" "City" }
                 table_row { "Ada Lovelace" "36" "London" }
@@ -412,7 +466,7 @@ fn table_view() -> impl View {
 fn text_view() -> impl View {
     view! {
         column(gap = 10.0, width = 460.0) {
-            text(size = 22.0) { "Typography" }
+            text(size = 22.0, bold) { "Typography" }
             text(size = 16.0) { "regular 16px" }
             text(size = 12.0) { "small 12px" }
             divider
@@ -473,7 +527,7 @@ fn images_view() -> impl View {
     </svg>"##;
     Column::new()
         .gap(10.0)
-        .child(Text::new("Images").size(22.0))
+        .child(Text::new("Images").size(22.0).bold())
         .child(
             Row::new()
                 .gap(12.0)
@@ -493,84 +547,96 @@ fn images_view() -> impl View {
 /// preview canvas; the standalone `dialogs` example exercises viewport-fixed,
 /// modal, positioned, and persistent behavior at full size.
 fn dialogs_view() -> impl View {
-    use schnellui::widgets::{Badge, Button, Column, Dialog, Image, Row, Stack, Text, WrapMode};
+    use schnellui::widgets::{
+        Badge, BadgeTone, Button, ButtonAppearance, Column, Dialog, Image, Row, Stack, Text,
+        WrapMode,
+    };
 
     let decorated = Stack::new()
-        .size(224.0, 230.0)
+        .size(DIALOG_CANVAS_W, DIALOG_CANVAS_H)
         .child(
             Image::new("decorated dialog preview")
                 .alt("decorated dialog preview canvas")
-                .size(224.0, 230.0),
+                .size(DIALOG_CANVAS_W, DIALOG_CANVAS_H),
         )
         .child(
             Dialog::new("Review changes")
                 .modeless()
                 .non_fixed()
-                .width(196.0)
+                .width(DIALOG_CANVAS_W - 28.0)
                 .viewport_inset(12.0)
                 .padding(14.0)
                 .gap(9.0)
-                .child(Badge::new("DECORATED"))
+                .child(Badge::new("DECORATED").tone(BadgeTone::Neutral))
                 .child(
-                    Text::new("The title bar, frame, and wrapped body copy are library chrome.")
-                        .wrap(WrapMode::Word),
+                    Text::new("You have 3 unsaved edits in the design file. Review them before you share it.").wrap(WrapMode::Word),
                 )
-                .child(Button::new("Review")),
+                .child(
+                    Row::new()
+                        .gap(8.0)
+                        .justify(schnellui::layout::Justify::End)
+                        .child(Button::new("Cancel").appearance(ButtonAppearance::Outline))
+                        .child(Button::new("Review")),
+                ),
         );
 
     let undecorated = Stack::new()
-        .size(224.0, 230.0)
+        .size(DIALOG_CANVAS_W, DIALOG_CANVAS_H)
         .child(
             Image::new("undecorated dialog preview")
                 .alt("undecorated dialog preview canvas")
-                .size(224.0, 230.0),
+                .size(DIALOG_CANVAS_W, DIALOG_CANVAS_H),
         )
         .child(
             Dialog::new("Undecorated dialog")
                 .undecorated()
                 .modeless()
                 .non_fixed()
-                .width(196.0)
+                .width(DIALOG_CANVAS_W - 28.0)
                 .viewport_inset(12.0)
                 .padding(14.0)
                 .gap(9.0)
-                .child(Text::new("No title bar").size(18.0))
+                .child(Text::new("Saved").size(18.0).bold())
                 .child(
                     Text::new(
-                        "The accessible dialog name remains even when visible chrome is removed.",
+                        "Your changes are saved. Invite your team to see the latest version.",
                     )
                     .wrap(WrapMode::Word),
                 )
-                .child(Button::new("Continue")),
+                .child(
+                    Row::new()
+                        .gap(8.0)
+                        .justify(schnellui::layout::Justify::End)
+                        .child(Button::new("Later").appearance(ButtonAppearance::Outline))
+                        .child(Button::new("Invite")),
+                ),
         );
 
     Column::new()
-        .width(460.0)
+        .width(600.0)
         .gap(10.0)
-        .child(Text::new("Dialogs").size(22.0))
+        .child(Text::new("Dialogs").size(22.0).bold())
         .child(
-            Text::new(
-                "A direct chrome comparison; use the dedicated dialogs example for every placement and modality.",
-            )
-            .wrap(WrapMode::Word),
+            Text::new("The same dialog with and without its title bar and frame.")
+                .wrap(WrapMode::Word),
         )
         .child(
             Row::new()
-                .width(460.0)
+                .width(600.0)
                 .gap(12.0)
                 .child(decorated)
                 .child(undecorated),
         )
         .child(
             Row::new()
-                .width(460.0)
+                .width(600.0)
                 .gap(6.0)
                 .wrap()
-                .child(Badge::new("FIXED"))
-                .child(Badge::new("SCOPED"))
-                .child(Badge::new("MODAL"))
-                .child(Badge::new("MODELESS"))
-                .child(Badge::new("PERSISTENT")),
+                .child(Badge::new("FIXED").tone(BadgeTone::Neutral))
+                .child(Badge::new("SCOPED").tone(BadgeTone::Neutral))
+                .child(Badge::new("MODAL").tone(BadgeTone::Neutral))
+                .child(Badge::new("MODELESS").tone(BadgeTone::Neutral))
+                .child(Badge::new("PERSISTENT").tone(BadgeTone::Neutral)),
         )
 }
 
@@ -593,7 +659,17 @@ struct PlaygroundRuntime(State<PlaygroundRuntimeState>);
 
 struct PlaygroundRuntimeState {
     fruit: FruitState,
+    density: DensityState,
+    /// The gallery's Project name, kept across the remounts a dropdown makes.
+    project: String,
     pending_mount: Option<MountState>,
+}
+
+/// The gallery's Density dropdown, carried across its open/close remounts.
+#[derive(Clone, Copy)]
+struct DensityState {
+    open: bool,
+    chosen: &'static str,
 }
 
 impl Default for PlaygroundRuntime {
@@ -603,6 +679,11 @@ impl Default for PlaygroundRuntime {
                 open: true,
                 chosen: "Apple",
             },
+            density: DensityState {
+                open: false,
+                chosen: "Comfortable",
+            },
+            project: String::new(),
             pending_mount: None,
         }))
     }
@@ -615,6 +696,25 @@ impl PlaygroundRuntime {
 
     fn set_fruit(&self, fruit: FruitState) {
         self.0.update(|state| state.fruit = fruit);
+    }
+
+    fn project(&self) -> String {
+        self.0.read(|state| state.project.clone())
+    }
+
+    fn set_project(&self, value: &str) {
+        self.0.update(|state| {
+            state.project.clear();
+            state.project.push_str(value);
+        });
+    }
+
+    fn density(&self) -> DensityState {
+        self.0.read(|state| state.density)
+    }
+
+    fn set_density(&self, density: DensityState) {
+        self.0.update(|state| state.density = density);
     }
 
     fn request_mount(&self, mount: MountState) {
@@ -645,12 +745,22 @@ fn stage(
     theme_open: bool,
     content: impl View,
 ) -> impl View {
-    use schnellui::widgets::{Column, Divider, Dropdown, DropdownOption, Pad, Tab, TabBar};
-    // `wrap()`: eight example tabs overflow the 480px content box at the default
-    // 520px width — responsive flow keeps the chrome inside the page padding.
+    use schnellui::widgets::{
+        Column, Divider, Dropdown, DropdownOption, Pad, Row, Scroll, Tab, TabAppearance, TabBar,
+        Text,
+    };
+    // `wrap()`: the nine page tabs fit one line at the default 640px width;
+    // a narrower window flows them onto a second line inside the padding.
     let mut bar = TabBar::new().gap(2.0).wrap();
     for s in Scenario::iter() {
-        let mut tab = Tab::new(s.title()).selected(s == current);
+        // The page switcher wears underline tabs, so it reads as navigation
+        // apart from the filled tab bars the scenarios show off.
+        // A fixed side padding keeps the nine pages on one line in the roomy
+        // designs too; only the page body takes the design's density.
+        let mut tab = Tab::new(s.title())
+            .appearance(TabAppearance::Underline)
+            .padding_h(NAV_TAB_PAD_H)
+            .selected(s == current);
         if s != current && live_switch {
             let tab_runtime = runtime.clone();
             tab = tab.on_select(move || {
@@ -688,13 +798,23 @@ fn stage(
         }
         switcher = switcher.option(opt);
     }
-    Pad::all(PAGE_PADDING).child(
-        Column::new()
-            .gap(12.0)
-            .child(bar)
-            .child(switcher)
-            .child(Divider::new())
-            .child(content),
+    // The page scrolls when a design's density makes it taller than the
+    // window, with a visible bar so nothing hides below the fold.
+    Scroll::new().fill().scrollbar(true).child(
+        Pad::all(PAGE_PADDING).child(
+            Column::new()
+                .gap(12.0)
+                .child(bar)
+                .child(
+                    Row::new()
+                        .gap(10.0)
+                        .align(schnellui::layout::Align::Center)
+                        .child(Text::new("Theme"))
+                        .child(switcher),
+                )
+                .child(Divider::new())
+                .child(content),
+        ),
     )
 }
 
@@ -741,7 +861,14 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
     let mut app = match scenario {
         Scenario::Gallery => App::mount_with_theme_size_scaled(
             theme,
-            stage(runtime.clone(), scenario, sw, t, so, gallery_view()),
+            stage(
+                runtime.clone(),
+                scenario,
+                sw,
+                t,
+                so,
+                gallery_view(runtime.clone(), sw, t),
+            ),
             width,
             height,
             scale,
@@ -1070,8 +1197,8 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
                 return Err("undecorated dialog leaked a visible title label".into());
             }
             for copy in [
-                "The title bar, frame, and wrapped body copy are library chrome.",
-                "The accessible dialog name remains even when visible chrome is removed.",
+                "You have 3 unsaved edits in the design file. Review them before you share it.",
+                "Your changes are saved. Invite your team to see the latest version.",
             ] {
                 find_by_role_name(&tree, "label", Some(copy))
                     .ok_or_else(|| format!("missing wrapped dialog copy {copy:?}"))?;

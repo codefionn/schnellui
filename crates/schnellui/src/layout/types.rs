@@ -285,6 +285,10 @@ pub struct ContainerStyle {
     /// making it *paint* above later content is the scene's overlay flag, not
     /// layout's concern (SOUL §8.1 — the layers never bleed).
     pub anchor: Option<Point>,
+    /// With `anchor`: where the node's bottom edge goes, as a top inset in
+    /// the parent, when it would overflow the bottom of the root viewport
+    /// and fits above. A dropdown popup opens upward near the window edge.
+    pub anchor_above: Option<f32>,
 }
 
 impl ContainerStyle {
@@ -303,6 +307,7 @@ impl ContainerStyle {
             min_width: None,
             min_height: None,
             anchor: None,
+            anchor_above: None,
         }
     }
 }

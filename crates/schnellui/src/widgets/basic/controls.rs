@@ -168,6 +168,7 @@ impl View for LoadingSpinner {
 /// `on_toggle` is the same handler an inbound AccessKit `Click` fires (SOUL §6.3).
 pub struct Switch {
     pub(crate) on: bool,
+    pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_toggle: Option<Box<dyn FnMut(bool) + 'static>>,
 }
 
@@ -176,8 +177,14 @@ impl Switch {
     pub fn new(on: bool) -> Switch {
         Switch {
             on,
+            name: None,
             on_toggle: None,
         }
+    }
+    /// The switch's accessible name, usually the text of the label beside it.
+    pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Switch {
+        self.name = Some(name.into());
+        self
     }
     /// Sets the toggle handler, called with the switch's *new* state (SOUL §6.3 —
     /// shared with the a11y action path).
@@ -200,6 +207,7 @@ impl View for Switch {
         {
             let a = ctx.scene.a11y_mut(id);
             a.role = Role::Switch.as_u16();
+            a.name = this.name.as_ref().map(|name| name.to_string());
             let mut acts = ActionFlags::default();
             acts.insert(ActionFlags::CLICK);
             acts.insert(ActionFlags::FOCUS);
@@ -230,6 +238,7 @@ impl View for Switch {
 /// fires `on_select` — the same handler an inbound AccessKit `Click` fires.
 pub struct Radio {
     pub(crate) selected: bool,
+    pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_select: Option<Box<dyn FnMut() + 'static>>,
 }
 
@@ -238,8 +247,14 @@ impl Radio {
     pub fn new(selected: bool) -> Radio {
         Radio {
             selected,
+            name: None,
             on_select: None,
         }
+    }
+    /// The radio's accessible name, usually the text of the label beside it.
+    pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Radio {
+        self.name = Some(name.into());
+        self
     }
     /// Sets the selection handler (SOUL §6.3 — shared with the a11y action path).
     pub fn on_select(mut self, f: impl FnMut() + 'static) -> Radio {
@@ -261,6 +276,7 @@ impl View for Radio {
         {
             let a = ctx.scene.a11y_mut(id);
             a.role = Role::Radio.as_u16();
+            a.name = this.name.as_ref().map(|name| name.to_string());
             let mut acts = ActionFlags::default();
             acts.insert(ActionFlags::CLICK);
             acts.insert(ActionFlags::FOCUS);
@@ -422,14 +438,17 @@ impl View for Link {
         };
         let pd = ctx.scene.paint_mut(id);
         pd.primitives.clear();
+        pd.origin = Some(Point { x: 0.0, y: 0.0 });
         pd.primitives.push(Primitive::SolidRect {
+            // Just under the baseline, where browsers draw an underline,
+            // rather than below the descender space.
             rect: Rect::new(
                 0.0,
-                sz.height + LINK_UNDERLINE_GAP,
+                shaped.baseline * inv + 2.0 * LINK_UNDERLINE_GAP,
                 sz.width,
                 LINK_UNDERLINE,
             ),
-            color: theme_for(&ctx.runtime, id).accent,
+            color: theme_for(&ctx.runtime, id).link_color(),
             corner_radius: 0.0,
         });
         rasterize_and_push(
@@ -438,14 +457,16 @@ impl View for Link {
             ctx.atlas,
             &shaped,
             phys as u32,
-            theme_for(&ctx.runtime, id).accent,
+            theme_for(&ctx.runtime, id).link_color(),
             ctx.scale,
             Point { x: 0.0, y: 0.0 },
         );
-        // Intrinsic size covers the text run plus its underline (SOUL §8.1).
+        // Intrinsic size is the text's line box, so a link centres like a
+        // label; the underline sits inside the descender space (SOUL §8.1).
+        let underline_bottom = shaped.baseline * inv + 2.0 * LINK_UNDERLINE_GAP + LINK_UNDERLINE;
         let intrinsic = Size {
             width: sz.width,
-            height: sz.height + LINK_UNDERLINE_GAP + LINK_UNDERLINE,
+            height: sz.height.max(underline_bottom),
         };
         ctx.layout
             .set_measure(id, Box::new(move |_avail| intrinsic));
@@ -466,6 +487,22 @@ impl View for Link {
 pub struct Badge {
     pub(crate) text: Cow<'static, str>,
     pub(crate) name: Option<Cow<'static, str>>,
+    pub(crate) tone: BadgeTone,
+}
+
+/// What a [`Badge`] signals, which picks its fill. Red is for things that
+/// need attention; a plain tag or category should not borrow it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BadgeTone {
+    /// Needs attention: the theme's attention color.
+    #[default]
+    Attention,
+    /// Brand or "new" emphasis: the accent.
+    Accent,
+    /// A plain tag: a quiet gray pill.
+    Neutral,
+    /// Done or healthy: the positive color.
+    Positive,
 }
 
 impl Badge {
@@ -474,7 +511,13 @@ impl Badge {
         Badge {
             text: text.into(),
             name: None,
+            tone: BadgeTone::default(),
         }
+    }
+    /// Sets what the badge signals; see [`BadgeTone`].
+    pub fn tone(mut self, tone: BadgeTone) -> Badge {
+        self.tone = tone;
+        self
     }
     /// Gives the badge an accessible name that says what its short text is
     /// about, e.g. "main: waiting for permission" for a badge reading "approve".
@@ -519,6 +562,24 @@ impl View for Badge {
         // The pill: full-height corner radius rounds the ends (SOUL §8.1) — and
         // squares out into a stamp under a zero-roundness design ([`Shape::pill`]).
         let radius = sh.pill(intrinsic.height);
+        let (fill, label) = match this.tone {
+            BadgeTone::Attention => (t.attention, t.ink_on(t.attention)),
+            BadgeTone::Accent => (t.accent, t.on_accent),
+            BadgeTone::Positive => (t.positive, t.ink_on(t.positive)),
+            // A quiet grey chip, or a lighter one where an ink separator
+            // would leave the label unreadable.
+            BadgeTone::Neutral => (
+                [
+                    crate::widgets::theme::mix_color(t.separator, t.surface_muted, 0.35),
+                    t.surface_muted,
+                    t.surface,
+                ]
+                .into_iter()
+                .find(|&fill| crate::widgets::contrast_ratio(t.text, fill) >= 4.5)
+                .unwrap_or(t.surface),
+                t.text,
+            ),
+        };
         let pd = ctx.scene.paint_mut(id);
         pd.primitives.clear();
         if sh.frame > 0.0 {
@@ -535,7 +596,7 @@ impl View for Badge {
                 (rect.width - 2.0 * sh.frame).max(0.0),
                 (rect.height - 2.0 * sh.frame).max(0.0),
             ),
-            color: t.attention,
+            color: fill,
             corner_radius: (radius - sh.frame).max(0.0),
         });
         rasterize_and_push(
@@ -544,7 +605,7 @@ impl View for Badge {
             ctx.atlas,
             &shaped,
             phys as u32,
-            t.on_accent,
+            label,
             ctx.scale,
             Point {
                 x: rect.x + sh.frame + pad_h,

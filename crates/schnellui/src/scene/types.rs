@@ -327,6 +327,15 @@ pub enum Primitive {
         color: Color,
         corner_radius: f32,
     },
+    /// A rounded outline: only a band `width` wide just inside the edge of
+    /// `rect` is drawn. The focus ring and hover/press borders use it so they
+    /// follow a control's own corner radius.
+    StrokeRect {
+        rect: Rect,
+        color: Color,
+        corner_radius: f32,
+        width: f32,
+    },
     /// One glyph quad: a destination rect sampling a sub-rect of the R8 glyph atlas.
     GlyphQuad {
         rect: Rect,
@@ -369,6 +378,13 @@ pub struct LayoutBox {
 #[derive(Clone, Debug, Default)]
 pub struct PaintData {
     pub primitives: Vec<Primitive>,
+    /// The box origin the primitives were emitted against, when the first ink
+    /// does not start at the box corner (a text run's glyphs sit below the
+    /// line top by the font's ascent gap). Layout slides such paint by
+    /// `layout origin - origin` instead of by its ink bounds, so text keeps
+    /// its line box and lines up with text inside controls. `None` anchors
+    /// by the ink's top-left corner.
+    pub origin: Option<Point>,
 }
 
 /// An integer texel rect inside the [`ImageAtlas`] (SOUL §3.2).

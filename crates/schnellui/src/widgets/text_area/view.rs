@@ -518,6 +518,7 @@ fn overflows(rect: &Rect, prims: &[Primitive]) -> Option<Bounds> {
     for prim in prims {
         let (x0, y0, x1, y1) = match *prim {
             Primitive::SolidRect { rect, .. }
+            | Primitive::StrokeRect { rect, .. }
             | Primitive::GlyphQuad { rect, .. }
             | Primitive::ImageQuad { rect, .. } => {
                 (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height)
@@ -565,6 +566,7 @@ fn shift_y(prims: &mut [Primitive], dy: f32) {
     for prim in prims {
         match prim {
             Primitive::SolidRect { rect, .. }
+            | Primitive::StrokeRect { rect, .. }
             | Primitive::GlyphQuad { rect, .. }
             | Primitive::ImageQuad { rect, .. } => rect.y += dy,
             Primitive::Line { from, to, .. } => {

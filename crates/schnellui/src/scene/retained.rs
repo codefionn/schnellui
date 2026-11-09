@@ -781,6 +781,7 @@ impl Scene {
             for p in pd.primitives.iter_mut() {
                 let slot = match p {
                     Primitive::SolidRect { color: c, .. } => c,
+                    Primitive::StrokeRect { color: c, .. } => c,
                     Primitive::GlyphQuad { color: c, .. } => c,
                     Primitive::Line { color: c, .. } => c,
                     // an image recolors through its tint (WHITE = as-authored).

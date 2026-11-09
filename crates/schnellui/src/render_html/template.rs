@@ -850,7 +850,10 @@ fn write_responsive_condition(out: &mut String, query: ResponsiveQuery) {
 /// The stylesheet text (the content of the document's `<style>` element).
 /// `responsive_css` is spliced in after the static layout rules.
 pub(crate) fn stylesheet(width: u32, height: u32, theme: Theme, responsive_css: &str) -> String {
-    fn interaction_css(style: schnellui::widgets::InteractionStyle, focus: bool) -> String {
+    /// `focus` carries the ring's `outline-offset` in px. It matches the
+    /// native ring: 2px wide, 2px outside buttons, toggles and links, and
+    /// inset on fields, rows, tabs and raw surfaces.
+    fn interaction_css(style: schnellui::widgets::InteractionStyle, focus: Option<i32>) -> String {
         let mut css = String::new();
         if let Some(color) = style.background {
             let _ = write!(css, "background-color:{};", color_css(color));
@@ -859,10 +862,10 @@ pub(crate) fn stylesheet(width: u32, height: u32, theme: Theme, responsive_css: 
             let _ = write!(css, "color:{};", color_css(color));
         }
         if let Some(color) = style.border {
-            if focus {
+            if let Some(offset) = focus {
                 let _ = write!(
                     css,
-                    "outline:3px solid {};outline-offset:-3px;",
+                    "outline:2px solid {};outline-offset:{offset}px;",
                     color_css(color)
                 );
             } else {
@@ -876,63 +879,63 @@ pub(crate) fn stylesheet(width: u32, height: u32, theme: Theme, responsive_css: 
     use schnellui::widgets::{InteractionComponent as Component, InteractionState as State};
     let button_hover = interaction_css(
         theme.interaction_style(Component::Button, State::Hover),
-        false,
+        None,
     );
     let navigation_hover = interaction_css(
         theme.interaction_style(Component::Navigation, State::Hover),
-        false,
+        None,
     );
     let editable_hover = interaction_css(
         theme.interaction_style(Component::Editable, State::Hover),
-        false,
+        None,
     );
     let toggle_hover = interaction_css(
         theme.interaction_style(Component::Toggle, State::Hover),
-        false,
+        None,
     );
     let raw_hover = interaction_css(
         theme.interaction_style(Component::RawSurface, State::Hover),
-        false,
+        None,
     );
     let button_focus = interaction_css(
         theme.interaction_style(Component::Button, State::Focus),
-        true,
+        Some(2),
     );
     let navigation_focus = interaction_css(
         theme.interaction_style(Component::Navigation, State::Focus),
-        true,
+        Some(-2),
     );
     let editable_focus = interaction_css(
         theme.interaction_style(Component::Editable, State::Focus),
-        true,
+        Some(-2),
     );
     let raw_focus = interaction_css(
         theme.interaction_style(Component::RawSurface, State::Focus),
-        true,
+        Some(-2),
     );
     let toggle_focus = interaction_css(
         theme.interaction_style(Component::Toggle, State::Focus),
-        true,
+        Some(2),
     );
     let button_active = interaction_css(
         theme.interaction_style(Component::Button, State::Active),
-        false,
+        None,
     );
     let navigation_active = interaction_css(
         theme.interaction_style(Component::Navigation, State::Active),
-        false,
+        None,
     );
     let toggle_active = interaction_css(
         theme.interaction_style(Component::Toggle, State::Active),
-        false,
+        None,
     );
     let editable_active = interaction_css(
         theme.interaction_style(Component::Editable, State::Active),
-        false,
+        None,
     );
     let raw_active = interaction_css(
         theme.interaction_style(Component::RawSurface, State::Active),
-        false,
+        None,
     );
     // The spinner animation is declared once (schnellui::motion) and compiled to
     // CSS here; the GPU renderer samples the exact same declaration per frame.
@@ -991,14 +994,14 @@ button, input, select, textarea {{ font: inherit; }}
   appearance: none;
   border: var(--sui-frame) solid var(--sui-outline);
   border-radius: var(--sui-radius);
-  padding: calc(4px * var(--sui-density)) calc(8px * var(--sui-density));
+  padding: calc(6px * var(--sui-density)) calc(8px * var(--sui-density));
   color: var(--sui-on-accent);
   background: var(--sui-accent);
   box-shadow: var(--sui-shadow) var(--sui-shadow) 0 var(--sui-text);
   cursor: pointer;
 }}
 .sui-button-ghost {{ color: var(--sui-text); background: transparent; border-color: transparent; box-shadow: none; }}
-.sui-button:disabled {{ background: var(--sui-disabled); cursor: default; }}
+.sui-button:disabled {{ color: var(--sui-muted); background: var(--sui-disabled); cursor: default; }}
 .sui-checkbox {{ width: calc(18px * var(--sui-density)); height: calc(18px * var(--sui-density)); margin: 0; accent-color: var(--sui-accent); }}
 .sui-slider {{ width: 160px; margin: 0; accent-color: var(--sui-accent); }}
 .sui-input-field {{ display: inline-flex; flex-direction: column; gap: 2px; color: var(--sui-muted); font-size: 12px; }}
@@ -1103,7 +1106,8 @@ progress {{ width: 180px; accent-color: var(--sui-accent); }}
   outline: none;
 }}
 :where(.sui-button):focus-visible {{ {button_focus} }}
-:where(.sui-tab, .sui-list-item, .sui-table-row, .sui-link):focus-visible {{ {navigation_focus} }}
+:where(.sui-tab, .sui-list-item, .sui-table-row):focus-visible {{ {navigation_focus} }}
+:where(.sui-link):focus-visible {{ {navigation_focus} outline-offset:2px; }}
 :where(.sui-input, .sui-dropdown, .sui-textarea):focus-visible {{
   {editable_focus}
 }}

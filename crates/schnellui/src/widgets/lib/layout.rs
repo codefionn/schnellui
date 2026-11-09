@@ -374,6 +374,12 @@ impl Scroll {
         self.style.fixed_size = Some(Size { width, height });
         self
     }
+    /// Makes the viewport fill its parent's box, so a page-level scroll
+    /// follows the window size (the template `scroll().fill()`).
+    pub fn fill(mut self) -> Scroll {
+        self.style.fill = true;
+        self
+    }
     /// Sets the minimum viewport width; content or a definite size may make it wider.
     pub fn min_width(mut self, width: f32) -> Scroll {
         self.style.min_width = Some(width.max(0.0));

@@ -18,12 +18,14 @@ use slotmap::SecondaryMap;
 
 use crate::widgets::{
     forget_node_theme, norm_scale, phys_size_px, rasterize_and_push, remember_node_theme,
-    theme_for, ClickHandler, BUTTON_TEXT_SIZE, PAD_H, PAD_V,
+    theme_for, ClickHandler, BUTTON_TEXT_SIZE, PAD_H,
 };
 
 const CONTEXT_MENU_OVERLAY_LEVEL: u8 = 30;
 const CONTEXT_MENU_MIN_WIDTH: f32 = 140.0;
 const CONTEXT_MENU_MARGIN: f32 = 4.0;
+/// Vertical padding of a menu row, each side: menus stay denser than buttons.
+const MENU_PAD_V: f32 = 5.0;
 
 /// A built-in or user-defined context-menu command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,7 +394,7 @@ pub fn open_context_menu(
 
     let theme = theme_for(runtime, source);
     let pad_h = theme.shape.pad(PAD_H + 4.0);
-    let pad_v = theme.shape.pad(PAD_V + 1.0);
+    let pad_v = theme.shape.pad(MENU_PAD_V);
     let row_height = items
         .iter()
         .map(|item| item.shaped.height * inv + 2.0 * pad_v)

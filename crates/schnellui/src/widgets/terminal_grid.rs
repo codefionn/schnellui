@@ -1425,6 +1425,7 @@ fn rebuild_glyph_row(
     glyph_cells.prepare(physical_size as u32, metrics);
     let mut paint = PaintData {
         primitives: std::mem::take(&mut paint_cache.rows[row].glyphs),
+        origin: None,
     };
     paint.primitives.clear();
 

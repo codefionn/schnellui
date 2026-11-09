@@ -150,14 +150,34 @@ impl App {
         // deliberately leave the global tab order untouched.
         let modal = schnellui::widgets::active_modal_panel(scene);
         let current = schnellui::a11y::focused(scene);
+        let current_group = current.and_then(|cur| roving_group(scene, cur));
         let next = schnellui::a11y::with_tab_order(scene, |order| {
-            let in_scope = |id: &&WidgetId| {
-                modal.is_none_or(|p| schnellui::widgets::is_in_subtree(scene, **id, p))
+            // A tab bar, radio group, list or table is one Tab stop: Tab
+            // enters it at its chosen member (else its first) and leaves it
+            // for the next control; arrows move within it.
+            // A scroll viewport is a stop only when nothing inside it can take
+            // focus, as in browsers: arrows and paging already scroll the
+            // viewport around the focused control.
+            let is_stop = |id: WidgetId| match roving_group(scene, id) {
+                None if scene.node(id).is_some_and(|n| n.kind == WidgetKind::Scroll) => {
+                    !order.iter().any(|&other| {
+                        other != id && schnellui::widgets::is_in_subtree(scene, other, id)
+                    })
+                }
+                None => true,
+                Some(group) if Some(group) == current_group => false,
+                Some(group) => roving_entry(scene, order, group) == Some(id),
             };
+            let in_modal = |id: WidgetId| {
+                modal.is_none_or(|p| schnellui::widgets::is_in_subtree(scene, id, p))
+            };
+            let in_scope = |id: &&WidgetId| in_modal(**id) && is_stop(**id);
             let first = || order.iter().find(in_scope).copied();
             let last = || order.iter().rev().find(in_scope).copied();
+            // The focused member of a group is not itself a stop; it is
+            // still where the walk starts.
             current
-                .filter(|cur| in_scope(&cur))
+                .filter(|&cur| in_modal(cur))
                 .and_then(|cur| {
                     let position = order.iter().position(|id| *id == cur)?;
                     if backwards {
@@ -339,6 +359,26 @@ impl App {
                             focused.expect("focused slider"),
                             a,
                         );
+                }
+            }
+            // Arrows walk the members of a tab bar, list or table: focus
+            // moves, selection waits for Enter or Space (manual activation).
+            Some(WidgetKind::Tab)
+            | Some(WidgetKind::ListItem)
+            | Some(WidgetKind::TableRow)
+            | Some(WidgetKind::DropdownOption) => {
+                let step = match key {
+                    UiKey::Right { .. } | UiKey::Down { .. } => Some(RovingStep::By(1)),
+                    UiKey::Left { .. } | UiKey::Up { .. } => Some(RovingStep::By(-1)),
+                    UiKey::Home { .. } => Some(RovingStep::First),
+                    UiKey::End { .. } => Some(RovingStep::Last),
+                    _ => None,
+                };
+                if let Some(step) = step {
+                    let id = focused.expect("focused group member");
+                    if let Some(next) = roving_target(&self.scene, id, step) {
+                        return focus_visible | self.focus(Some(next));
+                    }
                 }
             }
             // Arrows on a focused radio move focus *and* selection within the
@@ -579,20 +619,61 @@ impl App {
             })
     }
 
-    /// The first visible suggestion of a combo popup, looking through the
-    /// scroll viewport a height-capped popup puts around its rows.
+    /// Where Down lands in an open popup: the option after the chosen one
+    /// (the chosen one when it is last), else the first visible option.
+    /// Looks through the scroll viewport or padded surface around the rows.
     fn first_visible_option(&self, popup: scene::WidgetId) -> Option<scene::WidgetId> {
-        let node = self.scene.node(popup)?;
-        node.children.iter().copied().find_map(|child| {
-            let semantics = self.scene.a11y(child)?;
-            match a11y::Role::from_u16(semantics.role) {
-                a11y::Role::ListBoxOption => {
-                    self.scene.is_effectively_visible(child).then_some(child)
+        let mut first = None;
+        let chosen = self.find_option(popup, &mut first);
+        let Some(chosen) = chosen else {
+            return first;
+        };
+        let next = self
+            .scene
+            .node(chosen)
+            .and_then(|node| node.parent)
+            .and_then(|parent| self.scene.node(parent))
+            .and_then(|parent| {
+                let at = parent.children.iter().position(|&c| c == chosen)?;
+                parent.children[at + 1..]
+                    .iter()
+                    .copied()
+                    .find(|&c| self.scene.is_effectively_visible(c))
+            });
+        Some(next.unwrap_or(chosen))
+    }
+
+    /// Walks a popup for visible options: returns the selected one and
+    /// records the first in `first`.
+    fn find_option(
+        &self,
+        id: scene::WidgetId,
+        first: &mut Option<scene::WidgetId>,
+    ) -> Option<scene::WidgetId> {
+        let node = self.scene.node(id)?;
+        for &child in &node.children {
+            let option = self
+                .scene
+                .a11y(child)
+                .filter(|a| a11y::Role::from_u16(a.role) == a11y::Role::ListBoxOption);
+            match option {
+                Some(semantics) => {
+                    if !self.scene.is_effectively_visible(child) {
+                        continue;
+                    }
+                    first.get_or_insert(child);
+                    if a11y::StateFlags(semantics.state).contains(a11y::StateFlags::SELECTED) {
+                        return Some(child);
+                    }
                 }
-                a11y::Role::ScrollView => self.first_visible_option(child),
-                _ => None,
+                None => {
+                    if let Some(found) = self.find_option(child, first) {
+                        return Some(found);
+                    }
+                }
             }
-        })
+        }
+        None
     }
 
     pub(crate) fn refresh_combobox_filter(&mut self, id: scene::WidgetId) {
@@ -808,11 +889,12 @@ impl App {
             }
             None => false,
         };
-        let changed = schnellui::widgets::update_pointer_proximity_hit(
+        let changed = schnellui::widgets::update_pointer_proximity_held(
             &self.widgets,
             &mut self.scene,
             point,
             if held { None } else { hit },
+            held,
         );
         // Hover decoration is paint-only, so the hit still stands afterwards.
         // Remember it with the scene state it is valid for; `cursor_at` for the
@@ -836,7 +918,8 @@ impl App {
             return false;
         };
         self.hover_hold.set(Some(rest));
-        schnellui::widgets::strip_hover_decoration(&self.widgets, &mut self.scene)
+        let tooltips = schnellui::widgets::hide_hover_tooltips(&self.widgets, &mut self.scene);
+        schnellui::widgets::strip_hover_decoration(&self.widgets, &mut self.scene) | tooltips
     }
 
     /// The hit at `point`, reused from the last pointer update when nothing it
@@ -945,4 +1028,88 @@ impl App {
         }
         changed
     }
+}
+
+/// A step within a roving group.
+#[derive(Clone, Copy)]
+enum RovingStep {
+    By(i32),
+    First,
+    Last,
+}
+
+/// The group a focusable member belongs to, for widgets that share one Tab
+/// stop: tabs in a tab list, radios in a row, items in a list, rows in a
+/// table. `None` for every other widget.
+fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<scene::WidgetId> {
+    let kind = scene.node(id)?.kind;
+    let parent = scene.node(id)?.parent?;
+    match kind {
+        WidgetKind::Radio
+        | WidgetKind::ListItem
+        | WidgetKind::TableRow
+        | WidgetKind::DropdownOption => Some(parent),
+        WidgetKind::Tab => {
+            // A closable tab sits in a wrapper row inside the tab list.
+            let mut ancestor = Some(parent);
+            for _ in 0..3 {
+                let node = ancestor?;
+                if scene
+                    .a11y(node)
+                    .is_some_and(|a| a11y::Role::from_u16(a.role) == a11y::Role::TabList)
+                {
+                    return Some(node);
+                }
+                ancestor = scene.node(node)?.parent;
+            }
+            Some(parent)
+        }
+        _ => None,
+    }
+}
+
+fn roving_members<'a>(
+    scene: &'a scene::Scene,
+    order: &'a [scene::WidgetId],
+    group: scene::WidgetId,
+) -> impl Iterator<Item = scene::WidgetId> + 'a {
+    order
+        .iter()
+        .copied()
+        .filter(move |&id| roving_group(scene, id) == Some(group))
+}
+
+/// Where Tab enters a group: its selected or checked member, else its first.
+fn roving_entry(
+    scene: &scene::Scene,
+    order: &[scene::WidgetId],
+    group: scene::WidgetId,
+) -> Option<scene::WidgetId> {
+    let chosen = roving_members(scene, order, group).find(|&id| {
+        scene.a11y(id).is_some_and(|a| {
+            let state = a11y::StateFlags(a.state);
+            state.contains(a11y::StateFlags::SELECTED) || state.contains(a11y::StateFlags::CHECKED)
+        })
+    });
+    chosen.or_else(|| roving_members(scene, order, group).next())
+}
+
+/// The member an arrow key moves focus to, wrapping at the ends.
+fn roving_target(
+    scene: &scene::Scene,
+    id: scene::WidgetId,
+    step: RovingStep,
+) -> Option<scene::WidgetId> {
+    let group = roving_group(scene, id)?;
+    schnellui::a11y::with_tab_order(scene, |order| {
+        let members: Vec<_> = roving_members(scene, order, group).collect();
+        let position = members.iter().position(|&m| m == id)?;
+        let len = members.len() as i32;
+        let index = match step {
+            RovingStep::By(delta) => (position as i32 + delta).rem_euclid(len),
+            RovingStep::First => 0,
+            RovingStep::Last => len - 1,
+        };
+        members.get(index as usize).copied().filter(|&m| m != id)
+    })
 }

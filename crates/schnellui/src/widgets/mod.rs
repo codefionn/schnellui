@@ -408,7 +408,7 @@ const EMPTY_LINE_RATIO: f32 = 1.2;
 /// Button horizontal padding (each side).
 const PAD_H: f32 = 8.0;
 /// Button vertical padding (each side).
-const PAD_V: f32 = 4.0;
+const PAD_V: f32 = 6.0;
 /// Label font size for buttons.
 const BUTTON_TEXT_SIZE: f32 = 16.0;
 /// Checkbox edge length.
@@ -521,6 +521,7 @@ fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     for primitive in &mut paint.primitives[tooltip.background..tooltip.glyph_end] {
         match primitive {
             Primitive::SolidRect { rect, .. }
+            | Primitive::StrokeRect { rect, .. }
             | Primitive::GlyphQuad { rect, .. }
             | Primitive::ImageQuad { rect, .. } => {
                 rect.x += dx;
@@ -654,40 +655,54 @@ fn emit_checkbox_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, check
     let rect = node_rect(scene, id, checkbox_intrinsic(runtime, id));
     let t = theme_for(runtime, id);
     let sh = t.shape;
-    let radius = sh.radius(3.0, rect.height);
+    // Square-ish in every design: a pill-shaped box would read as a radio.
+    let radius = sh.radius(4.0, rect.height).min(rect.height * 0.25);
+    // An unchecked box is an outlined well; a checked one fills with the
+    // accent and carries a check mark, like the switch and radio beside it.
+    let frame = sh.frame.max(CHECKBOX_BORDER);
+    let edge = if checked && sh.frame == 0.0 {
+        t.accent
+    } else {
+        t.outline
+    };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
-    if sh.frame > 0.0 {
-        pd.primitives.push(Primitive::SolidRect {
-            rect,
-            color: t.outline,
-            corner_radius: radius,
-        });
-    }
     pd.primitives.push(Primitive::SolidRect {
-        rect: Rect::new(
-            rect.x + sh.frame,
-            rect.y + sh.frame,
-            (rect.width - 2.0 * sh.frame).max(0.0),
-            (rect.height - 2.0 * sh.frame).max(0.0),
-        ),
-        color: t.surface,
-        corner_radius: (radius - sh.frame).max(0.0),
+        rect,
+        color: edge,
+        corner_radius: radius,
+    });
+    let inner = Rect::new(
+        rect.x + frame,
+        rect.y + frame,
+        (rect.width - 2.0 * frame).max(0.0),
+        (rect.height - 2.0 * frame).max(0.0),
+    );
+    pd.primitives.push(Primitive::SolidRect {
+        rect: inner,
+        color: if checked { t.accent } else { t.surface },
+        corner_radius: (radius - frame).max(0.0),
     });
     if checked {
-        let inset = sh.frame + sh.pad(4.0);
-        pd.primitives.push(Primitive::SolidRect {
-            rect: Rect::new(
-                rect.x + inset,
-                rect.y + inset,
-                (rect.width - 2.0 * inset).max(0.0),
-                (rect.height - 2.0 * inset).max(0.0),
-            ),
-            color: t.positive,
-            corner_radius: sh.radius(1.0, rect.height - 2.0 * inset),
-        });
+        let at = |fx: f32, fy: f32| Point {
+            x: inner.x + inner.width * fx,
+            y: inner.y + inner.height * fy,
+        };
+        let stroke = (rect.height * 0.12).max(1.6);
+        let (a, b, c) = (at(0.2, 0.52), at(0.42, 0.74), at(0.8, 0.28));
+        for (from, to) in [(a, b), (b, c)] {
+            pd.primitives.push(Primitive::Line {
+                from,
+                to,
+                width: stroke,
+                color: t.on_accent,
+            });
+        }
     }
 }
+
+/// Width of an unchecked checkbox's outline in a frameless design.
+const CHECKBOX_BORDER: f32 = 1.5;
 
 /// Slider intrinsic track size (SOUL §8.1).
 const SLIDER_SIZE: Size = Size {
@@ -727,8 +742,16 @@ fn emit_slider_paint(
     let fill_w = rail.width * frac;
     let thumb_x = rail.x + fill_w;
     let radius = t.shape.pill(rail_h);
-    let track_color = if disabled { t.surface_muted } else { t.media };
-    let active_color = if disabled { t.disabled } else { t.accent };
+    let track_color = if disabled {
+        t.surface_muted
+    } else {
+        t.track_color()
+    };
+    let active_color = if disabled {
+        t.disabled
+    } else {
+        t.indicator_color()
+    };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
     pd.primitives.push(Primitive::SolidRect {
@@ -757,13 +780,71 @@ fn emit_slider_paint(
 fn emit_media_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, intrinsic: Size) {
     let rect = node_rect(scene, id, intrinsic);
     let t = theme_for(runtime, id);
-    let radius = t.shape.radius(2.0, rect.height);
+    let radius = t.shape.radius(4.0, rect.height);
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    // An image with no pixels yet: a framed well with a small picture glyph
+    // (a sun over a ridge), so it reads as "image goes here", not as a gray
+    // block of unknown purpose.
+    // The well's edge reads at 3:1 like a field's, in the design's frame
+    // weight when it has one.
+    let frame = t.shape.frame.max(1.0);
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        color: t.media,
+        color: if t.shape.frame > 0.0 {
+            t.outline
+        } else {
+            t.track_color()
+        },
         corner_radius: radius,
+    });
+    pd.primitives.push(Primitive::SolidRect {
+        rect: Rect::new(
+            rect.x + frame,
+            rect.y + frame,
+            (rect.width - 2.0 * frame).max(0.0),
+            (rect.height - 2.0 * frame).max(0.0),
+        ),
+        // A design whose muted surface is its selection (Brutal's yellow)
+        // keeps an empty well on the plain surface.
+        color: if t.surface_muted == t.selection {
+            t.surface
+        } else {
+            t.surface_muted
+        },
+        corner_radius: (radius - frame).max(0.0),
+    });
+    let edge = rect.width.min(rect.height);
+    if edge < 12.0 {
+        return;
+    }
+    let glyph = (edge * 0.5).min(28.0);
+    let gx = rect.x + (rect.width - glyph) * 0.5;
+    let gy = rect.y + (rect.height - glyph) * 0.5;
+    let ink = t.text_muted;
+    let stroke = (glyph * 0.08).max(1.2);
+    let at = |fx: f32, fy: f32| Point {
+        x: gx + glyph * fx,
+        y: gy + glyph * fy,
+    };
+    for (from, to) in [
+        (at(0.0, 0.9), at(0.35, 0.5)),
+        (at(0.35, 0.5), at(0.6, 0.75)),
+        (at(0.6, 0.75), at(0.75, 0.6)),
+        (at(0.75, 0.6), at(1.0, 0.9)),
+    ] {
+        pd.primitives.push(Primitive::Line {
+            from,
+            to,
+            width: stroke,
+            color: ink,
+        });
+    }
+    let sun = glyph * 0.2;
+    pd.primitives.push(Primitive::SolidRect {
+        rect: Rect::new(gx + glyph * 0.68, gy + glyph * 0.1, sun, sun),
+        color: ink,
+        corner_radius: sun * 0.5,
     });
 }
 
@@ -1134,6 +1215,11 @@ struct WidgetRuntime {
     /// Mounted searchable option rows keyed by their editable combo-box field.
     /// Filtering these retained rows avoids rebuilding the host view on each key.
     comboboxes: SecondaryMap<WidgetId, selection::ComboBoxState>,
+    /// How each dropdown trigger was painted, so choosing an option can
+    /// repaint the trigger's label in place.
+    dropdown_triggers: SecondaryMap<WidgetId, selection::TriggerPaint>,
+    /// Triggers whose chosen option changed since the last frame.
+    dropdown_relabels: Vec<WidgetId>,
     /// Retained document + deferred-paint state per rich text view (SOUL §8.1) —
     /// owned by [`rich`], populated at build, re-flowed by measure/emit.
     rich: SecondaryMap<WidgetId, rich::RichState>,
@@ -1270,6 +1356,8 @@ pub fn reset(runtime: &Runtime) {
         rt.edits.clear();
         rt.edit_ids.clear();
         rt.comboboxes.clear();
+        rt.dropdown_triggers.clear();
+        rt.dropdown_relabels.clear();
         rt.rich.clear();
         rt.panels.clear();
         rt.virtual_lists.clear();
@@ -1345,6 +1433,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.text_layouts.remove(id);
             rt.edits.remove(id);
             rt.comboboxes.remove(id);
+            rt.dropdown_triggers.remove(id);
             rt.rich.remove(id);
             rt.panels.remove(id);
             rt.areas.remove(id);

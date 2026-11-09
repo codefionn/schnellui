@@ -757,6 +757,7 @@ fn ranged_edit(world: &mut World, rng: &mut Rng, id: WidgetId) {
         for prim in world.scene.paint_range_mut(id, a..b) {
             match prim {
                 Primitive::SolidRect { rect, color: c, .. }
+                | Primitive::StrokeRect { rect, color: c, .. }
                 | Primitive::GlyphQuad { rect, color: c, .. } => {
                     rect.x += dx;
                     *c = color;

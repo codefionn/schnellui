@@ -64,7 +64,7 @@ fn glyph_layout(app: &App) -> Vec<(u8, i32, i32, i32, i32)> {
                     Primitive::SolidRect { rect, .. } => (0u8, rect),
                     Primitive::GlyphQuad { rect, .. } => (1u8, rect),
                     Primitive::ImageQuad { rect, .. } => (2u8, rect),
-                    Primitive::Line { .. } => continue,
+                    Primitive::Line { .. } | Primitive::StrokeRect { .. } => continue,
                 };
                 out.push((t.0, r(t.1.x), r(t.1.y), r(t.1.width), r(t.1.height)));
             }

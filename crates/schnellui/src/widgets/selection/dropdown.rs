@@ -1,5 +1,6 @@
 use super::navigation::{CARET_HALF, CARET_RISE, CARET_SPACE, CARET_STROKE};
 use super::*;
+use schnellui::layout::EdgeInsets;
 
 pub struct Dropdown {
     pub(crate) label: Cow<'static, str>,
@@ -109,35 +110,35 @@ fn emit_dropdown_trigger_paint(
     let t = theme_for(runtime, id);
     let (pad_h, pad_v) = (t.shape.pad(PAD_H), t.shape.pad(PAD_V));
     let f = t.shape.frame;
+    let f = f.max(TRIGGER_BORDER);
     let intrinsic = Size {
         width: (ts.width + 2.0 * (pad_h + f) + CARET_SPACE).max(min_width),
         height: ts.height + 2.0 * (pad_v + f),
     };
     let rect = node_rect(scene, id, intrinsic);
+    // A trigger is an outlined field, like a text input, so it reads as a
+    // control rather than a label on the page; it wears the accent edge
+    // while its list is open. The popup floats a little below it.
+    let edge = f.max(TRIGGER_BORDER);
+    let radius = t.shape.radius(4.0, rect.height);
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
-    // The ink frame behind an inset surface (same layering as the button); the
-    // dropdown stays square in every design system — the open popup seams flush
-    // against the trigger's bottom edge, so its corners can never round away.
-    if f > 0.0 {
-        pd.primitives.push(Primitive::SolidRect {
-            rect,
-            color: t.outline,
-            corner_radius: 0.0,
-        });
-    }
-    // [0] the surface — recolors like a selection state (open = the light wash).
+    pd.primitives.push(Primitive::SolidRect {
+        rect,
+        color: if open { t.focus_color() } else { t.outline },
+        corner_radius: radius,
+    });
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(
-            rect.x + f,
-            rect.y + f,
-            (rect.width - 2.0 * f).max(0.0),
-            (rect.height - 2.0 * f).max(0.0),
+            rect.x + edge,
+            rect.y + edge,
+            (rect.width - 2.0 * edge).max(0.0),
+            (rect.height - 2.0 * edge).max(0.0),
         ),
-        color: if open { t.selection } else { t.surface },
-        corner_radius: 0.0,
+        color: t.surface,
+        corner_radius: (radius - edge).max(0.0),
     });
-    // [1][2] the caret chevron at the right edge: ∨ closed, ∧ open.
+    // [2][3] the caret chevron at the right edge: ∨ closed, ∧ open.
     let cx = rect.x + rect.width - f - pad_h - CARET_HALF;
     let cy = rect.y + rect.height * 0.5;
     let (tip, base) = if open {
@@ -169,6 +170,66 @@ fn emit_dropdown_trigger_paint(
     );
     ts
 }
+
+/// How a dropdown trigger was painted at build, kept so choosing an option
+/// repaints its label without a remount.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TriggerPaint {
+    open: bool,
+    scale: f32,
+    min_width: f32,
+    text_size: f32,
+}
+
+/// Repaints the label of every dropdown trigger whose option changed since the
+/// last frame, keeping its hover, press and focus decorations.
+pub fn relabel_dropdown_triggers(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+) {
+    let pending = runtime.with(|rt| std::mem::take(&mut rt.borrow_mut().dropdown_relabels));
+    for &id in &pending {
+        let paint = runtime.with(|rt| rt.borrow().dropdown_triggers.get(id).copied());
+        let value = scene.a11y(id).and_then(|a| a.value.clone());
+        let (Some(paint), Some(value)) = (paint, value) else {
+            continue;
+        };
+        emit_dropdown_trigger_paint(
+            runtime,
+            scene,
+            shaper,
+            atlas,
+            id,
+            &value,
+            paint.open,
+            paint.scale,
+            paint.min_width,
+            paint.text_size,
+        );
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+        crate::widgets::interaction::reapply_focus_ring(runtime, scene, id);
+    }
+    // Hand the buffer back so the next selection does not allocate.
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        if rt.dropdown_relabels.is_empty() {
+            let mut pending = pending;
+            pending.clear();
+            rt.dropdown_relabels = pending;
+        }
+    });
+}
+
+/// Width of a dropdown trigger's outline in a frameless design.
+const TRIGGER_BORDER: f32 = 1.0;
+/// Space between an open trigger and its popup.
+const POPUP_GAP: f32 = 4.0;
+/// Padding between a popup's edge and its rows.
+const POPUP_PAD: f32 = 4.0;
+/// Extra row width so the widest label clears the chosen row's check mark.
+const OPTION_CHECK_ROOM: f32 = 8.0;
 
 impl View for Dropdown {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
@@ -209,7 +270,7 @@ impl View for Dropdown {
             .fold(0.0f32, f32::max);
         let sh = theme_for(runtime, id).shape;
         let (pad_h, pad_v) = (sh.pad(PAD_H), sh.pad(PAD_V));
-        let f = sh.frame;
+        let f = sh.frame.max(TRIGGER_BORDER);
         let shared_width = (widest + 2.0 * (pad_h + f) + CARET_SPACE).max(this.min_width);
         {
             let a = ctx.scene.a11y_mut(id);
@@ -239,6 +300,17 @@ impl View for Dropdown {
             shared_width,
             text_size,
         );
+        ctx.runtime.with(|rt| {
+            rt.borrow_mut().dropdown_triggers.insert(
+                id,
+                TriggerPaint {
+                    open: this.open,
+                    scale: ctx.scale,
+                    min_width: shared_width,
+                    text_size,
+                },
+            );
+        });
         ctx.layout.set_measure(
             id,
             Box::new(move |_avail| Size {
@@ -256,19 +328,30 @@ impl View for Dropdown {
         // flagged as an overlay layer, so the renderer paints it above the content
         // it covers and hit-testing resolves into it first (SOUL §3.2 z-order).
         if this.open {
-            let popup = ctx.scene.insert(WidgetKind::Column, Some(wrap));
-            let mut style = ContainerStyle::new(Container::Column);
+            // The popup is a padded, outlined surface with a shadow, a few
+            // pixels below the trigger, as wide as the trigger.
+            let popup = ctx.scene.insert(WidgetKind::Pad, Some(wrap));
+            let frame = sh.frame.max(1.0);
+            let inset = POPUP_PAD + frame;
+            let mut style = ContainerStyle::new(Container::Pad(EdgeInsets::all(inset)));
             style.anchor = Some(Point {
                 x: 0.0,
-                y: ts.height + 2.0 * (pad_v + f),
+                y: ts.height + 2.0 * (pad_v + f) + POPUP_GAP,
             });
+            style.anchor_above = Some(-POPUP_GAP);
             ctx.layout.set_container(popup, style);
             ctx.scene.set_overlay(popup);
+            let rows = ctx.scene.insert(WidgetKind::Column, Some(popup));
+            ctx.layout
+                .set_container(rows, ContainerStyle::new(Container::Column));
             for mut opt in this.options {
-                opt.min_width = shared_width;
+                // As wide as the trigger's text box plus room for the check
+                // mark that marks the chosen row.
+                opt.min_width = shared_width + OPTION_CHECK_ROOM;
                 opt.text_size = this.text_size;
-                Box::new(opt).build(ctx, Some(popup));
+                Box::new(opt).build(ctx, Some(rows));
             }
+            crate::widgets::panel::register_popup_surface(&ctx.runtime, ctx.scene, popup);
         }
         wrap
     }
@@ -536,28 +619,42 @@ pub(crate) fn dispatch_click_dropdown(
         WidgetKind::DropdownOption => {
             let acted = dispatch_click_selection(runtime, scene, id, WidgetKind::DropdownOption);
             if acted {
-                // option → popup column → dropdown wrapper, whose children hold
-                // the trigger leaf beside the popup.
-                let trigger = scene
-                    .node(id)
-                    .and_then(|n| n.parent)
-                    .and_then(|popup| scene.node(popup))
-                    .and_then(|pn| pn.parent)
-                    .and_then(|wrap| scene.node(wrap))
-                    .and_then(|wn| {
-                        wn.children.iter().copied().find(|&c| {
-                            scene.node(c).is_some_and(|n| {
-                                n.kind == WidgetKind::Dropdown
-                                    || (n.kind == WidgetKind::TextInput
-                                        && scene.a11y(c).is_some_and(|a| {
-                                            Role::from_u16(a.role) == Role::ComboBox
-                                        }))
-                            })
-                        })
-                    });
+                // option → rows → popup surface → dropdown wrapper, whose
+                // children hold the trigger leaf beside the popup. Walk up a
+                // few ancestors so either popup shape finds it.
+                let is_trigger = |c: WidgetId| {
+                    scene.node(c).is_some_and(|n| {
+                        n.kind == WidgetKind::Dropdown
+                            || (n.kind == WidgetKind::TextInput
+                                && scene
+                                    .a11y(c)
+                                    .is_some_and(|a| Role::from_u16(a.role) == Role::ComboBox))
+                    })
+                };
+                let mut trigger = None;
+                let mut ancestor = scene.node(id).and_then(|n| n.parent);
+                for _ in 0..4 {
+                    let Some(node) = ancestor.and_then(|a| scene.node(a)) else {
+                        break;
+                    };
+                    if let Some(found) = node.children.iter().copied().find(|&c| is_trigger(c)) {
+                        trigger = Some(found);
+                        break;
+                    }
+                    ancestor = node.parent;
+                }
                 let name = scene.a11y(id).and_then(|a| a.name.clone());
                 if let (Some(t), Some(name)) = (trigger, name) {
                     scene.set_a11y_value(t, Some(name));
+                    // The painted label follows on the next frame.
+                    runtime.with(|rt| {
+                        let mut rt = rt.borrow_mut();
+                        if rt.dropdown_triggers.contains_key(t)
+                            && !rt.dropdown_relabels.contains(&t)
+                        {
+                            rt.dropdown_relabels.push(t);
+                        }
+                    });
                 }
             }
             acted

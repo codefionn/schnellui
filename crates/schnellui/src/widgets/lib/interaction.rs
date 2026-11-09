@@ -1,17 +1,24 @@
 use super::*;
 
-pub const FOCUS_RING_W: f32 = 3.0;
-/// One rectangular outline is four [`Primitive::Line`]s.
-pub const FOCUS_RING_PRIMS: usize = 4;
+pub const FOCUS_RING_W: f32 = 2.0;
+/// Gap between a free-standing control's edge and its outset focus ring, so
+/// an accent-filled control and an accent ring never merge into one shape.
+pub const FOCUS_RING_GAP: f32 = 2.0;
+/// How far a toggle's hover halo reaches past the control.
+pub const TOGGLE_HALO: f32 = 4.0;
+/// One focus ring is a single [`Primitive::StrokeRect`].
+pub const FOCUS_RING_PRIMS: usize = 1;
 /// Hover border width, chosen not to alias either focus-ring stroke.
 pub const HOVER_BORDER_W: f32 = 1.5;
-/// Pressed-state border, between hover feedback and keyboard focus emphasis.
-pub const ACTIVE_BORDER_W: f32 = 2.0;
-/// One rectangular hover border is four retained lines.
-pub const HOVER_BORDER_PRIMS: usize = 4;
+/// Pressed-state border, wider than hover and never equal to the focus ring.
+pub const ACTIVE_BORDER_W: f32 = 2.5;
+/// A link has no surface of its own to take a corner radius from.
+const LINK_RING_RADIUS: f32 = 3.0;
+/// One hover border is a single retained stroke.
+pub const HOVER_BORDER_PRIMS: usize = 1;
 
-/// Where `decoration`'s stroke starts in `pd`, if it is still there: four lines
-/// of its width, `border_tail` primitives before the end. A repaint that rewrote
+/// Where `decoration`'s stroke starts in `pd`, if it is still there: one
+/// stroked rect of its width, `border_tail` primitives before the end. A repaint that rewrote
 /// the node's primitives fails this, and the stale record is then ignored
 /// instead of eating unrelated paint.
 fn stroke_start(pd: &PaintData, decoration: &AppliedInteraction) -> Option<usize> {
@@ -22,7 +29,7 @@ fn stroke_start(pd: &PaintData, decoration: &AppliedInteraction) -> Option<usize
     pd.primitives[start..start + FOCUS_RING_PRIMS]
         .iter()
         .all(|primitive| {
-            matches!(primitive, Primitive::Line { width, .. } if *width == decoration.border_width)
+            matches!(primitive, Primitive::StrokeRect { width, .. } if *width == decoration.border_width)
         })
         .then_some(start)
 }
@@ -51,19 +58,44 @@ pub(crate) fn ordinary_primitive_end(runtime: &Runtime, id: WidgetId, pd: &Paint
     })
 }
 
+/// Indices of the hover/press/focus background washes currently inserted in
+/// `id`'s paint (`usize::MAX` for none). They are decorations: bounds and
+/// anchoring skip them, since a toggle's halo reaches past the control.
+pub(crate) fn decoration_washes(runtime: &Runtime, id: WidgetId) -> [usize; 3] {
+    runtime.with(|rt| {
+        let rt = rt.borrow();
+        let mut washes = [usize::MAX; 3];
+        for (slot, decoration) in [&rt.ring, &rt.active, &rt.hover].into_iter().enumerate() {
+            if let Some((owner, position)) = decoration.as_ref().and_then(|d| d.background) {
+                if owner == id {
+                    washes[slot] = position;
+                }
+            }
+        }
+        washes
+    })
+}
+
 /// The bounding box of a node's current paint primitives — the rect the ring
 /// hugs. Primitive bounds (not the layout rect) because a stretched layout box
 /// can be wider than the pixels the widget actually painted.
 pub fn paint_bounds(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<Rect> {
     let pd = scene.paint(id)?;
     let primitive_end = ordinary_primitive_end(runtime, id, pd);
+    // A hover or pressed wash is a decoration, not the widget: a toggle's
+    // halo reaches past the control and must not widen the focus ring.
+    let washes = decoration_washes(runtime, id);
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    for prim in &pd.primitives[..primitive_end] {
+    for (index, prim) in pd.primitives[..primitive_end].iter().enumerate() {
+        if washes.contains(&index) {
+            continue;
+        }
         let (x0, y0, x1, y1) = match *prim {
             Primitive::SolidRect { rect, .. }
+            | Primitive::StrokeRect { rect, .. }
             | Primitive::GlyphQuad { rect, .. }
             | Primitive::ImageQuad { rect, .. } => {
                 (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height)
@@ -121,30 +153,63 @@ fn decoration_geometry(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option
     bounds.zip(owner)
 }
 
-/// Appends one rectangular stroke of 4 [`Primitive::Line`]s along `rect`'s edges,
-/// each endpoint inset by `inset` plus half the stroke width — so the stroke's
-/// extent stays **inside** `rect` and the node's min-origin (what
-/// [`reposition_paint`] anchors by) is unchanged by wearing a ring.
-fn push_ring_stroke(pd: &mut PaintData, rect: Rect, inset: f32, width: f32, color: Color) {
-    let half = width * 0.5;
-    let (x0, y0) = (rect.x + inset + half, rect.y + inset + half);
-    let (x1, y1) = (
-        rect.x + rect.width - inset - half,
-        rect.y + rect.height - inset - half,
+/// Appends one [`Primitive::StrokeRect`] band of `width` just inside `rect`
+/// grown by `-inset` (a negative inset puts the ring outside `rect`). `radius`
+/// is the corner radius of the shape being outlined; an outset ring adds the
+/// outset to it, so the ring stays concentric with the control.
+fn push_ring_stroke(
+    pd: &mut PaintData,
+    rect: Rect,
+    inset: f32,
+    radius: f32,
+    width: f32,
+    color: Color,
+) {
+    let rect = Rect::new(
+        rect.x + inset,
+        rect.y + inset,
+        (rect.width - 2.0 * inset).max(0.0),
+        (rect.height - 2.0 * inset).max(0.0),
     );
-    for (from, to) in [
-        (Point { x: x0, y: y0 }, Point { x: x1, y: y0 }), // top
-        (Point { x: x0, y: y1 }, Point { x: x1, y: y1 }), // bottom
-        (Point { x: x0, y: y0 }, Point { x: x0, y: y1 }), // left
-        (Point { x: x1, y: y0 }, Point { x: x1, y: y1 }), // right
-    ] {
-        pd.primitives.push(Primitive::Line {
-            from,
-            to,
-            width,
-            color,
-        });
+    pd.primitives.push(Primitive::StrokeRect {
+        rect,
+        color,
+        corner_radius: (radius - inset).max(0.0),
+        width,
+    });
+}
+
+/// Corner radius of the surface a control's ring should follow: the
+/// largest solid rect in `owner`'s own paint, skipping hover and press washes
+/// (a toggle's halo is bigger than the control). A control with no surface
+/// (text, a row of cells) gets `0`.
+/// Base corner radius of a focus ring on a square tab or row.
+const NAV_RING_RADIUS: f32 = 3.0;
+
+fn surface_radius(runtime: &Runtime, scene: &Scene, owner: WidgetId) -> f32 {
+    let Some(paint) = scene.paint(owner) else {
+        return 0.0;
+    };
+    let end = ordinary_primitive_end(runtime, owner, paint);
+    let washes = decoration_washes(runtime, owner);
+    let mut best = (0.0_f32, 0.0_f32);
+    for (index, primitive) in paint.primitives[..end].iter().enumerate() {
+        if washes.contains(&index) {
+            continue;
+        }
+        if let Primitive::SolidRect {
+            rect,
+            corner_radius,
+            ..
+        } = *primitive
+        {
+            let area = rect.width * rect.height;
+            if area > best.0 {
+                best = (area, corner_radius);
+            }
+        }
     }
+    best.1
 }
 
 /// Strips a previously-appended focus ring — the trailing [`FOCUS_RING_PRIMS`]
@@ -181,6 +246,12 @@ pub(crate) fn apply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: WidgetI
     let mut style = theme.interaction_style(component, InteractionState::Focus);
     if style == InteractionStyle::NONE {
         style.border = Some(theme.focus_color());
+    }
+    // The keyboard cursor in an open option list is the row hover wash, so
+    // keys and pointer mark the row Enter picks the same way; the chosen
+    // row keeps its tint and check mark.
+    if scene.node(id).map(|node| node.kind) == Some(WidgetKind::DropdownOption) {
+        style = theme.interaction_style(component, InteractionState::Hover);
     }
     if let Some(decoration) = apply_interaction_style(runtime, scene, id, style, FOCUS_RING_W) {
         runtime.with(|rt| rt.borrow_mut().ring = Some(decoration));
@@ -351,11 +422,14 @@ fn strip_applied_interaction(
             .get_mut(restore.index)
         {
             match primitive {
-                Primitive::GlyphQuad { color, .. } | Primitive::Line { color, .. } => {
+                Primitive::GlyphQuad { color, .. }
+                | Primitive::Line { color, .. }
+                | Primitive::StrokeRect { color, .. } => {
                     *color = restore.color;
                 }
                 Primitive::ImageQuad { tint, .. } => *tint = restore.color,
-                Primitive::SolidRect { .. } => {}
+                // Only a link's underline is recorded as a rect.
+                Primitive::SolidRect { color, .. } => *color = restore.color,
             }
             scene.mark_dirty(restore.owner, DirtyFlags::PAINT);
         }
@@ -416,11 +490,16 @@ fn recolor_foreground(
         .paint(id)
         .map_or(0, |paint| ordinary_primitive_end(runtime, id, paint));
     let before = restores.len();
+    // A link's underline is a rect drawn in its ink, so it follows the text.
+    let link = scene
+        .node(id)
+        .is_some_and(|node| node.kind == WidgetKind::Link);
     for (index, primitive) in scene.paint_mut(id).primitives[..end].iter_mut().enumerate() {
         let color = match primitive {
             Primitive::GlyphQuad { color, .. } | Primitive::Line { color, .. } => color,
             Primitive::ImageQuad { tint, .. } => tint,
-            Primitive::SolidRect { .. } => continue,
+            Primitive::SolidRect { color, .. } if link => color,
+            Primitive::SolidRect { .. } | Primitive::StrokeRect { .. } => continue,
         };
         restores.push(PrimitiveColorRestore {
             owner: id,
@@ -455,23 +534,82 @@ fn apply_interaction_style(
         return None;
     }
     let (rect, owner) = decoration_geometry(runtime, scene, id)?;
+    let component = interaction_component(scene, id);
+    let kind = scene.node(id).map(|node| node.kind);
 
     let background = style.background.map(|color| {
-        let corner_radius = theme_for(runtime, id).shape.radius(3.0, rect.height);
+        let shape = theme_for(runtime, id).shape;
+        // A toggle is too small to tint in place: its wash is a soft halo
+        // behind the control, round for the round ones.
+        let halo = component == Some(InteractionComponent::Toggle);
+        let (wash, corner_radius) = if halo {
+            let wash = Rect::new(
+                rect.x - TOGGLE_HALO,
+                rect.y - TOGGLE_HALO,
+                rect.width + 2.0 * TOGGLE_HALO,
+                rect.height + 2.0 * TOGGLE_HALO,
+            );
+            let radius = match kind {
+                Some(WidgetKind::Checkbox) => shape.radius(6.0, wash.height),
+                _ => shape.pill(wash.height),
+            };
+            (wash, radius)
+        } else {
+            (rect, shape.radius(3.0, rect.height))
+        };
+        // A row that paints nothing itself (a table row: its cells paint) is
+        // washed on top of its last painted cell, since a wash under the
+        // cells' opaque fills would not show.
+        let own_end = scene
+            .paint(id)
+            .map_or(0, |paint| ordinary_primitive_end(runtime, id, paint));
+        let on_top = !halo && own_end == 0;
+        let id = if on_top { owner } else { id };
         let end = scene
             .paint(id)
             .map_or(0, |paint| ordinary_primitive_end(runtime, id, paint));
-        let position = scene.paint(id).map_or(0, |paint| {
-            paint.primitives[..end]
-                .iter()
-                .position(|primitive| {
-                    matches!(
-                        primitive,
-                        Primitive::GlyphQuad { .. } | Primitive::ImageQuad { .. }
-                    )
-                })
-                .unwrap_or(end)
-        });
+        let position = if halo {
+            0
+        } else if on_top {
+            end
+        } else {
+            scene.paint(id).map_or(0, |paint| {
+                paint.primitives[..end]
+                    .iter()
+                    .position(|primitive| {
+                        matches!(
+                            primitive,
+                            Primitive::GlyphQuad { .. } | Primitive::ImageQuad { .. }
+                        )
+                    })
+                    .unwrap_or(end)
+            })
+        };
+        // Weigh the wash against what it covers: the widget's own opaque
+        // fill under it, else the page.
+        let backdrop = scene
+            .paint(id)
+            .and_then(|paint| {
+                let (cx, cy) = (wash.x + wash.width * 0.5, wash.y + wash.height * 0.5);
+                paint.primitives[..position]
+                    .iter()
+                    .rev()
+                    .find_map(|p| match *p {
+                        Primitive::SolidRect { rect, color, .. }
+                            if color.a == 255
+                                && rect.x <= cx
+                                && cx <= rect.x + rect.width
+                                && rect.y <= cy
+                                && cy <= rect.y + rect.height =>
+                        {
+                            Some(color)
+                        }
+                        _ => None,
+                    })
+            })
+            .unwrap_or_else(|| theme_for(runtime, id).page);
+        let color = crate::widgets::theme::wash_over(color, backdrop);
+        let rect = wash;
         // The new rect shifts the later primitives of this node, including the
         // colour restores of decorations already applied.
         shift_restores(runtime, id, position, 1);
@@ -508,7 +646,61 @@ fn apply_interaction_style(
     let border_owner = style.border.map(|border| {
         // Strokes already on this owner now have the new one after them.
         retail_strokes(runtime, owner, None);
-        push_ring_stroke(scene.paint_mut(owner), rect, 0.0, border_width, border);
+        // A free-standing control or a link wears its focus ring just outside
+        // its edge. Rows, tabs and options sit flush against their
+        // neighbours, which would paint over an outset ring, so theirs stays
+        // inside. A field's ring replaces its border, so it is not doubled.
+        let outset = border_width == FOCUS_RING_W
+            && (matches!(
+                component,
+                Some(InteractionComponent::Button | InteractionComponent::Toggle)
+            ) || kind == Some(WidgetKind::Link));
+        let inset = if outset {
+            -(FOCUS_RING_W + FOCUS_RING_GAP)
+        } else {
+            0.0
+        };
+        // A slider rings its thumb, the part the arrows move, rather than a
+        // box around the whole rail.
+        let thumb = if kind == Some(WidgetKind::Slider) {
+            scene.paint(owner).and_then(|paint| {
+                let end = ordinary_primitive_end(runtime, owner, paint);
+                paint.primitives[..end].iter().rev().find_map(|p| match *p {
+                    Primitive::SolidRect {
+                        rect,
+                        corner_radius,
+                        ..
+                    } if rect.width > 0.0 && (rect.width - rect.height).abs() < 0.5 => {
+                        Some((rect, corner_radius))
+                    }
+                    _ => None,
+                })
+            })
+        } else {
+            None
+        };
+        let (rect, radius) = match thumb {
+            Some(thumb) => thumb,
+            None if kind == Some(WidgetKind::Link) => (rect, LINK_RING_RADIUS),
+            None => (rect, surface_radius(runtime, scene, owner)),
+        };
+        // A square tab or row still takes the design's small rounding on
+        // its ring, so focus has one shape language across controls.
+        let radius = if radius == 0.0 && component == Some(InteractionComponent::Navigation) {
+            theme_for(runtime, id)
+                .shape
+                .radius(NAV_RING_RADIUS, rect.height)
+        } else {
+            radius
+        };
+        push_ring_stroke(
+            scene.paint_mut(owner),
+            rect,
+            inset,
+            radius,
+            border_width,
+            border,
+        );
         scene.mark_dirty(owner, DirtyFlags::PAINT);
         owner
     });
@@ -533,7 +725,21 @@ fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) ->
     let Some(component) = interaction_component(scene, id) else {
         return false;
     };
-    let style = interaction_style_for(runtime, id, component, InteractionState::Hover);
+    let mut style = interaction_style_for(runtime, id, component, InteractionState::Hover);
+    // A link is text: a wash or box around one word reads as focus. It
+    // answers hover by deepening its ink toward the body text instead.
+    if scene
+        .node(id)
+        .is_some_and(|node| node.kind == WidgetKind::Link)
+        && style.background.is_some()
+    {
+        let theme = theme_for(runtime, id);
+        style = InteractionStyle::foreground(crate::widgets::theme::mix_color(
+            theme.link_color(),
+            theme.text,
+            0.6,
+        ));
+    }
     let Some(decoration) = apply_interaction_style(runtime, scene, id, style, HOVER_BORDER_W)
     else {
         return false;
@@ -1098,6 +1304,19 @@ pub fn update_pointer_proximity_hit(
     point: Point,
     hit: Option<WidgetId>,
 ) -> bool {
+    update_pointer_proximity_held(runtime, scene, point, hit, false)
+}
+
+/// [`update_pointer_proximity_hit`] for a pointer the keyboard has taken
+/// hover from: with `held`, tooltips stay hidden under the resting pointer
+/// too, so a label left by the mouse does not cover what the keys move to.
+pub fn update_pointer_proximity_held(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    point: Point,
+    hit: Option<WidgetId>,
+    held: bool,
+) -> bool {
     let control_changed = update_control_hover(runtime, scene, hit);
     let proximity_changed = runtime.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -1131,36 +1350,60 @@ pub fn update_pointer_proximity_hit(
             let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
                 continue;
             };
-            let visible = rect.contains(point);
-            if visible == tooltip.visible {
-                continue;
-            }
-            tooltip.visible = visible;
-            if let Some(Primitive::SolidRect { color, .. }) =
-                scene.paint_mut(id).primitives.get_mut(tooltip.background)
-            {
-                *color = if visible {
-                    tooltip.background_color
-                } else {
-                    Color::TRANSPARENT
-                };
-            }
-            let pd = scene.paint_mut(id);
-            for primitive in &mut pd.primitives[tooltip.glyph_start..tooltip.glyph_end] {
-                if let Primitive::GlyphQuad { color, .. } = primitive {
-                    *color = if visible {
-                        tooltip.text_color
-                    } else {
-                        Color::TRANSPARENT
-                    };
-                }
-            }
-            // Only the tooltip's host is repainted: it is an overlay whose
-            // retained instances already cover the label past its layout box.
-            scene.mark_dirty(id, DirtyFlags::PAINT);
-            changed = true;
+            changed |= show_tooltip(scene, id, tooltip, !held && rect.contains(point));
         }
         changed
     });
     control_changed | proximity_changed
+}
+
+/// Hides every shown hover tooltip. Returns whether paint changed.
+pub fn hide_hover_tooltips(runtime: &Runtime, scene: &mut Scene) -> bool {
+    runtime.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let registry = &mut *registry;
+        let mut changed = false;
+        for &id in &registry.tooltip_ids {
+            if let Some(tooltip) = registry.hover_tooltips.get_mut(id) {
+                changed |= show_tooltip(scene, id, tooltip, false);
+            }
+        }
+        changed
+    })
+}
+
+/// Shows or hides one tooltip by recolouring its retained primitives.
+fn show_tooltip(
+    scene: &mut Scene,
+    id: WidgetId,
+    tooltip: &mut crate::widgets::HoverTooltipState,
+    visible: bool,
+) -> bool {
+    if visible == tooltip.visible {
+        return false;
+    }
+    tooltip.visible = visible;
+    if let Some(Primitive::SolidRect { color, .. }) =
+        scene.paint_mut(id).primitives.get_mut(tooltip.background)
+    {
+        *color = if visible {
+            tooltip.background_color
+        } else {
+            Color::TRANSPARENT
+        };
+    }
+    let pd = scene.paint_mut(id);
+    for primitive in &mut pd.primitives[tooltip.glyph_start..tooltip.glyph_end] {
+        if let Primitive::GlyphQuad { color, .. } = primitive {
+            *color = if visible {
+                tooltip.text_color
+            } else {
+                Color::TRANSPARENT
+            };
+        }
+    }
+    // Only the tooltip's host is repainted: it is an overlay whose
+    // retained instances already cover the label past its layout box.
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+    true
 }

@@ -179,6 +179,7 @@ pub fn emit_text_paint_face(
     };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    pd.origin = Some(Point { x: 0.0, y: 0.0 });
     rasterize_and_push(
         pd,
         shaper,
@@ -204,10 +205,11 @@ fn button_intrinsic(
     appearance: ButtonAppearance,
 ) -> Size {
     let sh = theme_for(runtime, id).shape;
+    // Every appearance takes the design's frame, so solid, outlined and ghost
+    // buttons in one row share a height; a thin outline sits in the padding.
     let chrome = match appearance {
         ButtonAppearance::Solid => 2.0 * sh.frame + sh.shadow,
-        ButtonAppearance::Outline => 2.0 * OUTLINE_FRAME,
-        ButtonAppearance::Ghost => 0.0,
+        ButtonAppearance::Outline | ButtonAppearance::Ghost => 2.0 * sh.frame,
     };
     Size {
         width: ts.width + 2.0 * sh.pad(PAD_H) + chrome,
@@ -284,15 +286,16 @@ pub fn emit_button_paint(
     let t = theme_for(runtime, id);
     let sh = t.shape;
     let solid = appearance == ButtonAppearance::Solid;
-    // Every disabled button is drawn alike, the disabled fill inside a thin
-    // outline, so solid, outlined and ghost buttons read as off the same way.
+    // Every disabled button is drawn alike, a flat disabled fill with only
+    // the design's own frame, so it reads as off rather than as a field.
     let frame = match appearance {
-        _ if disabled => OUTLINE_FRAME.max(sh.frame),
+        _ if disabled => sh.frame,
         ButtonAppearance::Solid => sh.frame,
         ButtonAppearance::Outline => OUTLINE_FRAME,
         ButtonAppearance::Ghost => 0.0,
     };
-    let shadow = if solid { sh.shadow } else { 0.0 };
+    // A disabled button lies flat: no block shadow to suggest it can be pressed.
+    let shadow = if solid && !disabled { sh.shadow } else { 0.0 };
     let bg = match (disabled, appearance) {
         (true, _) => t.disabled,
         (false, ButtonAppearance::Solid) => t.accent,
@@ -383,7 +386,7 @@ const DISABLED_FRAME_SHARE: f32 = 0.5;
 
 /// How far a disabled button's label fades from the muted text color toward
 /// the disabled fill.
-const DISABLED_LABEL_FADE: f32 = 0.42;
+const DISABLED_LABEL_FADE: f32 = 0.2;
 
 /// Height of capital letters as a share of the font size, close to that of
 /// the bundled sans faces.

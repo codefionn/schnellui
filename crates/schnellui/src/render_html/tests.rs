@@ -625,7 +625,8 @@ mod tests {
             "--sui-focus: {}",
             color_css(Theme::default().focus_color())
         )));
-        assert!(html.contains("outline-offset:-3px"));
+        assert!(html.contains("outline-offset:2px"));
+        assert!(html.contains("outline-offset:-2px"));
         assert!(html.contains("@media (forced-colors: active)"));
         assert!(html.contains(
             r#"data-sui-name="README.md" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}""#
@@ -678,7 +679,7 @@ mod tests {
             color_css(hover_border)
         )));
         assert!(html.contains(&format!(
-            "outline:3px solid {};outline-offset:-3px;",
+            "outline:2px solid {};outline-offset:2px;",
             color_css(focus_border)
         )));
         assert!(html.contains(&format!("color:{};", color_css(toggle_active))));

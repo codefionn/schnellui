@@ -124,8 +124,10 @@ fn selection_colors(
     selected: bool,
 ) -> (Color, Option<Color>) {
     let t = theme_for(runtime, id);
+    // A classic or underline tab marks selection with its bar alone, so the
+    // neutral hover fill and the accent selection never look alike.
     let underline =
-        kind == WidgetKind::Tab && tab_appearance(runtime, id) == TabAppearance::Underline;
+        kind == WidgetKind::Tab && tab_appearance(runtime, id) != TabAppearance::Navigation;
     let bg = if underline {
         if selected {
             tab_style(runtime, id)
@@ -140,23 +142,60 @@ fn selection_colors(
         over(t.selection, t.surface)
     } else if selected {
         t.selection
-    } else if kind == WidgetKind::Tab && tab_appearance(runtime, id) == TabAppearance::Navigation {
+    } else if matches!(kind, WidgetKind::Tab | WidgetKind::ListItem) {
+        // A resting tab or list row is just its label on whatever holds it:
+        // a filled chip per row reads as a stack of buttons. Hover washes
+        // it, selection fills it.
         Color::TRANSPARENT
     } else {
         t.surface
     };
     match kind {
+        // A chosen list item carries an accent rail at its leading edge, so
+        // selection reads apart from the hover wash.
+        WidgetKind::ListItem => (
+            bg,
+            Some(if selected {
+                t.indicator_color()
+            } else {
+                Color::TRANSPARENT
+            }),
+        ),
         WidgetKind::Tab => {
             let ind = if selected {
                 tab_style(runtime, id)
                     .indicator
-                    .map_or(t.accent, |(color, _)| color)
+                    .map_or(t.indicator_color(), |(color, _)| color)
             } else {
                 Color::TRANSPARENT
             };
             (bg, Some(ind))
         }
         _ => (bg, None),
+    }
+}
+
+/// How far a navigation row's rail steps in from the leading edge so its ends
+/// stay inside a rounded row: where the row's corner curve crosses the rail's
+/// top, `inset` below the row top. Zero for a square row.
+fn rail_indent(sh: crate::widgets::Shape, rect: Rect, inset: f32) -> f32 {
+    let r = sh.radius(3.0, rect.height);
+    if r <= inset {
+        return 0.0;
+    }
+    let dy = r - inset;
+    r - (r * r - dy * dy).max(0.0).sqrt()
+}
+
+/// Half the width of a dropdown option's check mark.
+const OPTION_CHECK_HALF: f32 = 4.5;
+const OPTION_CHECK_STROKE: f32 = 2.0;
+
+fn option_check_color(runtime: &crate::widgets::Runtime, id: WidgetId, selected: bool) -> Color {
+    if selected {
+        theme_for(runtime, id).link_color()
+    } else {
+        Color::TRANSPARENT
     }
 }
 
@@ -233,10 +272,10 @@ fn emit_selectable_paint(
     };
     let rect = node_rect(scene, id, intrinsic);
     let (bg, indicator) = selection_colors(runtime, id, kind, selected);
-    let appearance = if kind == WidgetKind::Tab {
-        tab_appearance(runtime, id)
-    } else {
-        TabAppearance::Classic
+    let appearance = match kind {
+        WidgetKind::Tab => tab_appearance(runtime, id),
+        WidgetKind::ListItem => TabAppearance::Navigation,
+        _ => TabAppearance::Classic,
     };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
@@ -267,7 +306,7 @@ fn emit_selectable_paint(
             TabAppearance::Navigation => {
                 let inset = sh.pad(4.0).min(rect.height * 0.25);
                 Rect::new(
-                    rect.x,
+                    rect.x + rail_indent(sh, rect, inset),
                     rect.y + inset,
                     thickness + 1.0,
                     (rect.height - 2.0 * inset).max(0.0),
@@ -283,6 +322,35 @@ fn emit_selectable_paint(
                 0.0
             },
         });
+    }
+    // [1][2] a dropdown option's check mark at its trailing edge, drawn in
+    // every row and transparent unless chosen, so selection stays a recolor.
+    if kind == WidgetKind::DropdownOption {
+        let cx = rect.x + rect.width - f - pad_h - OPTION_CHECK_HALF;
+        let cy = rect.y + rect.height * 0.5;
+        let color = option_check_color(runtime, id, selected);
+        let (a, b, c) = (
+            Point {
+                x: cx - OPTION_CHECK_HALF,
+                y: cy,
+            },
+            Point {
+                x: cx - OPTION_CHECK_HALF * 0.3,
+                y: cy + OPTION_CHECK_HALF * 0.7,
+            },
+            Point {
+                x: cx + OPTION_CHECK_HALF,
+                y: cy - OPTION_CHECK_HALF * 0.8,
+            },
+        );
+        for (from, to) in [(a, b), (b, c)] {
+            pd.primitives.push(Primitive::Line {
+                from,
+                to,
+                width: OPTION_CHECK_STROKE,
+                color,
+            });
+        }
     }
     // A dropdown option's frame strips (drawn over the surface so [0] keeps its
     // index): the popup panel's left/right edges plus a bottom rule per row —
@@ -371,9 +439,17 @@ fn recolor_selection(
     selected: bool,
 ) {
     let (bg, indicator) = selection_colors(runtime, id, kind, selected);
+    let check = option_check_color(runtime, id, selected);
     let pd = scene.paint_mut(id);
     if let Some(Primitive::SolidRect { color, .. }) = pd.primitives.get_mut(0) {
         *color = bg;
+    }
+    if kind == WidgetKind::DropdownOption {
+        for index in 1..=2 {
+            if let Some(Primitive::Line { color, .. }) = pd.primitives.get_mut(index) {
+                *color = check;
+            }
+        }
     }
     if let Some(ind) = indicator {
         if let Some(Primitive::SolidRect { color, .. }) = pd.primitives.get_mut(1) {
@@ -391,10 +467,23 @@ pub(crate) fn resize_tab_surface(
     scene: &mut Scene,
     id: WidgetId,
 ) {
-    if scene
-        .node(id)
-        .is_none_or(|node| node.kind != WidgetKind::Tab)
-    {
+    let kind = scene.node(id).map(|node| node.kind);
+    if kind == Some(WidgetKind::ListItem) {
+        // A list item spans its list's width (the list stretches its rows):
+        // the surface follows the final box, the rail keeps its own width.
+        let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
+            return;
+        };
+        let pd = scene.paint_mut(id);
+        if let Some(Primitive::SolidRect {
+            rect: surface_rect, ..
+        }) = pd.primitives.get_mut(0)
+        {
+            surface_rect.width = rect.width;
+        }
+        return;
+    }
+    if kind != Some(WidgetKind::Tab) {
         return;
     }
     let Some(mut rect) = scene.layout(id).map(|layout| layout.rect) else {
@@ -451,7 +540,7 @@ pub(crate) fn resize_tab_surface(
         ..
     }) = pd.primitives.get_mut(1)
     {
-        indicator_rect.x = rect.x;
+        indicator_rect.x = rect.x + rail_indent(sh, rect, inset);
         indicator_rect.y = rect.y + inset;
         indicator_rect.height = (rect.height - 2.0 * inset).max(0.0);
     }

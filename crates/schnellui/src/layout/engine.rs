@@ -15,6 +15,9 @@ struct Placed {
 
 pub struct LayoutEngine {
     taffy: taffy::TaffyTree<WidgetId>,
+    /// The window box offered to the last whole-tree pass. Anchored popups
+    /// stay inside it.
+    viewport: Option<Rect>,
     map: SecondaryMap<WidgetId, taffy::NodeId>,
     styles: SecondaryMap<WidgetId, ContainerStyle>,
     /// Per-child flex factors (SOUL §8.1) — folded into the node's Taffy style
@@ -80,6 +83,7 @@ impl LayoutEngine {
         LayoutEngine {
             taffy,
             map: SecondaryMap::new(),
+            viewport: None,
             styles: SecondaryMap::new(),
             flexes: SecondaryMap::new(),
             measures: SecondaryMap::new(),
@@ -471,6 +475,9 @@ impl LayoutEngine {
             height: taffy::AvailableSpace::Definite(available.height),
         };
         self.resolve_viewport_queries(scene, available);
+        if scene.root() == Some(root) || scene.node(root).and_then(|n| n.parent).is_none() {
+            self.viewport = Some(Rect::new(0.0, 0.0, available.width, available.height));
+        }
         self.run_taffy(root_t, avail, &mut measurer);
         self.write_boxes(scene, root);
 
@@ -713,13 +720,16 @@ impl LayoutEngine {
                 for &child in &node.children {
                     if let Some(&ct) = self.map.get(child) {
                         if let Ok(cl) = self.taffy.layout(ct) {
-                            self.scratch.push((
-                                child,
-                                Point {
-                                    x: abs.x + cl.location.x,
-                                    y: abs.y + cl.location.y,
-                                },
-                            ));
+                            let mut at = Point {
+                                x: abs.x + cl.location.x,
+                                y: abs.y + cl.location.y,
+                            };
+                            if let Some(style) = self.styles.get(child) {
+                                if style.anchor.is_some() {
+                                    at = keep_anchored_in_view(self.viewport, style, at, cl.size);
+                                }
+                            }
+                            self.scratch.push((child, at));
                         }
                     }
                 }
@@ -899,6 +909,35 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
             bottom: taffy::style_helpers::auto(),
         };
     }
+}
+
+/// Moves an anchored, floating box back inside the root viewport: shifts it
+/// left when it runs past the right edge, and opens it upward
+/// (`anchor_above`) when it runs past the bottom and fits above.
+fn keep_anchored_in_view(
+    viewport: Option<Rect>,
+    style: &ContainerStyle,
+    at: Point,
+    size: taffy::Size<f32>,
+) -> Point {
+    let Some(view) = viewport else {
+        return at;
+    };
+    let mut at = at;
+    let right = view.x + view.width;
+    if at.x + size.width > right {
+        at.x = (right - size.width).max(view.x);
+    }
+    if let (Some(anchor), Some(above)) = (style.anchor, style.anchor_above) {
+        let bottom = view.y + view.height;
+        // The parent's top in absolute coordinates.
+        let parent_y = at.y - anchor.y;
+        let flipped = parent_y + above - size.height;
+        if at.y + size.height > bottom && flipped >= view.y {
+            at.y = flipped;
+        }
+    }
+    at
 }
 
 /// Fold a node's [`FlexChild`] factors onto its Taffy style (SOUL §8.1): only the

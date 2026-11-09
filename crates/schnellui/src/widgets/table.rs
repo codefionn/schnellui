@@ -31,10 +31,11 @@ use schnellui::layout::{Container, ContainerStyle};
 use schnellui::scene::{
     Color, DirtyFlags, Point, Primitive, Rect, Scene, Size, WidgetId, WidgetKind,
 };
-use schnellui::text::{GlyphAtlas, TextShaper};
+use schnellui::text::{FontFace, GlyphAtlas, ShapeOptions, TextShaper};
 use smallvec::SmallVec;
 
 use crate::widgets::selection::{clear_selected, is_selected, set_selected};
+use crate::widgets::theme::mix_color;
 use crate::widgets::{
     node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers, BuildCtx,
     SortDirection, View, PAD_H, PAD_V,
@@ -45,9 +46,44 @@ use crate::widgets::{
 // ---------------------------------------------------------------------------
 
 /// Cell label font size — a step below button text, as tables usually set it.
+/// Extra vertical padding per side on a table row beyond the button padding,
+/// so a row is a comfortable 28px click target at the classic density.
+const ROW_EXTRA_PAD: f32 = 0.0;
 const CELL_TEXT_SIZE: f32 = 14.0;
 /// Row-separator hairline thickness.
 const TABLE_LINE_W: f32 = 1.0;
+
+/// Width of the accent rail on a selected row's leading edge.
+const ROW_RAIL_W: f32 = 3.0;
+
+/// Per-cell placement decided by the table: right-aligned numbers and the
+/// selection rail on a selectable row's first cell.
+#[derive(Clone, Copy)]
+struct CellLayout {
+    align_end: bool,
+    lead: bool,
+}
+
+fn cell_shape_options(phys: f32, header: bool) -> ShapeOptions {
+    ShapeOptions::new(phys).face(if header {
+        FontFace::SansBold
+    } else {
+        FontFace::Sans
+    })
+}
+
+/// Whether a cell label is a plain number: digits with an optional sign,
+/// decimal point, thousands separators and a trailing percent sign.
+fn is_numeric(label: &str) -> bool {
+    let trimmed = label.trim();
+    let body = trimmed.strip_suffix('%').unwrap_or(trimmed);
+    let body = body.strip_prefix(['-', '+']).unwrap_or(body);
+    !body.is_empty()
+        && body.chars().any(|c| c.is_ascii_digit())
+        && body
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '_')
+}
 
 /// A row-selection callback: fired with the selected **data-row index** (header
 /// rows don't count). One callback per table, shared by every row's click handler.
@@ -309,7 +345,9 @@ impl View for Table {
         for row in &this.rows {
             let mut rs = Vec::with_capacity(row.cells.len());
             for (c, cell) in row.cells.iter().enumerate() {
-                let shaped = ctx.text.shape(&cell.label, phys, None);
+                let shaped = ctx
+                    .text
+                    .shape_with(&cell.label, &cell_shape_options(phys, row.is_header));
                 let sort_width =
                     if row.is_header && (cell.sort_direction.is_some() || cell.on_sort.is_some()) {
                         SORT_ICON_GAP + SORT_ICON_SIZE
@@ -328,6 +366,19 @@ impl View for Table {
             }
             sizes.push(rs);
         }
+        // A column whose every data cell is a number lines up on its right
+        // edge, header included, so digits of equal place sit in one column.
+        let numeric: Vec<bool> = (0..col_widths.len())
+            .map(|c| {
+                let mut cells = this
+                    .rows
+                    .iter()
+                    .filter(|row| !row.is_header)
+                    .filter_map(|row| row.cells.get(c))
+                    .peekable();
+                cells.peek().is_some() && cells.all(|cell| is_numeric(&cell.label))
+            })
+            .collect();
 
         // Selection plumbing: one shared callback; each selectable row's click
         // handler calls it with that row's data index (SOUL §6.3).
@@ -392,7 +443,7 @@ impl View for Table {
                 let shape = theme_for(runtime, cell_id).shape;
                 let intrinsic = Size {
                     width: col_widths[c] + 2.0 * shape.pad(PAD_H),
-                    height: sizes[r][c].height + 2.0 * shape.pad(PAD_V),
+                    height: sizes[r][c].height + 2.0 * (shape.pad(PAD_V) + ROW_EXTRA_PAD),
                 };
                 emit_cell_paint(
                     runtime,
@@ -407,6 +458,10 @@ impl View for Table {
                     cell.sort_direction,
                     intrinsic,
                     ctx.scale,
+                    CellLayout {
+                        align_end: numeric[c],
+                        lead: c == 0 && !is_header && selectable,
+                    },
                 );
                 ctx.layout
                     .set_measure(cell_id, Box::new(move |_avail| intrinsic));
@@ -433,6 +488,9 @@ impl View for Table {
 /// quads inset by the shared padding (SOUL §8.1). The background at index `[0]` is
 /// the recolor target of a row-selection toggle.
 #[allow(clippy::too_many_arguments)]
+/// How far a cell's fill and rule reach back under the previous cell.
+const CELL_SEAM_OVERLAP: f32 = 1.0;
+
 fn emit_cell_paint(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
@@ -446,46 +504,98 @@ fn emit_cell_paint(
     sort_direction: Option<SortDirection>,
     intrinsic: Size,
     scale: f32,
+    cell: CellLayout,
 ) {
     let phys = phys_size_px(CELL_TEXT_SIZE, scale);
-    let shaped = shaper.shape(label, phys, None);
+    let shaped = shaper.shape_with(label, &cell_shape_options(phys, is_header));
     let rect = node_rect(scene, id, intrinsic);
     let t = theme_for(runtime, id);
-    let bg = if is_header {
-        t.surface_muted
+    // A header that would match the selection fill (a yellow design whose
+    // muted surface is its selection) rests on the plain surface instead.
+    // The band is a step toward the separator so it parts from the rows.
+    let bg = if is_header && t.surface_muted != t.selection {
+        mix_color(t.surface_muted, t.separator, 0.35)
+    } else if is_header {
+        t.surface
     } else if selected {
         t.selection
     } else {
         t.surface
     };
+    // A cell after the first reaches one pixel back under its neighbour, so
+    // two fills meeting at a fractional edge leave no lighter seam where
+    // both edges are half covered.
+    let first = scene
+        .node(id)
+        .and_then(|node| node.parent)
+        .and_then(|row| scene.node(row))
+        .is_none_or(|row| row.children.first() == Some(&id));
+    let reach = if first { 0.0 } else { CELL_SEAM_OVERLAP };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    // The fill starts left of the cell's box, so layout anchors the paint
+    // by the box origin rather than by the leftmost primitive.
+    pd.origin = Some(Point {
+        x: rect.x,
+        y: rect.y,
+    });
     pd.primitives.push(Primitive::SolidRect {
-        rect,
+        rect: Rect::new(rect.x - reach, rect.y, rect.width + reach, rect.height),
         color: bg,
         corner_radius: 0.0,
     });
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(
-            rect.x,
+            rect.x - reach,
             rect.y + rect.height - TABLE_LINE_W,
-            rect.width,
+            rect.width + reach,
             TABLE_LINE_W,
         ),
-        color: t.separator,
+        // The header's rule is a step stronger than the rules between rows.
+        color: if is_header {
+            mix_color(t.separator, t.outline, 0.75)
+        } else {
+            t.separator
+        },
         corner_radius: 0.0,
     });
+    // [2] the leading cell of a selectable row carries the selection rail,
+    // transparent until the row is chosen, so selection stays a recolor.
+    if cell.lead {
+        pd.primitives.push(Primitive::SolidRect {
+            rect: Rect::new(rect.x, rect.y, ROW_RAIL_W, rect.height - TABLE_LINE_W),
+            color: if selected {
+                t.indicator_color()
+            } else {
+                Color::TRANSPARENT
+            },
+            corner_radius: 0.0,
+        });
+    }
+    let pad = t.shape.pad(PAD_H);
+    let inv = 1.0 / norm_scale(scale);
+    let sort_room = if is_header && (sortable || sort_direction.is_some()) {
+        SORT_ICON_GAP + SORT_ICON_SIZE
+    } else {
+        0.0
+    };
+    let x = if cell.align_end {
+        rect.x + rect.width - pad - sort_room - shaped.width * inv
+    } else {
+        rect.x + pad
+    };
     rasterize_and_push(
         pd,
         shaper,
         atlas,
         &shaped,
         phys as u32,
+        // Column titles keep body ink; the bold face and the band set them apart.
         t.text,
         scale,
         Point {
-            x: rect.x + t.shape.pad(PAD_H),
-            y: rect.y + t.shape.pad(PAD_V),
+            x,
+            y: rect.y + t.shape.pad(PAD_V) + ROW_EXTRA_PAD,
         },
     );
     if is_header && (sortable || sort_direction.is_some()) {
@@ -625,12 +735,23 @@ fn recolor_row(
                 .collect()
         })
         .unwrap_or_default();
-    for cell in cells {
+    for (column, cell) in cells.into_iter().enumerate() {
         let t = theme_for(runtime, cell);
         let bg = if selected { t.selection } else { t.surface };
         let pd = scene.paint_mut(cell);
         if let Some(Primitive::SolidRect { color, .. }) = pd.primitives.get_mut(0) {
             *color = bg;
+        }
+        if column == 0 {
+            if let Some(Primitive::SolidRect { rect, color, .. }) = pd.primitives.get_mut(2) {
+                if rect.width == ROW_RAIL_W {
+                    *color = if selected {
+                        t.indicator_color()
+                    } else {
+                        Color::TRANSPARENT
+                    };
+                }
+            }
         }
         scene.mark_dirty(cell, DirtyFlags::PAINT);
     }
@@ -855,10 +976,10 @@ mod tests {
         assert_eq!(Role::from_u16(da.role), Role::Cell);
         assert_eq!(da.name.as_deref(), Some("Ada Lovelace"));
         // header band vs data background (SOUL §8.1)
-        assert_eq!(
-            color_of(&scene, hcells[0], 0),
-            crate::widgets::Theme::default().surface_muted
-        );
+        assert_eq!(color_of(&scene, hcells[0], 0), {
+            let t = crate::widgets::Theme::default();
+            mix_color(t.surface_muted, t.separator, 0.35)
+        });
         assert_eq!(
             color_of(&scene, dcells[0], 0),
             crate::widgets::Theme::default().surface

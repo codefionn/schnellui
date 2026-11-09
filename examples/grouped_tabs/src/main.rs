@@ -772,6 +772,7 @@ mod tests {
             for primitive in &app.scene().paint(id).unwrap().primitives {
                 let (right, visible) = match primitive {
                     schnellui::scene::Primitive::SolidRect { rect, color, .. }
+                    | schnellui::scene::Primitive::StrokeRect { rect, color, .. }
                     | schnellui::scene::Primitive::GlyphQuad { rect, color, .. } => {
                         (rect.right(), color.a != 0)
                     }
@@ -813,6 +814,7 @@ mod tests {
                 .iter()
                 .filter(|primitive| match primitive {
                     schnellui::scene::Primitive::SolidRect { color, .. }
+                    | schnellui::scene::Primitive::StrokeRect { color, .. }
                     | schnellui::scene::Primitive::GlyphQuad { color, .. }
                     | schnellui::scene::Primitive::Line { color, .. } => color.a != 0,
                     schnellui::scene::Primitive::ImageQuad { tint, .. } => tint.a != 0,

@@ -606,6 +606,7 @@ pub fn paint_layout(app: &App) -> Vec<PaintBox> {
             for primitive in &paint.primitives {
                 let (kind, rect) = match primitive {
                     Primitive::SolidRect { rect, .. } => (0, rect),
+                    Primitive::StrokeRect { rect, .. } => (3, rect),
                     Primitive::GlyphQuad { rect, .. } => (1, rect),
                     Primitive::ImageQuad { rect, .. } => (2, rect),
                     Primitive::Line { .. } => continue,

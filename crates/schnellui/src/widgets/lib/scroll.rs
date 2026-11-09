@@ -92,12 +92,14 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
         [
             Primitive::SolidRect {
                 rect: track,
-                color: theme.surface_muted,
+                // A quiet groove on the page, whatever the muted surface is
+                // (a yellow one in an ink-framed design).
+                color: crate::widgets::theme::mix_color(theme.page, theme.separator, 0.35),
                 corner_radius: theme.shape.pill(track.width),
             },
             Primitive::SolidRect {
                 rect: thumb_paint(thumb),
-                color: theme.outline,
+                color: theme.track_color(),
                 corner_radius: theme.shape.pill(thumb.width - 2.0 * THUMB_PAINT_INSET),
             },
         ]

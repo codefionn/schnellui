@@ -13,6 +13,9 @@ use rustc_hash::FxHashMap;
 use swash::scale::image::Image;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
+
+/// Line height of text that can wrap, as a multiple of its font size.
+const PARAGRAPH_LINE_HEIGHT: f32 = 1.4;
 use swash::FontRef;
 
 /// The shaper/measurer, owning pooled Parley + Fontique contexts (SOUL §8.1). The
@@ -317,6 +320,13 @@ impl TextShaper {
                 WrapMode::Anywhere => {
                     builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
                 }
+            }
+            // Text that can flow onto several lines gets reading leading, so a
+            // paragraph is not set as tight as a one-line label.
+            if opts.max_width.is_some() && opts.wrap != WrapMode::NoWrap {
+                builder.push_default(StyleProperty::LineHeight(
+                    parley::LineHeight::FontSizeRelative(PARAGRAPH_LINE_HEIGHT),
+                ));
             }
             style(&mut builder);
             builder.build_into(layout, text);

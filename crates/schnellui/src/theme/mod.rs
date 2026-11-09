@@ -11,92 +11,89 @@ use schnellui::widgets::{
 };
 
 /// The default light design: a cool slate neutral ramp from ink to page.
-pub const LIGHT: Theme = Theme {
-    text: Color::rgb(0x1d, 0x24, 0x2e),
-    text_muted: Color::rgb(0x5d, 0x6a, 0x7a),
-    surface: Color::WHITE,
-    surface_muted: Color::rgb(0xf1, 0xf3, 0xf7),
-    separator: Color::rgb(0xd3, 0xd9, 0xe2),
-    outline: Color::rgb(0x8a, 0x96, 0xa8),
-    accent: Color::rgb(0x2e, 0x63, 0xd4),
-    on_accent: Color::WHITE,
-    selection: Color::rgb(0xdb, 0xe6, 0xf9),
-    interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgba(0x2e, 0x63, 0xd4, 0x18),
-            Color::rgb(0x1d, 0x24, 0x2e),
-            Color::rgba(0x2e, 0x63, 0xd4, 0xb8),
-        ),
-        focus: InteractionStyle::border(Color::rgb(0x2e, 0x63, 0xd4)),
-        active: InteractionStyle::background(Color::rgb(0xdb, 0xe6, 0xf9)),
-    },
-    component_interactions: ComponentInteractions::NONE,
-    text_selection: Color::rgb(0xb7, 0xd2, 0xf8),
-    disabled: Color::rgb(0x9d, 0xa7, 0xb5),
-    positive: Color::rgb(0x17, 0x87, 0x45),
-    attention: Color::rgb(0xcf, 0x3d, 0x3d),
-    media: Color::rgb(0xc2, 0xc9, 0xd4),
-    page: Color::rgb(0xe7, 0xea, 0xf0),
-    shape: Shape::CLASSIC,
-};
+pub const LIGHT: Theme = schnellui::widgets::DEFAULT_THEME;
+
+/// Hover, focus and press for a palette: hover lays a faint wash of `ink`
+/// over whatever it touches, press a stronger one, and focus is an accent
+/// ring. Text fields answer hover with a darker border instead of a wash.
+const fn states(ink: Color, hover: u8, press: u8, accent: Color) -> InteractionStates {
+    InteractionStates {
+        hover: InteractionStyle::background(Color::rgba(ink.r, ink.g, ink.b, hover)),
+        focus: InteractionStyle::border(accent),
+        active: InteractionStyle::background(Color::rgba(ink.r, ink.g, ink.b, press)),
+    }
+}
+
+/// Component overrides: buttons take a stronger wash of `ink` than rows, so
+/// the change shows on a filled button; fields answer hover with `border`,
+/// a step between the rest outline and the ink, so hover stays below the
+/// accent focus border.
+const fn field_states(ink: Color, border: Color, accent: Color) -> ComponentInteractions {
+    ComponentInteractions {
+        button: Some(states(ink, 0x40, 0x60, accent)),
+        editable: Some(InteractionStates {
+            hover: InteractionStyle::border(border),
+            focus: InteractionStyle::border(accent),
+            active: InteractionStyle::NONE,
+        }),
+        ..ComponentInteractions::NONE
+    }
+}
 
 /// A dark design with deep neutral surfaces and a lifted blue accent.
 pub const DARK: Theme = Theme {
-    text: Color::rgb(0xe8, 0xe8, 0xe8),
-    text_muted: Color::rgb(0x9a, 0x9a, 0x9a),
+    text: Color::rgb(0xe6, 0xe8, 0xec),
+    text_muted: Color::rgb(0xa0, 0xa6, 0xb0),
     surface: Color::rgb(0x2a, 0x2d, 0x33),
     surface_muted: Color::rgb(0x34, 0x38, 0x40),
-    separator: Color::rgb(0x3d, 0x41, 0x48),
-    outline: Color::rgb(0x5a, 0x60, 0x6b),
+    separator: Color::rgb(0x40, 0x45, 0x4e),
+    outline: Color::rgb(0x7a, 0x82, 0x8f),
     accent: Color::rgb(0x5c, 0x8c, 0xe6),
     on_accent: Color::rgb(0x10, 0x14, 0x1c),
-    selection: Color::rgb(0x2c, 0x3a, 0x55),
-    interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgba(0x5c, 0x8c, 0xe6, 0x1c),
-            Color::rgb(0xe8, 0xe8, 0xe8),
-            Color::rgba(0x5c, 0x8c, 0xe6, 0xc0),
-        ),
-        focus: InteractionStyle::border(Color::rgb(0x5c, 0x8c, 0xe6)),
-        active: InteractionStyle::background(Color::rgb(0x2c, 0x3a, 0x55)),
-    },
-    component_interactions: ComponentInteractions::NONE,
+    selection: Color::rgb(0x30, 0x46, 0x70),
+    interactions: states(Color::WHITE, 0x1c, 0x34, Color::rgb(0x5c, 0x8c, 0xe6)),
+    component_interactions: field_states(
+        Color::WHITE,
+        Color::rgb(0xbc, 0xc1, 0xc7),
+        Color::rgb(0x5c, 0x8c, 0xe6),
+    ),
     text_selection: Color::rgb(0x2f, 0x4a, 0x75),
-    disabled: Color::rgb(0x55, 0x55, 0x55),
+    disabled: Color::rgb(0x33, 0x36, 0x3c),
     positive: Color::rgb(0x3f, 0xae, 0x5e),
-    attention: Color::rgb(0xd9, 0x53, 0x4f),
-    media: Color::rgb(0x44, 0x48, 0x4f),
-    page: Color::rgb(0x1b, 0x1d, 0x22),
+    attention: Color::rgb(0xc8, 0x45, 0x41),
+    media: Color::rgb(0x4e, 0x54, 0x5e),
+    page: Color::rgb(0x17, 0x19, 0x1d),
     shape: Shape::CLASSIC,
 };
 
 /// A warm light design with a green accent.
 pub const FOREST: Theme = Theme {
     text: Color::rgb(0x1d, 0x2a, 0x22),
-    text_muted: Color::rgb(0x6a, 0x7a, 0x70),
+    text_muted: Color::rgb(0x56, 0x66, 0x5c),
     surface: Color::rgb(0xfb, 0xfd, 0xf9),
     surface_muted: Color::rgb(0xee, 0xf3, 0xea),
-    separator: Color::rgb(0xdd, 0xe5, 0xda),
-    outline: Color::rgb(0xa8, 0xb5, 0xa8),
+    separator: Color::rgb(0xcf, 0xd9, 0xcb),
+    outline: Color::rgb(0x7d, 0x8c, 0x80),
     accent: Color::rgb(0x2e, 0x7d, 0x4f),
     on_accent: Color::WHITE,
-    selection: Color::rgb(0xd9, 0xec, 0xdf),
-    interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgba(0x2e, 0x7d, 0x4f, 0x18),
-            Color::rgb(0x1d, 0x2a, 0x22),
-            Color::rgba(0x2e, 0x7d, 0x4f, 0xb8),
-        ),
-        focus: InteractionStyle::border(Color::rgb(0x2e, 0x7d, 0x4f)),
-        active: InteractionStyle::background(Color::rgb(0xd9, 0xec, 0xdf)),
-    },
-    component_interactions: ComponentInteractions::NONE,
+    selection: Color::rgb(0xb0, 0xd2, 0xbd),
+    interactions: states(
+        Color::rgb(0x1d, 0x2a, 0x22),
+        0x1c,
+        0x38,
+        Color::rgb(0x2e, 0x7d, 0x4f),
+    ),
+    component_interactions: field_states(
+        Color::rgb(0x1d, 0x2a, 0x22),
+        Color::rgb(0x4d, 0x5b, 0x51),
+        Color::rgb(0x2e, 0x7d, 0x4f),
+    ),
     text_selection: Color::rgb(0xbf, 0xe3, 0xcc),
-    disabled: Color::rgb(0x74, 0x81, 0x79),
+    disabled: Color::rgb(0xe1, 0xe7, 0xde),
     positive: Color::rgb(0x1f, 0x6b, 0x40),
-    attention: Color::rgb(0xc0, 0x56, 0x3a),
-    media: Color::rgb(0xd3, 0xdc, 0xcf),
-    page: Color::rgb(0x9a, 0xa8, 0x96),
+    attention: Color::rgb(0xb0, 0x4a, 0x2f),
+    media: Color::rgb(0xb3, 0xc0, 0xb0),
+    page: Color::rgb(0xe8, 0xee, 0xe5),
     shape: Shape::CLASSIC,
 };
 
@@ -112,19 +109,28 @@ pub const BRUTAL: Theme = Theme {
     on_accent: Color::rgb(0x14, 0x12, 0x0e),
     selection: Color::rgb(0xff, 0xe9, 0x4a),
     interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgb(0xff, 0xe9, 0x4a),
-            Color::rgb(0x14, 0x12, 0x0e),
-            Color::rgb(0x14, 0x12, 0x0e),
-        ),
+        hover: InteractionStyle::background(Color::rgb(0xff, 0xf3, 0xa6)),
         focus: InteractionStyle::border(Color::rgb(0x14, 0x12, 0x0e)),
         active: InteractionStyle::background(Color::rgb(0xff, 0xd5, 0x00)),
     },
-    component_interactions: ComponentInteractions::NONE,
+    component_interactions: ComponentInteractions {
+        // A yellow wash would vanish on a yellow button: buttons darken.
+        button: Some(states(
+            Color::rgb(0x14, 0x12, 0x0e),
+            0x1c,
+            0x34,
+            Color::rgb(0x14, 0x12, 0x0e),
+        )),
+        ..field_states(
+            Color::rgb(0x14, 0x12, 0x0e),
+            Color::rgb(0x14, 0x12, 0x0e),
+            Color::rgb(0x14, 0x12, 0x0e),
+        )
+    },
     text_selection: Color::rgb(0xff, 0xd5, 0x00),
-    disabled: Color::rgb(0xb5, 0xae, 0x9c),
+    disabled: Color::rgb(0xe6, 0xe1, 0xd3),
     positive: Color::rgb(0x0c, 0x83, 0x46),
-    attention: Color::rgb(0xe6, 0x39, 0x46),
+    attention: Color::rgb(0xd0, 0x2f, 0x3c),
     media: Color::rgb(0xd9, 0xd2, 0xc0),
     page: Color::rgb(0xf2, 0xef, 0xe3),
     shape: Shape {
@@ -138,30 +144,33 @@ pub const BRUTAL: Theme = Theme {
 /// A candy design with pill-shaped controls and an airy pastel palette.
 pub const CANDY: Theme = Theme {
     text: Color::rgb(0x53, 0x2b, 0x4d),
-    text_muted: Color::rgb(0xa8, 0x8a, 0xa2),
+    text_muted: Color::rgb(0x7a, 0x5c, 0x73),
     surface: Color::WHITE,
     surface_muted: Color::rgb(0xff, 0xee, 0xf7),
-    separator: Color::rgb(0xf3, 0xd7, 0xe9),
-    outline: Color::rgb(0xe8, 0xb4, 0xd8),
-    accent: Color::rgb(0xff, 0x5c, 0xa8),
+    separator: Color::rgb(0xec, 0xc6, 0xdc),
+    outline: Color::rgb(0xb8, 0x6e, 0xa2),
+    accent: Color::rgb(0xd6, 0x24, 0x6e),
     on_accent: Color::WHITE,
-    selection: Color::rgb(0xff, 0xd6, 0xea),
-    interactions: InteractionStates {
-        hover: InteractionStyle::all(
-            Color::rgba(0xff, 0x5c, 0xa8, 0x20),
-            Color::rgb(0x53, 0x2b, 0x4d),
-            Color::rgba(0xff, 0x5c, 0xa8, 0xb8),
-        ),
-        focus: InteractionStyle::border(Color::rgb(0xff, 0x5c, 0xa8)),
-        active: InteractionStyle::background(Color::rgb(0xff, 0xd6, 0xea)),
-    },
-    component_interactions: ComponentInteractions::NONE,
+    selection: Color::rgb(0xfa, 0xbf, 0xda),
+    interactions: states(
+        Color::rgb(0xd6, 0x24, 0x6e),
+        0x1a,
+        0x3c,
+        Color::rgb(0xd6, 0x24, 0x6e),
+    ),
+    // Buttons and fields answer hover in the plum ink: a pink wash would
+    // vanish on the pink button.
+    component_interactions: field_states(
+        Color::rgb(0x53, 0x2b, 0x4d),
+        Color::rgb(0x86, 0x4c, 0x78),
+        Color::rgb(0xd6, 0x24, 0x6e),
+    ),
     text_selection: Color::rgb(0xff, 0xc2, 0xe0),
-    disabled: Color::rgb(0xd8, 0xbf, 0xd0),
-    positive: Color::rgb(0x2f, 0xbd, 0x8f),
-    attention: Color::rgb(0xff, 0x7a, 0x59),
-    media: Color::rgb(0xf6, 0xe3, 0xf0),
-    page: Color::rgb(0xff, 0xe3, 0xf2),
+    disabled: Color::rgb(0xf5, 0xe8, 0xf0),
+    positive: Color::rgb(0x1f, 0x8a, 0x66),
+    attention: Color::rgb(0xc6, 0x3c, 0x22),
+    media: Color::rgb(0xe9, 0xc3, 0xdb),
+    page: Color::rgb(0xff, 0xf0, 0xf7),
     shape: Shape {
         roundness: 6.0,
         density: 1.35,
@@ -182,7 +191,7 @@ mod tests {
         assert_ne!(DARK, FOREST);
         assert_ne!(BRUTAL, CANDY);
         assert_eq!(LIGHT.accent, Color::rgb(0x2e, 0x63, 0xd4));
-        assert_eq!(LIGHT.selection, Color::rgb(0xdb, 0xe6, 0xf9));
+        assert_eq!(LIGHT.selection, Color::rgb(0xb5, 0xc9, 0xf3));
     }
 
     #[test]
@@ -208,12 +217,13 @@ mod tests {
     fn focus_colors_keep_non_text_contrast_on_every_common_surface() {
         for theme in [LIGHT, DARK, FOREST, BRUTAL, CANDY] {
             let focus = theme.focus_color();
+            // The ring sits outside a filled control, past a gap, so it
+            // never meets the accent fill itself.
             for background in [
                 theme.page,
                 theme.surface,
                 theme.surface_muted,
                 theme.selection,
-                theme.accent,
             ] {
                 assert!(
                     contrast_ratio(focus, background) >= 3.0,

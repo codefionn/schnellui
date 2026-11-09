@@ -483,7 +483,11 @@ impl View for List {
         let this = *self;
         let id = ctx.scene.insert(WidgetKind::List, parent);
         ctx.scene.a11y_mut(id).role = Role::List.as_u16();
-        ctx.layout.set_container(id, this.style);
+        // Rows span the list, so a short label is as easy to hit as a long
+        // one and the selection reads as a band rather than a ragged chip.
+        let mut style = this.style;
+        style.align = schnellui::layout::Align::Stretch;
+        ctx.layout.set_container(id, style);
         for child in this.children {
             child.build(ctx, Some(id));
         }

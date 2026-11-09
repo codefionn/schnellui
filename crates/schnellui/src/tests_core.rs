@@ -875,6 +875,40 @@ fn focus_step_skips_disabled_widgets_and_wraps() {
     assert_ne!(app.focused_widget(), Some(blocked));
 }
 
+/// A radio group is one Tab stop: Tab enters it at the checked radio and the
+/// next Tab leaves it for the following control, never back to the top.
+#[test]
+fn focus_step_leaves_a_radio_group_for_the_next_control() {
+    use schnellui::widgets::{Button, Radio, Row};
+
+    let view = schnellui::widgets::Column::new()
+        .child(Button::new("before"))
+        .child(
+            Row::new()
+                .child(Radio::new(true).name("Daily"))
+                .child(Radio::new(false).name("Weekly")),
+        )
+        .child(Button::new("after"));
+    let mut app = App::mount_with_size(view, 400, 300);
+    app.frame();
+
+    let before = app.find_widget(Role::Button, Some("before")).unwrap();
+    let daily = app.find_widget(Role::Radio, Some("Daily")).unwrap();
+    let after = app.find_widget(Role::Button, Some("after")).unwrap();
+
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(before));
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(daily));
+    assert!(app.focus_step(false), "Tab leaves the group");
+    assert_eq!(app.focused_widget(), Some(after));
+    assert!(
+        app.focus_step(true),
+        "Shift+Tab re-enters at the checked radio"
+    );
+    assert_eq!(app.focused_widget(), Some(daily));
+}
+
 #[test]
 fn modal_dialog_traps_focus_blocks_background_actions_and_takes_escape() {
     use std::cell::Cell;
@@ -1287,7 +1321,7 @@ fn pointer_focus_is_semantic_but_keyboard_promotes_focus_visible() {
             .unwrap()
             .primitives
             .iter()
-            .filter(|primitive| matches!(primitive, Primitive::Line { .. }))
+            .filter(|primitive| matches!(primitive, Primitive::StrokeRect { .. }))
             .count()
     };
 
@@ -1296,7 +1330,7 @@ fn pointer_focus_is_semantic_but_keyboard_promotes_focus_visible() {
     assert_eq!(line_count(&app), 0, "pointer focus hides keyboard ring");
 
     assert!(app.dispatch_key(UiKey::Enter));
-    assert_eq!(line_count(&app), 4, "keyboard input reveals focus ring");
+    assert_eq!(line_count(&app), 1, "keyboard input reveals focus ring");
 
     assert!(app.pointer_focus(Some(button)));
     assert_eq!(app.focused_widget(), Some(button));
@@ -1739,18 +1773,26 @@ fn a_dropdown_popup_in_a_dialog_hits_above_the_dialog_content_below_it() {
     );
     let mut app = App::mount_with_size(view, 800, 600);
     app.frame();
-    let three = app.find_widget(Role::ListBoxOption, Some("three")).unwrap();
-    let rect = app.scene().composited_rect(three);
-    let center = Point {
-        x: rect.x + rect.width / 2.0,
-        y: rect.y + rect.height / 2.0,
-    };
-    let covered = ["first below", "second below", "third below"]
+    // Some option must sit over a button; which one depends on row heights.
+    let (option, center) = ["one", "two", "three"]
         .into_iter()
-        .filter_map(|name| app.find_widget(Role::Button, Some(name)))
-        .any(|button| app.scene().composited_rect(button).contains(center));
-    assert!(covered, "the test needs a button under the option");
-    assert_eq!(app.hit_test(center), Some(three));
+        .filter_map(|name| app.find_widget(Role::ListBoxOption, Some(name)))
+        .map(|option| {
+            let rect = app.scene().composited_rect(option);
+            let center = Point {
+                x: rect.x + rect.width / 2.0,
+                y: rect.y + rect.height / 2.0,
+            };
+            (option, center)
+        })
+        .find(|&(_, center)| {
+            ["first below", "second below", "third below"]
+                .into_iter()
+                .filter_map(|name| app.find_widget(Role::Button, Some(name)))
+                .any(|button| app.scene().composited_rect(button).contains(center))
+        })
+        .expect("the test needs a button under an option");
+    assert_eq!(app.hit_test(center), Some(option));
 }
 
 #[test]

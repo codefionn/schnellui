@@ -34,6 +34,12 @@ mod tests {
     }
 
     /// The `SolidRect` colour of the primitive at `idx` on a node.
+    /// The option rows of an open dropdown popup (popup pad -> rows column).
+    fn dropdown_rows(scene: &Scene, popup: WidgetId) -> Vec<WidgetId> {
+        let rows = scene.node(popup).unwrap().children[0];
+        scene.node(rows).unwrap().children.to_vec()
+    }
+
     fn color_of(scene: &Scene, id: WidgetId, idx: usize) -> Color {
         match scene.paint(id).unwrap().primitives[idx] {
             Primitive::SolidRect { color, .. } => color,
@@ -205,12 +211,10 @@ mod tests {
         let runtime = &runtime_handle;
         let (scene, _l, _t, _a, id) = build_one(runtime, Tab::new("general").selected(true));
         let prims = &scene.paint(id).unwrap().primitives;
-        // [0] bg, [1] indicator, then real glyph quads (SOUL §8.1)
+        // [0] bg, [1] indicator, then real glyph quads (SOUL §8.1). A
+        // classic tab marks selection with its bar; the bg stays clear.
         assert!(prims.len() > 2);
-        assert_eq!(
-            color_of(&scene, id, 0),
-            crate::widgets::Theme::default().selection
-        );
+        assert_eq!(color_of(&scene, id, 0), Color::TRANSPARENT);
         assert_eq!(
             color_of(&scene, id, 1),
             crate::widgets::Theme::default().accent
@@ -218,12 +222,9 @@ mod tests {
         assert!(prims[2..]
             .iter()
             .all(|p| matches!(p, Primitive::GlyphQuad { .. })));
-        // unselected: white bg, transparent indicator — same primitive list
+        // unselected: no chip, transparent indicator — same primitive list
         let (scene, _l, _t, _a, id) = build_one(runtime, Tab::new("general"));
-        assert_eq!(
-            color_of(&scene, id, 0),
-            crate::widgets::Theme::default().surface
-        );
+        assert_eq!(color_of(&scene, id, 0), Color::TRANSPARENT);
         assert_eq!(color_of(&scene, id, 1), Color::TRANSPARENT);
     }
 
@@ -305,20 +306,14 @@ mod tests {
             assert!(scene.dirty_flags(t).contains(DirtyFlags::PAINT), "{t:?}");
             assert!(scene.dirty_flags(t).contains(DirtyFlags::A11Y), "{t:?}");
         }
-        // the toggle recolored in place: same primitive count, colours swapped
+        // the toggle recolored in place: same primitive count, bar moved
         assert_eq!(scene.paint(t1).unwrap().primitives.len(), prims_before);
-        assert_eq!(
-            color_of(&scene, t1, 0),
-            crate::widgets::Theme::default().selection
-        );
+        assert_eq!(color_of(&scene, t1, 0), Color::TRANSPARENT);
         assert_eq!(
             color_of(&scene, t1, 1),
             crate::widgets::Theme::default().accent
         );
-        assert_eq!(
-            color_of(&scene, t0, 0),
-            crate::widgets::Theme::default().surface
-        );
+        assert_eq!(color_of(&scene, t0, 0), Color::TRANSPARENT);
         assert_eq!(color_of(&scene, t0, 1), Color::TRANSPARENT);
         // layout untouched: a selection toggle never re-measures (SOUL §8.1)
         assert!(!scene.dirty_flags(t1).contains(DirtyFlags::LAYOUT));
@@ -370,10 +365,7 @@ mod tests {
             color_of(&scene, i1, 0),
             crate::widgets::Theme::default().selection
         );
-        assert_eq!(
-            color_of(&scene, i0, 0),
-            crate::widgets::Theme::default().surface
-        );
+        assert_eq!(color_of(&scene, i0, 0), Color::TRANSPARENT);
         // an already-selected item still fires its handler, no state re-dirty
         assert!(crate::widgets::dispatch_click(runtime, &mut scene, i1));
         assert_eq!(count.get(), 2);
@@ -936,7 +928,7 @@ mod tests {
         let popup = kids[1];
         assert!(scene.is_overlay(popup));
         assert!(!scene.is_overlay(kids[0]));
-        let opts = scene.node(popup).unwrap().children.clone();
+        let opts = dropdown_rows(&scene, popup);
         assert_eq!(opts.len(), 2);
         for (i, (name, selected)) in [("Apple", true), ("Banana", false)].iter().enumerate() {
             let a = scene.a11y(opts[i]).unwrap();
@@ -960,18 +952,17 @@ mod tests {
         );
         let trigger = scene.node(wrap).unwrap().children[0];
         let prims = &scene.paint(trigger).unwrap().primitives;
-        // [0] surface, [1][2] the caret chevron, then real glyph quads
-        assert!(prims.len() > 3);
-        assert_eq!(
-            color_of(&scene, trigger, 0),
-            crate::widgets::Theme::default().surface
-        );
-        assert!(matches!(prims[1], Primitive::Line { .. }));
+        // [0] outline, [1] surface, [2][3] the caret chevron, then glyph quads
+        let theme = crate::widgets::Theme::default();
+        assert!(prims.len() > 4);
+        assert_eq!(color_of(&scene, trigger, 0), theme.outline);
+        assert_eq!(color_of(&scene, trigger, 1), theme.surface);
         assert!(matches!(prims[2], Primitive::Line { .. }));
-        assert!(prims[3..]
+        assert!(matches!(prims[3], Primitive::Line { .. }));
+        assert!(prims[4..]
             .iter()
             .all(|p| matches!(p, Primitive::GlyphQuad { .. })));
-        // open: the surface takes the selection wash — same primitive list
+        // open: the outline takes the focus colour — same primitive list
         let (scene, _l, _t, _a, wrap) = build_one(
             runtime,
             Dropdown::new("Fruit")
@@ -979,10 +970,7 @@ mod tests {
                 .option(DropdownOption::new("Apple")),
         );
         let trigger = scene.node(wrap).unwrap().children[0];
-        assert_eq!(
-            color_of(&scene, trigger, 0),
-            crate::widgets::Theme::default().selection
-        );
+        assert_eq!(color_of(&scene, trigger, 0), theme.focus_color());
     }
 
     #[test]
@@ -1023,7 +1011,7 @@ mod tests {
         );
         let kids = scene.node(wrap).unwrap().children.clone();
         let (trigger, popup) = (kids[0], kids[1]);
-        let opts = scene.node(popup).unwrap().children.clone();
+        let opts = dropdown_rows(&scene, popup);
         let (apple, banana) = (opts[0], opts[1]);
         assert_eq!(scene.a11y(trigger).unwrap().value.as_deref(), Some("Apple"));
 
@@ -1152,15 +1140,17 @@ mod tests {
             if open {
                 let wkids = scene.node(wrap).unwrap().children.clone();
                 let t = scene.layout(wkids[0]).unwrap().rect;
-                let opts = scene.node(wkids[1]).unwrap().children.clone();
+                let opts = dropdown_rows(&scene, wkids[1]);
                 let a = scene.layout(opts[0]).unwrap().rect;
                 let b = scene.layout(opts[1]).unwrap().rect;
                 assert!(t.width > 0.0 && t.height > 0.0);
                 assert!(a.y >= t.y + t.height, "first option sits below the trigger");
                 assert!(b.y >= a.y + a.height, "options stack vertically");
                 // the popup floats OVER the sibling text (dialog-like)
+                let below = scene.layout(kids[1]).unwrap().rect;
+                let popup = scene.layout(wkids[1]).unwrap().rect;
                 assert!(
-                    a.y < below_y[i] + 1.0,
+                    popup.y < below.y + below.height && popup.y + popup.height > below.y,
                     "popup overlaps where the sibling sits"
                 );
             }
@@ -1196,12 +1186,14 @@ mod tests {
         );
         let wkids = scene.node(wrap).unwrap().children.clone();
         let trigger = scene.layout(wkids[0]).unwrap().rect;
-        let opts = scene.node(wkids[1]).unwrap().children.clone();
+        let opts = dropdown_rows(&scene, wkids[1]);
         for &o in &opts {
             let r = scene.layout(o).unwrap().rect;
+            // 8px of extra room carries the chosen row's check mark
             assert_eq!(
-                r.width, trigger.width,
-                "every option row spans the trigger's width"
+                r.width,
+                trigger.width + 8.0,
+                "every option row spans the trigger's width plus check room"
             );
             // the painted surface spans the full row, not just the label
             match scene.paint(o).unwrap().primitives[0] {
@@ -1240,7 +1232,7 @@ mod tests {
         let kids = scene.node(col).unwrap().children.clone();
         let wrap = kids[0];
         let wkids = scene.node(wrap).unwrap().children.clone();
-        let opts = scene.node(wkids[1]).unwrap().children.clone();
+        let opts = dropdown_rows(&scene, wkids[1]);
         let first = scene.layout(opts[0]).unwrap().rect;
         let text = scene.layout(kids[1]).unwrap().rect;
         // a point inside BOTH the first option and the covered text

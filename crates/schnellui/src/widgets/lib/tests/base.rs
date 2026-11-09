@@ -180,6 +180,7 @@ fn icon_only_button_keeps_its_name_and_reveals_a_compact_hover_label() {
             .iter()
             .filter(|primitive| match primitive {
                 Primitive::SolidRect { color, .. }
+                | Primitive::StrokeRect { color, .. }
                 | Primitive::GlyphQuad { color, .. }
                 | Primitive::Line { color, .. } => color.a != 0,
                 Primitive::ImageQuad { tint, .. } => tint.a != 0,

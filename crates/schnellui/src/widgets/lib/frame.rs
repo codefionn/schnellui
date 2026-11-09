@@ -588,15 +588,34 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     if pd.primitives.is_empty() {
         return;
     }
+    // Paint that records its box origin (text runs) slides by that origin, so
+    // the ascent gap above the tallest glyph survives the move.
+    if let Some(origin) = pd.origin {
+        let (dx, dy) = (target.x - origin.x, target.y - origin.y);
+        if dx.abs() >= 0.001 || dy.abs() >= 0.001 {
+            let pd = scene.paint_mut(id);
+            translate_primitives(&mut pd.primitives, dx, dy);
+            pd.origin = Some(target);
+        }
+        position_hover_tooltip(runtime, scene, id);
+        selection::resize_tab_surface(runtime, scene, id);
+        return;
+    }
     // Current min-origin of this node's ordinary primitives. A tooltip may sit
     // above/left of its target; exclude that overflow so revealing it never
     // changes the anchor used to position the widget itself.
     let primitive_end = ordinary_primitive_end(runtime, id, pd);
+    let washes = super::interaction::decoration_washes(runtime, id);
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
-    for prim in &pd.primitives[..primitive_end] {
+    for (index, prim) in pd.primitives[..primitive_end].iter().enumerate() {
+        if washes.contains(&index) {
+            continue;
+        }
         let (px, py) = match *prim {
-            Primitive::SolidRect { rect, .. } => (rect.x, rect.y),
+            Primitive::SolidRect { rect, .. } | Primitive::StrokeRect { rect, .. } => {
+                (rect.x, rect.y)
+            }
             Primitive::GlyphQuad { rect, .. } => (rect.x, rect.y),
             Primitive::ImageQuad { rect, .. } => (rect.x, rect.y),
             // A line's top-left bound is min(from,to) inset by half its stroke width,
@@ -614,33 +633,32 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     let dx = target.x - min_x;
     let dy = target.y - min_y;
     if dx.abs() >= 0.001 || dy.abs() >= 0.001 {
-        let pd = scene.paint_mut(id);
-        for prim in &mut pd.primitives {
-            match prim {
-                Primitive::SolidRect { rect, .. } => {
-                    rect.x += dx;
-                    rect.y += dy;
-                }
-                Primitive::GlyphQuad { rect, .. } => {
-                    rect.x += dx;
-                    rect.y += dy;
-                }
-                Primitive::ImageQuad { rect, .. } => {
-                    rect.x += dx;
-                    rect.y += dy;
-                }
-                // Slide both endpoints so the whole segment moves with the node (§3.2).
-                Primitive::Line { from, to, .. } => {
-                    from.x += dx;
-                    from.y += dy;
-                    to.x += dx;
-                    to.y += dy;
-                }
-            }
-        }
+        translate_primitives(&mut scene.paint_mut(id).primitives, dx, dy);
     }
     position_hover_tooltip(runtime, scene, id);
     selection::resize_tab_surface(runtime, scene, id);
+}
+
+/// Slides every primitive by `(dx, dy)`.
+fn translate_primitives(primitives: &mut [Primitive], dx: f32, dy: f32) {
+    for prim in primitives {
+        match prim {
+            Primitive::SolidRect { rect, .. }
+            | Primitive::StrokeRect { rect, .. }
+            | Primitive::GlyphQuad { rect, .. }
+            | Primitive::ImageQuad { rect, .. } => {
+                rect.x += dx;
+                rect.y += dy;
+            }
+            // Slide both endpoints so the whole segment moves with the node (§3.2).
+            Primitive::Line { from, to, .. } => {
+                from.x += dx;
+                from.y += dy;
+                to.x += dx;
+                to.y += dy;
+            }
+        }
+    }
 }
 
 /// Routes a click/activation to a widget's stored handler — the single inbound path

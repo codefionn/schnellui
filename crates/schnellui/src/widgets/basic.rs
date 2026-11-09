@@ -17,8 +17,8 @@ use smallvec::SmallVec;
 
 mod controls;
 use crate::widgets::{
-    node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers,
-    write_text_semantics, BuildCtx, ClickHandler, SpinnerState, View,
+    contrast_ratio, node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for,
+    with_handlers, write_text_semantics, BuildCtx, ClickHandler, SpinnerState, View,
 };
 pub use controls::*;
 
@@ -28,9 +28,9 @@ pub use controls::*;
 
 /// Progress-bar intrinsic width / height (SOUL §8.1).
 const PROGRESS_WIDTH: f32 = 160.0;
-const PROGRESS_HEIGHT: f32 = 8.0;
+const PROGRESS_HEIGHT: f32 = 6.0;
 /// The rounded-rect radius shared by the progress track + fill.
-const PROGRESS_RADIUS: f32 = 4.0;
+const PROGRESS_RADIUS: f32 = 3.0;
 /// Default loading-spinner edge and number of radial strokes.
 const SPINNER_SIZE: f32 = 24.0;
 const SPINNER_SEGMENTS: usize = 12;
@@ -62,7 +62,7 @@ const SWITCH_KNOB: f32 = SWITCH_HEIGHT - 2.0 * SWITCH_INSET;
 /// Radio classic circle size (SOUL §8.1); ring/inner/dot radii derive from the
 /// laid-out rect under the ambient [`Shape`](crate::widgets::Shape) tokens.
 const RADIO_SIZE: f32 = 18.0;
-const RADIO_INSET: f32 = 2.0;
+const RADIO_INSET: f32 = 1.5;
 const RADIO_DOT: f32 = 8.0;
 
 /// Link text colour (SOUL §8.1) — the framework blue, shared with buttons so the
@@ -111,12 +111,12 @@ fn emit_progress_paint(
     let radius = t.shape.radius(PROGRESS_RADIUS, rect.height);
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        color: t.media,
+        color: t.track_color(),
         corner_radius: radius,
     });
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(rect.x, rect.y, rect.width * frac, rect.height),
-        color: t.accent,
+        color: t.indicator_color(),
         corner_radius: radius,
     });
 }
@@ -145,7 +145,7 @@ pub(crate) fn emit_spinner_paint(
     let outer = rect.width.min(rect.height) * 0.46;
     let inner = outer * 0.58;
     let stroke = (edge * 0.095).max(1.5);
-    let accent = theme_for(runtime, id).accent;
+    let accent = theme_for(runtime, id).indicator_color();
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
     pd.primitives.push(Primitive::SolidRect {
@@ -212,13 +212,35 @@ fn emit_switch_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: W
     };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    // An ink-framed design frames the track, so a square yellow track and
+    // its square knob still read as one control.
+    let frame = t.shape.frame;
+    if frame > 0.0 {
+        pd.primitives.push(Primitive::SolidRect {
+            rect,
+            color: t.outline,
+            corner_radius: t.shape.pill(rect.height),
+        });
+    }
+    let track = Rect::new(
+        rect.x + frame,
+        rect.y + frame,
+        (rect.width - 2.0 * frame).max(0.0),
+        (rect.height - 2.0 * frame).max(0.0),
+    );
     pd.primitives.push(Primitive::SolidRect {
-        rect,
-        color: track_color,
-        corner_radius: t.shape.pill(rect.height),
+        rect: track,
+        color: if on || frame == 0.0 {
+            track_color
+        } else {
+            t.surface
+        },
+        corner_radius: t.shape.pill(track.height),
     });
+    let knob = (knob - 2.0 * frame).max(0.0);
+    let knob_x = if on { knob_x - frame } else { knob_x + frame };
     pd.primitives.push(Primitive::SolidRect {
-        rect: Rect::new(knob_x, rect.y + SWITCH_INSET, knob, knob),
+        rect: Rect::new(knob_x, rect.y + SWITCH_INSET + frame, knob, knob),
         // An on knob takes the color drawn on the accent, so it stands out
         // from the track whatever the scheme; an off knob in muted text
         // stands out from a dark track, so an off switch still reads as a
@@ -252,17 +274,29 @@ fn emit_radio_paint(
     pd.primitives.clear();
     let t = theme_for(runtime, id);
     let inner = (rect.width - 2.0 * RADIO_INSET).max(0.0);
-    // outer ring
+    // A radio stays round in every design system, so it never reads as a
+    // checkbox: the outer ring in the outline color, the accent once chosen.
+    // An inked design keeps its ink ring; a pale accent marks the choice
+    // with the text color, which reads on the surface.
+    let mark = if contrast_ratio(t.accent, t.surface) >= 3.0 {
+        t.accent
+    } else {
+        t.text
+    };
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        color: t.media,
-        corner_radius: t.shape.pill(rect.height),
+        color: if selected && t.shape.frame == 0.0 {
+            mark
+        } else {
+            t.outline
+        },
+        corner_radius: rect.height * 0.5,
     });
-    // inner white circle, inset by 2px on each side
+    // inner surface circle, inset by the ring width on each side
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(rect.x + RADIO_INSET, rect.y + RADIO_INSET, inner, inner),
         color: t.surface,
-        corner_radius: t.shape.pill(inner),
+        corner_radius: inner * 0.5,
     });
     if selected {
         // centred dot, proportional to the (possibly density-scaled) box
@@ -270,8 +304,8 @@ fn emit_radio_paint(
         let dot_off = (rect.width - dot) * 0.5;
         pd.primitives.push(Primitive::SolidRect {
             rect: Rect::new(rect.x + dot_off, rect.y + dot_off, dot, dot),
-            color: t.accent,
-            corner_radius: t.shape.pill(dot),
+            color: mark,
+            corner_radius: dot * 0.5,
         });
     }
 }
