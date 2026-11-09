@@ -567,3 +567,45 @@ fn scrubbing_a_hovered_pressed_slider_keeps_its_rail() {
     );
     assert_eq!((after[0].width, after[0].height), (rail.width, rail.height));
 }
+
+/// Hover a control, press it, then let a navigation key take hover away while
+/// the button is still down (`hold_pointer_hover`). The hover wash comes off
+/// from under the press wash, so the press wash moves down one primitive.
+/// Releasing must then remove the press wash, not miss it and leave it
+/// painted for good.
+#[test]
+fn press_wash_comes_off_after_hover_is_taken_from_under_it() {
+    for view in [
+        Box::new(Button::new("go")) as Box<dyn View>,
+        Box::new(ListItem::new("Inbox")),
+        Box::new(Checkbox::new(false)),
+    ] {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let (mut scene, _l, _t, _a, id) = build_one(runtime, view);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect: Rect::new(10.0, 20.0, 80.0, 24.0),
+                content: Rect::ZERO,
+            },
+        );
+        reposition_paint(runtime, &mut scene);
+        let base = scene.paint(id).unwrap().primitives.clone();
+
+        assert!(update_pointer_proximity(
+            runtime,
+            &mut scene,
+            Point { x: 20.0, y: 30.0 }
+        ));
+        assert!(set_active_interaction(runtime, &mut scene, Some(id)));
+        assert!(strip_hover_decoration(runtime, &mut scene));
+        set_active_interaction(runtime, &mut scene, None);
+        assert_eq!(
+            scene.paint(id).unwrap().primitives,
+            base,
+            "{:?} keeps no wash after release",
+            scene.node(id).map(|n| n.kind)
+        );
+    }
+}

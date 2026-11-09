@@ -394,8 +394,12 @@ fn interaction_component(scene: &Scene, id: WidgetId) -> Option<InteractionCompo
 }
 
 /// A background was inserted (`delta` 1) or removed (-1) in `owner` at `at`:
-/// moves the recorded colour restores of the decorations still applied. Strokes
-/// are tracked from the end of the list and are unaffected.
+/// moves the recorded colour restores and washes of the decorations still
+/// applied. Strokes are tracked from the end of the list and are unaffected.
+///
+/// Decorations do not always come off in the order they went on: a key can
+/// take hover away from under a held press. The press wash then sits one
+/// primitive lower, and its record has to follow it.
 fn shift_restores(runtime: &Runtime, owner: WidgetId, at: usize, delta: isize) {
     runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
@@ -407,6 +411,11 @@ fn shift_restores(runtime: &Runtime, owner: WidgetId, at: usize, delta: isize) {
             for restore in &mut decoration.foreground {
                 if restore.owner == owner && restore.index >= at {
                     restore.index = restore.index.saturating_add_signed(delta);
+                }
+            }
+            if let Some((wash_owner, position)) = &mut decoration.background {
+                if *wash_owner == owner && *position >= at {
+                    *position = position.saturating_add_signed(delta);
                 }
             }
         }
