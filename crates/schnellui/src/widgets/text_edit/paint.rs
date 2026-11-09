@@ -364,6 +364,8 @@ pub(crate) fn emit_text_input_paint(
         }
     }
     crate::widgets::selection::append_combobox_caret(runtime, scene, id);
-    crate::widgets::reapply_focus_ring(runtime, scene, id);
+    // The paint was cleared and refilled above, so the hover, press and focus
+    // records of this field point at primitives that are gone.
+    crate::widgets::redecorate_after_refill(runtime, scene, id);
     intrinsic
 }

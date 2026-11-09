@@ -89,3 +89,52 @@ fn a_key_under_a_held_press_leaves_no_hover_ink() {
     }
 }
 
+/// Hover a field, press into it and type while the button is down, then let
+/// go and leave. Typing clears and refills the field's paint. The hover,
+/// press and focus records still pointed into the old paint, so taking them
+/// off wrote the old label's colour over the new value's glyphs.
+#[test]
+fn typing_into_a_pressed_hovered_field_restores_its_own_colours() {
+    use schnellui::widgets::{TextArea, TextInput};
+    for (view, role) in [
+        (
+            Box::new(TextInput::new("Ada").label("Owner")) as Box<dyn View>,
+            Role::TextInput,
+        ),
+        (
+            Box::new(TextArea::new("one\ntwo").rows(3)),
+            Role::MultilineTextInput,
+        ),
+    ] {
+        let mut app = mount(view);
+        let id = app.find_widget(role, None).unwrap();
+        let p = centre(&app, id);
+        app.update_pointer_proximity(p);
+        app.set_active_interaction(Some(id));
+        app.focus(Some(id));
+        app.dispatch_key(UiKey::End { shift: false });
+        app.dispatch_key(UiKey::Char("x"));
+        app.frame();
+        app.dispatch_key(UiKey::Backspace);
+        app.frame();
+        app.set_active_interaction(None);
+        app.update_pointer_proximity(AWAY);
+        app.focus(None);
+        app.frame();
+
+        let mut fresh = mount(match role {
+            Role::TextInput => Box::new(TextInput::new("Ada").label("Owner")) as Box<dyn View>,
+            _ => Box::new(TextArea::new("one\ntwo").rows(3)),
+        });
+        let fresh_id = fresh.find_widget(role, None).unwrap();
+        fresh.focus(Some(fresh_id));
+        fresh.dispatch_key(UiKey::End { shift: false });
+        fresh.focus(None);
+        fresh.frame();
+        assert_eq!(
+            prims(&app, id),
+            prims(&fresh, fresh_id),
+            "{role:?} after hover, press, type, release, leave, blur"
+        );
+    }
+}

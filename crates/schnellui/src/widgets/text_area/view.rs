@@ -729,18 +729,35 @@ pub(crate) fn emit_text_area_paint(
         return Size::default();
     };
     let (content, restyle) = emit_area(&mut st, runtime, scene, shaper, atlas, id);
-    st.cache.restyles += u64::from(restyle);
+    st.cache.restyles += u64::from(restyle != Restyle::None);
     runtime.with(|rt| {
         rt.borrow_mut().areas.insert(id, st);
     });
-    if restyle {
-        crate::widgets::reapply_focus_ring(runtime, scene, id);
+    match restyle {
+        Restyle::None => {}
+        // Spliced paint keeps every indexed decoration (an area that has
+        // one is always rebuilt), so only the strokes move with the box.
+        Restyle::Moved => crate::widgets::reapply_focus_ring(runtime, scene, id),
+        // A rebuilt paint dropped every decoration primitive. Their records
+        // point at whatever now sits at those indices.
+        Restyle::Rebuilt => crate::widgets::redecorate_after_refill(runtime, scene, id),
     }
     content
 }
 
-/// Returns the content size and whether the interaction decorations must be
-/// re-applied (the paint was rebuilt or the box moved).
+/// How [`emit_area`] changed the paint the interaction decorations sit on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Restyle {
+    /// Nothing the decorations depend on moved.
+    None,
+    /// Spliced in place, but the box moved or rows shifted.
+    Moved,
+    /// Cleared and refilled from scratch.
+    Rebuilt,
+}
+
+/// Returns the content size and how the interaction decorations must be
+/// re-applied.
 fn emit_area(
     st: &mut AreaState,
     runtime: &crate::widgets::Runtime,
@@ -748,7 +765,7 @@ fn emit_area(
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
     id: WidgetId,
-) -> (Size, bool) {
+) -> (Size, Restyle) {
     let focused = scene
         .a11y(id)
         .map(|a| StateFlags(a.state).contains(StateFlags::FOCUSED))
@@ -1092,7 +1109,11 @@ fn emit_area(
             cache.line_out,
             union_bounds(overflows(&rect, &washes), overflows(&rect, &carets)),
         );
-        let restyle = rect_moved || shifted || out != cache.painted_out;
+        let restyle = if rect_moved || shifted || out != cache.painted_out {
+            Restyle::Moved
+        } else {
+            Restyle::None
+        };
         cache.painted_out = out;
         cache.scratch = scratch;
         cache.washes = washes;
@@ -1205,7 +1226,7 @@ fn emit_area(
     });
     cache.key = Some(key);
     cache.band = band;
-    (content, true)
+    (content, Restyle::Rebuilt)
 }
 
 /// Moves the pooled id scratch out of the runtime and fills it with every

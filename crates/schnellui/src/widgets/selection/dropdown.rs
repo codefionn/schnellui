@@ -209,7 +209,8 @@ pub fn relabel_dropdown_triggers(
             paint.text_size,
         );
         scene.mark_dirty(id, DirtyFlags::PAINT);
-        crate::widgets::interaction::reapply_focus_ring(runtime, scene, id);
+        // The trigger's paint was cleared and refilled from scratch.
+        crate::widgets::redecorate_after_refill(runtime, scene, id);
     }
     // Hand the buffer back so the next selection does not allocate.
     runtime.with(|rt| {
