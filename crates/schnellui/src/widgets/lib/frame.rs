@@ -714,8 +714,9 @@ pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> boo
                 now
             };
             emit_checkbox_paint(runtime, scene, id, new);
-            // The re-emit cleared the primitives; a focused checkbox keeps its ring.
-            reapply_focus_ring(runtime, scene, id);
+            // The re-emit cleared the primitives; a hovered or focused checkbox keeps
+            // its decorations.
+            redecorate_after_refill(runtime, scene, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
             scene.mark_dirty(id, DirtyFlags::A11Y);
             let tog = runtime.with(|rt| {

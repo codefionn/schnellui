@@ -342,6 +342,35 @@ pub(crate) fn reapply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: Widge
     }
 }
 
+/// Re-applies hover, press and focus after `id`'s paint was **cleared and
+/// refilled** from scratch (checkbox / switch / radio toggle, slider adjust).
+///
+/// The refill already dropped every primitive the decorations had added to
+/// `id`, so their records for `id` point at the new paint. Stripping them the
+/// usual way would delete whatever now sits at those indices: a hovered,
+/// pressed slider lost its rail and fill on the first scrub step. This forgets
+/// those records without touching the paint, then lays the decorations again.
+pub(crate) fn redecorate_after_refill(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let rt = &mut *rt;
+        for decoration in [&mut rt.ring, &mut rt.active, &mut rt.hover]
+            .into_iter()
+            .flatten()
+        {
+            decoration.foreground.retain(|restore| restore.owner != id);
+            if decoration.border_owner == Some(id) {
+                decoration.border_owner = None;
+                decoration.border_tail = 0;
+            }
+            if decoration.background.is_some_and(|(owner, _)| owner == id) {
+                decoration.background = None;
+            }
+        }
+    });
+    reapply_focus_ring(runtime, scene, id);
+}
+
 fn interaction_component(scene: &Scene, id: WidgetId) -> Option<InteractionComponent> {
     match scene.node(id)?.kind {
         WidgetKind::Button => Some(InteractionComponent::Button),

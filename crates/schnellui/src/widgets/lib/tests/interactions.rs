@@ -503,3 +503,67 @@ fn focus_ring_covers_a_clickable_table_rows_descendant_paint() {
     ));
     assert_eq!(ring_lines(&scene, last_cell), 0);
 }
+
+/// Scrubbing a hovered, pressed slider repaints it from scratch. The hover
+/// and press halos recorded on the old paint must not strip the new rail and
+/// fill, during the drag or after the pointer lets go and leaves.
+#[test]
+fn scrubbing_a_hovered_pressed_slider_keeps_its_rail() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, _l, _t, _a, id) = build_one(runtime, Slider::new(40.0, 0.0, 100.0).step(5.0));
+    scene.set_layout(
+        id,
+        LayoutBox {
+            rect: Rect::new(10.0, 20.0, 120.0, 20.0),
+            content: Rect::ZERO,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+    let rects = |scene: &Scene| -> Vec<Rect> {
+        scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match *p {
+                Primitive::SolidRect { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect()
+    };
+    let base = rects(&scene);
+    assert_eq!(base.len(), 3, "rail, fill, thumb");
+    let rail = base[0];
+
+    assert!(update_pointer_proximity(
+        runtime,
+        &mut scene,
+        Point { x: 70.0, y: 30.0 }
+    ));
+    set_active_interaction(runtime, &mut scene, Some(id));
+    for x in [80.0, 95.0, 110.0] {
+        assert!(dispatch_slider_pointer(
+            runtime,
+            &mut scene,
+            id,
+            Point { x, y: 30.0 }
+        ));
+        assert!(
+            rects(&scene)
+                .iter()
+                .any(|r| (r.width, r.height) == (rail.width, rail.height)),
+            "the rail survives a scrub step at x={x}: {:?}",
+            scene.paint(id).unwrap().primitives
+        );
+    }
+    set_active_interaction(runtime, &mut scene, None);
+    update_pointer_proximity(runtime, &mut scene, Point { x: 400.0, y: 400.0 });
+    let after = rects(&scene);
+    assert_eq!(
+        after.len(),
+        3,
+        "only rail, fill and thumb remain: {after:?}"
+    );
+    assert_eq!((after[0].width, after[0].height), (rail.width, rail.height));
+}

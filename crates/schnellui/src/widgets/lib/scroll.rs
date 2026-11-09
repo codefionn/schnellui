@@ -610,7 +610,7 @@ pub fn dispatch_set_slider_value(
         0.0
     };
     emit_slider_paint(runtime, scene, id, frac, false);
-    reapply_focus_ring(runtime, scene, id);
+    redecorate_after_refill(runtime, scene, id);
     scene.mark_dirty(id, DirtyFlags::PAINT);
     scene.set_a11y_value(id, Some(format_slider_value(new)));
     let cb = runtime.with(|rt| {

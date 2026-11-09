@@ -638,8 +638,9 @@ pub(crate) fn dispatch_click_basic(
             // channels it touched (SOUL §8.1), then fire `on_toggle` with the new bool.
             let now = toggle_checked(scene, id);
             emit_switch_paint(runtime, scene, id, now);
-            // The re-emit cleared the primitives; a focused switch keeps its ring.
-            crate::widgets::reapply_focus_ring(runtime, scene, id);
+            // The re-emit cleared the primitives; a hovered or focused switch keeps its
+            // decorations.
+            crate::widgets::redecorate_after_refill(runtime, scene, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
             scene.mark_dirty(id, DirtyFlags::A11Y);
             // Take the handler out of the registry before running it — user code may
@@ -688,6 +689,7 @@ fn dispatch_radio(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Widg
             if checked_radio {
                 clear_checked(scene, sib);
                 emit_radio_paint(runtime, scene, sib, false);
+                crate::widgets::redecorate_after_refill(runtime, scene, sib);
                 scene.mark_dirty(sib, DirtyFlags::PAINT);
                 scene.mark_dirty(sib, DirtyFlags::A11Y);
             }
@@ -698,8 +700,9 @@ fn dispatch_radio(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Widg
     if !was_checked {
         set_checked(scene, id);
         emit_radio_paint(runtime, scene, id, true);
-        // The re-emit cleared the primitives; a focused radio keeps its ring.
-        crate::widgets::reapply_focus_ring(runtime, scene, id);
+        // The re-emit cleared the primitives; a hovered or focused radio keeps its
+        // decorations.
+        crate::widgets::redecorate_after_refill(runtime, scene, id);
         scene.mark_dirty(id, DirtyFlags::PAINT);
         scene.mark_dirty(id, DirtyFlags::A11Y);
     }
