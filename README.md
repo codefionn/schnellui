@@ -6,6 +6,11 @@ It natively supports accessibility, native rendering via gpu, html output in
 browser and has great instrumentation for debugging and automatically
 controlling the ui.
 
+<img src="docs/images/playground.png" alt="The playground gallery in the Light theme: buttons, checkbox, switch, radios, slider, progress bar, text inputs, tabs, a list, a table and a dropdown" width="640">
+
+The playground gallery. Regenerate it with
+`cargo run -p playground -- --scenario gallery --scale 2 --out docs/images/playground.png`.
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md) describes how the code works today and
