@@ -1111,7 +1111,15 @@ fn commit_area_change(
             true
         }
         Change::Text => {
-            let before = runtime.with(|rt| rt.borrow().areas.get(id).map(|st| st.content));
+            // A drag remembers where its press landed as offsets into the old
+            // value. Typing under a held button rewrites those offsets, so the
+            // rest of the drag extends from the edited selection instead.
+            let before = runtime.with(|rt| {
+                rt.borrow_mut().areas.get_mut(id).map(|st| {
+                    st.pointer_origin = None;
+                    st.content
+                })
+            });
             // Retain the accessibility string's capacity across edits. Replacing
             // it with a fresh document clone makes allocation bytes grow with the
             // document and throws that capacity away on every backspace.
@@ -1774,6 +1782,75 @@ mod tests {
             false,
         ));
         assert_eq!(caret_anchor(runtime, id), (4, 4));
+    }
+
+    /// Press at the end of an area, drag to its start, type over the
+    /// selection, then keep dragging with the button still down. The drag
+    /// used to extend from the press offset in the old value and panicked.
+    #[test]
+    fn typing_during_a_drag_rebases_the_drag_on_the_new_value() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let value = "first line\nsecond line";
+        let (mut scene, _l, mut text, mut atlas, id) = build_area(runtime, TextArea::new(value));
+        let rect = Rect::new(10.0, 10.0, 300.0, 100.0);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        let end = Point {
+            x: rect.x + rect.width - 2.0,
+            y: rect.y + rect.height - 2.0,
+        };
+        let start = Point {
+            x: rect.x + 1.0,
+            y: rect.y + 1.0,
+        };
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            end,
+            TextPointerAction::Place { extend: false },
+        );
+        assert!(dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            start,
+            TextPointerAction::Drag,
+        ));
+        assert_eq!(caret_anchor(runtime, id), (0, value.len()));
+        assert!(dispatch_edit_key(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            EditKey::Insert("x"),
+        ));
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            end,
+            TextPointerAction::Drag,
+        );
+        let (caret, anchor) = caret_anchor(runtime, id);
+        assert!(
+            caret <= 1 && anchor <= 1,
+            "selection {caret}..{anchor} past \"x\""
+        );
     }
 
     #[test]

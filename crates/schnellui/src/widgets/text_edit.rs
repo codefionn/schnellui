@@ -1283,6 +1283,73 @@ mod tests {
         assert_eq!(word_range_at(value, value.len()), (13, 13));
     }
 
+    /// Press in a field, drag to select it all, type over the selection, then
+    /// keep dragging with the button still down. The drag must extend from a
+    /// place in the new value, not from the press offsets in the old one.
+    #[test]
+    fn typing_during_a_drag_rebases_the_drag_on_the_new_value() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let value = "one two three";
+        let (mut scene, _l, mut text, mut atlas, id) = build_input(runtime, TextInput::new(value));
+        let rect = Rect::new(10.0, 10.0, 220.0, 28.0);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        let y = rect.y + rect.height * 0.5;
+        let end = Point {
+            x: rect.x + rect.width,
+            y,
+        };
+        let start = Point { x: rect.x, y };
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            end,
+            TextPointerAction::Place { extend: false },
+        );
+        assert!(dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            start,
+            TextPointerAction::Drag,
+        ));
+        assert_eq!(caret_anchor(runtime, id), (0, value.len()));
+        assert!(dispatch_edit_key(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            EditKey::Insert("x"),
+        ));
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            end,
+            TextPointerAction::Drag,
+        );
+        let (caret, anchor) = caret_anchor(runtime, id);
+        assert!(
+            caret <= 1 && anchor <= 1,
+            "selection {caret}..{anchor} past \"x\""
+        );
+    }
+
     #[test]
     fn double_click_selects_word_and_word_drag_preserves_the_origin() {
         let runtime_handle = crate::widgets::Runtime::new();

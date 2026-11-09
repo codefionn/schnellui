@@ -155,11 +155,14 @@ fn commit_change(
             true
         }
         Change::Text => {
+            // A drag remembers where its press landed as offsets into the old
+            // value. Typing under a held button rewrites those offsets, so the
+            // rest of the drag extends from the edited selection instead.
             let value = runtime.with(|rt| {
-                rt.borrow()
-                    .edits
-                    .get(id)
-                    .map(|e| (e.value.clone(), e.password))
+                rt.borrow_mut().edits.get_mut(id).map(|e| {
+                    e.pointer_origin = None;
+                    (e.value.clone(), e.password)
+                })
             });
             let Some((value, password)) = value else {
                 return false;
