@@ -1121,6 +1121,9 @@ struct AppliedInteraction {
     border_width: f32,
     foreground: Vec<PrimitiveColorRestore>,
     background: Option<(WidgetId, usize)>,
+    /// The paint bounds of `target`'s subtree the decoration was sized from.
+    /// A layout pass that changes them lays the decoration again.
+    bounds: Rect,
 }
 
 /// The retained widget-interaction data owned by one [`Runtime`].

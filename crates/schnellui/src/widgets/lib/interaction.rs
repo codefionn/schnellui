@@ -344,6 +344,31 @@ pub(crate) fn reapply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: Widge
     }
 }
 
+/// Lays hover, press and focus again on any target whose subtree's paint
+/// bounds moved or resized since the decoration was sized. Layout only slides
+/// a node's primitives to its new origin, so a ring or wash sized for a row
+/// that has since stretched or shrunk (a window resize, a remount restoring
+/// focus before its first layout) would keep the old size. The settle pass
+/// calls this after a layout pass.
+pub(crate) fn relay_moved_decorations(runtime: &Runtime, scene: &mut Scene) {
+    let targets = runtime.with(|rt| {
+        let rt = rt.borrow();
+        [&rt.hover, &rt.active, &rt.ring].map(|d| d.as_ref().map(|d| (d.target, d.bounds)))
+    });
+    let mut relaid: [Option<WidgetId>; 3] = [None; 3];
+    for (slot, (target, bounds)) in targets.into_iter().flatten().enumerate() {
+        if relaid.contains(&Some(target)) {
+            continue;
+        }
+        let moved =
+            decoration_geometry(runtime, scene, target).is_some_and(|(now, _)| now != bounds);
+        if moved {
+            reapply_focus_ring(runtime, scene, target);
+            relaid[slot] = Some(target);
+        }
+    }
+}
+
 /// Re-applies hover, press and focus after `id`'s paint was **cleared and
 /// refilled** from scratch (checkbox / switch / radio toggle, slider adjust).
 ///
@@ -796,6 +821,7 @@ fn apply_interaction_style(
         border_width,
         foreground,
         background,
+        bounds: rect,
     })
 }
 

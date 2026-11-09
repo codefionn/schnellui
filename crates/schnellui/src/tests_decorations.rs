@@ -138,3 +138,73 @@ fn typing_into_a_pressed_hovered_field_restores_its_own_colours() {
         );
     }
 }
+
+/// The focus ring of a stretched row, as a rect, and the row's laid-out box.
+fn ring_and_box(app: &App, id: scene::WidgetId) -> (scene::Rect, scene::Rect) {
+    let ring = prims(app, id)
+        .into_iter()
+        .rev()
+        .find_map(|p| match p {
+            Primitive::StrokeRect { rect, width, .. }
+                if width == schnellui::widgets::FOCUS_RING_W =>
+            {
+                Some(rect)
+            }
+            _ => None,
+        })
+        .expect("the focused row wears a ring");
+    (ring, app.scene().layout(id).unwrap().rect)
+}
+
+fn stretched_rows() -> impl View {
+    use schnellui::layout::Align;
+    use schnellui::widgets::{Column, List, ListItem};
+    Column::new().fill().align(Align::Stretch).child(
+        List::new()
+            .child(ListItem::new("Inbox"))
+            .child(ListItem::new("Archive")),
+    )
+}
+
+/// Focus a row that stretches with the window, then resize the window. The
+/// ring was sized from the row's paint when focus arrived and only slid
+/// afterwards, so it kept the old width: wider than the row after a shrink,
+/// a stub after a grow.
+#[test]
+fn a_focus_ring_follows_its_row_through_a_resize() {
+    let mut app = App::mount_with_size(stretched_rows(), 400, 200);
+    app.frame();
+    let row = app.find_widget(Role::ListItem, Some("Archive")).unwrap();
+    app.focus(Some(row));
+    app.frame();
+    let (ring, row_box) = ring_and_box(&app, row);
+    assert_eq!(ring.width, row_box.width);
+    for width in [260.0, 520.0] {
+        app.resize(width, 200.0);
+        app.frame();
+        let (ring, row_box) = ring_and_box(&app, row);
+        assert_eq!(
+            (ring.x, ring.width),
+            (row_box.x, row_box.width),
+            "ring follows the row at window width {width}"
+        );
+    }
+}
+
+/// A remount restores focus on the replacement tree before its first layout.
+/// The ring was sized from the row's unstretched paint and stayed that size
+/// once layout stretched the row.
+#[test]
+fn a_focus_ring_restored_by_a_remount_fits_the_laid_out_row() {
+    let mut old = App::mount_with_size(stretched_rows(), 400, 200);
+    old.frame();
+    let row = old.find_widget(Role::ListItem, Some("Archive")).unwrap();
+    old.focus(Some(row));
+    old.frame();
+    let mut new = App::mount_with_size(stretched_rows(), 400, 200);
+    new.inherit_remount_state(&old);
+    new.frame();
+    let row = new.find_widget(Role::ListItem, Some("Archive")).unwrap();
+    let (ring, row_box) = ring_and_box(&new, row);
+    assert_eq!((ring.x, ring.width), (row_box.x, row_box.width));
+}

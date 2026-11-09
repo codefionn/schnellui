@@ -422,6 +422,13 @@ impl App {
             }
         }
 
+        // Layout slides paint to new origins but never resizes a hover wash or
+        // focus ring that was sized before it; lay those again where the
+        // decorated paint changed size.
+        if layout_changed {
+            schnellui::widgets::relay_moved_decorations(&self.widgets, &mut self.scene);
+        }
+
         // PTY output ordinarily changes pixels without changing terminal grid
         // dimensions. Emit that retained paint on every settled frame; the widget
         // skips clean grids, while changed grids no longer wait for an unrelated
