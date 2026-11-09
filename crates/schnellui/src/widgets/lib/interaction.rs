@@ -226,7 +226,9 @@ pub fn strip_focus_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId
             None
         }
     });
-    decoration.is_some_and(|decoration| strip_applied_interaction(runtime, scene, decoration))
+    decoration.is_some_and(|decoration| {
+        strip_applied_interaction(runtime, scene, decoration, Layer::Ring)
+    })
 }
 
 /// Draws the keyboard **focus outline** on `id` (SOUL §6.3): the same custom
@@ -448,12 +450,57 @@ fn retail_strokes(runtime: &Runtime, owner: WidgetId, removed_tail: Option<usize
     });
 }
 
+/// Where a decoration sits in the stack its colours compose in: hover at the
+/// bottom, press above it, the focus ring on top. Every path that lays a
+/// decoration first lifts the ones above it, so this order always holds.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Layer {
+    Hover,
+    Press,
+    Ring,
+}
+
+/// Hands `restore`'s colour to the lowest decoration above `layer` that
+/// recoloured the same primitive. That decoration recorded `layer`'s colour as
+/// the one to put back, which is wrong once `layer` is gone. Returns whether a
+/// decoration above took it, in which case the paint keeps the colour shown.
+fn pass_restore_up(runtime: &Runtime, layer: Layer, restore: &PrimitiveColorRestore) -> bool {
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let rt = &mut *rt;
+        for (above, decoration) in [(Layer::Press, &mut rt.active), (Layer::Ring, &mut rt.ring)] {
+            if above <= layer {
+                continue;
+            }
+            let Some(decoration) = decoration else {
+                continue;
+            };
+            if let Some(upper) = decoration
+                .foreground
+                .iter_mut()
+                .find(|upper| upper.owner == restore.owner && upper.index == restore.index)
+            {
+                upper.color = restore.color;
+                return true;
+            }
+        }
+        false
+    })
+}
+
 fn strip_applied_interaction(
     runtime: &Runtime,
     scene: &mut Scene,
     mut decoration: AppliedInteraction,
+    layer: Layer,
 ) -> bool {
     for restore in &decoration.foreground {
+        // A key can take hover away from under a held press. The press
+        // recoloured on top of hover, so it keeps showing; it must put back
+        // the colour from before hover when it comes off.
+        if pass_restore_up(runtime, layer, restore) {
+            continue;
+        }
         if let Some(primitive) = scene
             .paint_mut(restore.owner)
             .primitives
@@ -755,7 +802,9 @@ fn apply_interaction_style(
 pub fn strip_hover_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
     runtime
         .with(|rt| rt.borrow_mut().hover.take())
-        .is_some_and(|decoration| strip_applied_interaction(runtime, scene, decoration))
+        .is_some_and(|decoration| {
+            strip_applied_interaction(runtime, scene, decoration, Layer::Hover)
+        })
 }
 
 fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
@@ -789,7 +838,9 @@ fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) ->
 pub fn strip_active_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
     runtime
         .with(|rt| rt.borrow_mut().active.take())
-        .is_some_and(|decoration| strip_applied_interaction(runtime, scene, decoration))
+        .is_some_and(|decoration| {
+            strip_applied_interaction(runtime, scene, decoration, Layer::Press)
+        })
 }
 
 fn apply_active_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {

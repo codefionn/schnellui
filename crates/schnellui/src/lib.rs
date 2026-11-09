@@ -596,6 +596,8 @@ pub mod accesskit_reexport {
 #[cfg(test)]
 mod tests_core;
 #[cfg(test)]
+mod tests_decorations;
+#[cfg(test)]
 mod tests_navigation;
 #[cfg(test)]
 mod tests_remount;
