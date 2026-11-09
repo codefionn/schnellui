@@ -208,3 +208,53 @@ fn a_focus_ring_restored_by_a_remount_fits_the_laid_out_row() {
     let (ring, row_box) = ring_and_box(&new, row);
     assert_eq!((ring.x, ring.width), (row_box.x, row_box.width));
 }
+
+/// Hover a button that carries a tooltip, then narrow the window so the
+/// button keeps its place but the window edge now cuts through the tooltip.
+/// Tooltips were only placed again when their own button moved, so the
+/// tooltip kept hanging past the new right edge.
+#[test]
+fn a_shown_tooltip_stays_inside_a_window_narrowed_under_it() {
+    use schnellui::widgets::{Button, Pad, Row, Stack, Text};
+    let mut app = mount(
+        Stack::new().fill().child(
+            Pad::all(40.0).child(
+                Row::new()
+                    .gap(8.0)
+                    .child(Text::new("Spacer text"))
+                    .child(Button::new("Archive overview").tooltip("Archive this overview")),
+            ),
+        ),
+    );
+    let id = app.find_widget(Role::Button, None).unwrap();
+    let before = app.scene().layout(id).unwrap().rect;
+    app.update_pointer_proximity(centre(&app, id));
+    app.frame();
+    app.resize(before.right() - 10.0, 200.0);
+    app.frame();
+    assert_eq!(
+        app.scene().layout(id).unwrap().rect,
+        before,
+        "the button stays put"
+    );
+    let width = app.size().width;
+    let tooltip = app
+        .scene()
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .find_map(|p| match p {
+            Primitive::SolidRect { rect, color, .. }
+                if rect.bottom() <= before.y && color.a > 0 =>
+            {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .expect("the tooltip shows above the button");
+    assert!(
+        tooltip.x >= 0.0 && tooltip.right() <= width,
+        "tooltip {tooltip:?} leaves a window {width} wide"
+    );
+}

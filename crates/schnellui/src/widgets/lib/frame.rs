@@ -483,6 +483,11 @@ pub fn reposition_paint(runtime: &Runtime, scene: &mut Scene) {
     // rather than the tree size. `reposition_node` may add entries (a re-emit that
     // writes geometry), so walk by index and re-read the length.
     let mut scroll_parents: SmallVec<[WidgetId; 8]> = SmallVec::new();
+    // Tooltips are placed against the root's box, so a window resize moves
+    // them even where their own control stays put.
+    let viewport_changed = scene
+        .root()
+        .is_some_and(|root| scene.geometry_changed().contains(&root));
     let mut i = 0;
     while i < scene.geometry_changed().len() {
         let id = scene.geometry_changed()[i];
@@ -502,6 +507,15 @@ pub fn reposition_paint(runtime: &Runtime, scene: &mut Scene) {
                 scroll_parents.push(parent);
             }
             reposition_node(runtime, scene, parent);
+        }
+    }
+    if viewport_changed {
+        let mut i = 0;
+        while let Some(id) = runtime.with(|rt| rt.borrow().tooltip_ids.get(i).copied()) {
+            i += 1;
+            if scene.node(id).is_some() {
+                position_hover_tooltip(runtime, scene, id);
+            }
         }
     }
     scene.clear_geometry_changed();
