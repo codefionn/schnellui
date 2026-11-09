@@ -52,4 +52,5 @@ interaction_properties!(
     context_menu,
     dialogs,
     grouped_tabs,
+    todo,
 );

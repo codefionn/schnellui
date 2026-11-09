@@ -3,7 +3,7 @@
 //! and states what must stay true about its accessibility tree after every
 //! input.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use schnellui::a11y::{A11yNodeDump, Role};
@@ -59,6 +59,7 @@ pub fn all() -> Vec<Component> {
         CONTEXT_MENU,
         DIALOGS,
         GROUPED_TABS,
+        TODO,
     ]
 }
 
@@ -834,4 +835,119 @@ pub const GROUPED_TABS: Component = Component {
     mount: grouped_tabs,
     canonical: None,
     check: fine,
+};
+
+// --- todo list, changed by remounts ----------------------------------------
+
+#[derive(Default)]
+struct Todos {
+    items: Vec<(String, bool)>,
+    added: usize,
+}
+
+fn todo_view(state: Rc<RefCell<Todos>>, dirty: Rc<Cell<bool>>) -> impl View {
+    let mut list = Column::new().gap(4.0);
+    for (i, (label, done)) in state.borrow().items.iter().enumerate() {
+        let (toggle_state, toggle_dirty) = (state.clone(), dirty.clone());
+        let (remove_state, remove_dirty) = (state.clone(), dirty.clone());
+        list = list.child(
+            Row::new()
+                .gap(8.0)
+                .align(Align::Center)
+                .child(
+                    Checkbox::new(*done)
+                        .name(label.clone())
+                        .on_toggle(move |on| {
+                            if let Some(item) = toggle_state.borrow_mut().items.get_mut(i) {
+                                item.1 = on;
+                            }
+                            toggle_dirty.set(true);
+                        }),
+                )
+                .child(Text::new(label.clone()))
+                .child(Button::new(format!("Remove {label}")).on_click(move || {
+                    let mut todos = remove_state.borrow_mut();
+                    if i < todos.items.len() {
+                        todos.items.remove(i);
+                    }
+                    remove_dirty.set(true);
+                })),
+        );
+    }
+    let (add_state, add_dirty) = (state.clone(), dirty.clone());
+    Pad::all(16.0).child(
+        Column::new()
+            .gap(10.0)
+            .child(Button::new("Add").on_click(move || {
+                let mut todos = add_state.borrow_mut();
+                todos.added += 1;
+                let label = format!("task {}", todos.added);
+                todos.items.push((label, false));
+                add_dirty.set(true);
+            }))
+            .child(list),
+    )
+}
+
+fn todo(mount: &Mount) -> HeadlessHost {
+    let state = Rc::new(RefCell::new(Todos {
+        items: vec![("milk".into(), false), ("bread".into(), true)],
+        added: 0,
+    }));
+    let dirty = Rc::new(Cell::new(false));
+    let mut host = {
+        let (state, dirty) = (state.clone(), dirty.clone());
+        host(move || todo_view(state.clone(), dirty.clone()), mount)
+    };
+    let scale = mount.scale;
+    host.set_remount(move |size: Size, theme: Theme| {
+        if !dirty.replace(false) {
+            return None;
+        }
+        let (state, dirty) = (state.clone(), dirty.clone());
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme),
+            move || todo_view(state.clone(), dirty.clone()),
+            size.width as u32,
+            size.height as u32,
+            scale,
+        );
+        app.apply_reduced_motion(true);
+        Some(WindowUpdate::Remount(Remount::new(app, "todo")))
+    });
+    host
+}
+
+/// Removes every task. Whatever happened before, the list ends empty.
+fn todo_canonical(host: &mut HeadlessHost) {
+    for _ in 0..64 {
+        let Some(name) = nodes(host.app(), Role::Button)
+            .into_iter()
+            .filter_map(|n| n.name)
+            .find(|n| n.starts_with("Remove "))
+        else {
+            break;
+        };
+        click(host, Role::Button, &name);
+    }
+}
+
+fn todo_check(app: &App) -> Result<(), String> {
+    let boxes = nodes(app, Role::CheckBox).len();
+    let removes = nodes(app, Role::Button)
+        .iter()
+        .filter(|n| n.name.as_deref().is_some_and(|n| n.starts_with("Remove ")))
+        .count();
+    if boxes != removes {
+        return Err(format!("{boxes} checkboxes but {removes} remove buttons"));
+    }
+    Ok(())
+}
+
+pub const TODO: Component = Component {
+    name: "todo",
+    size: (360, 320),
+    mount: todo,
+    canonical: Some(todo_canonical),
+    check: todo_check,
 };
