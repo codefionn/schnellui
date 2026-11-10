@@ -259,7 +259,9 @@ impl WindowedApp {
             self.last_text_click = None;
             return TextPointerAction::Place { extend: true };
         }
-        let now = Instant::now();
+        // The app clock: the wall clock in a window, the pinned time in a
+        // simulation, so a replay counts clicks from the gaps it chose.
+        let now = self.app.clock_now();
         let count = self
             .last_text_click
             .filter(|last| {

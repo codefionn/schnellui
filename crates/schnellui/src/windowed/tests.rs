@@ -941,3 +941,39 @@ mod ime {
         assert_eq!(*typed.borrow(), "日本語");
     }
 }
+
+/// Multi-click counting follows the app clock, so a host that pins time (the
+/// headless fuzz host, a recorded replay) sees the gaps it chose.
+#[test]
+fn multi_click_counting_follows_the_app_clock() {
+    use crate::widgets::{TextInput, TextPointerAction};
+    use std::time::Duration;
+
+    let mut app = App::mount_with_size(TextInput::new("hello world").label("Field"), 300, 80);
+    app.frame();
+    let mut host = windowed_host(app, None);
+    let field = host
+        .app
+        .find_widget(Role::TextInput, Some("Field"))
+        .unwrap();
+    let at = Point { x: 20.0, y: 20.0 };
+    let t0 = std::time::Instant::now();
+    host.app.set_clock(Some(t0));
+    assert_eq!(
+        host.text_press_action(field, at),
+        TextPointerAction::Place { extend: false }
+    );
+    // Two seconds of app time pass in no wall time: a single click again.
+    host.app.set_clock(Some(t0 + Duration::from_secs(2)));
+    assert_eq!(
+        host.text_press_action(field, at),
+        TextPointerAction::Place { extend: false },
+        "a press two seconds later is not a double-click"
+    );
+    // A quick second press is a double-click.
+    host.app.set_clock(Some(t0 + Duration::from_millis(2100)));
+    assert_eq!(
+        host.text_press_action(field, at),
+        TextPointerAction::SelectWord
+    );
+}
