@@ -48,7 +48,7 @@ const CHILD_INDEX_MIN: usize = 16;
 const CHILD_INDEX_SLACK: f32 = 0.5;
 
 /// Subtree bounds that prune nothing. Used for a `Scroll` without a usable
-/// viewport rect, whose descendants are then not clipped.
+/// viewport rect (not laid out yet), whose descendants are then not clipped.
 const UNBOUNDED: Rect = Rect {
     x: -1.0e18,
     y: -1.0e18,
@@ -885,7 +885,7 @@ impl Scene {
             Some(parent) => {
                 let (mut offset, mut clip) = self.composite_context(parent);
                 if self.tree[parent].kind == WidgetKind::Scroll {
-                    if let Some(layout) = self.layout.get(parent).filter(|b| !b.rect.is_empty()) {
+                    if let Some(layout) = self.layout.get(parent) {
                         let mut viewport = layout.rect;
                         viewport.x += offset.x;
                         viewport.y += offset.y;
@@ -1240,9 +1240,10 @@ impl Scene {
             all = all.union(&child_bounds);
         }
         // A viewport clips every descendant to its own rect, so nothing below it
-        // reaches outside. Without a usable rect there is no clip to rely on.
+        // reaches outside. An empty rect is a laid-out viewport squeezed to nothing,
+        // which clips everything; only a missing rect (not laid out) is unbounded.
         let rect = if node.kind == WidgetKind::Scroll {
-            own.filter(|rect| !rect.is_empty()).unwrap_or(UNBOUNDED)
+            own.unwrap_or(UNBOUNDED)
         } else {
             all
         };

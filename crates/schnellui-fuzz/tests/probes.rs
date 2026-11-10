@@ -148,15 +148,12 @@ mod scroll_oracles {
         assert!(err.contains("a theme switch moved"), "{err}");
     }
 
-    /// A viewport squeezed to nothing paints and hit-tests all of its content,
-    /// unclipped, and scrolled content slides up over the header above it. The
-    /// hit oracle sees it: the header's button is drawn where the pointer hits
-    /// the form field that slid under it. Known bug, not fixed here: the
-    /// renderer, the scene's composite context and the hit test all treat an
-    /// empty viewport as "no clip", which is also what a viewport not laid out
-    /// yet means.
+    /// A viewport squeezed to nothing clips all of its content. It once painted
+    /// and hit-tested it unclipped, so scrolled content slid up over the header
+    /// above it: the header's button was drawn where the pointer hit the form
+    /// field that slid under it. A viewport with no layout yet is the unclipped
+    /// one; an empty laid-out rect clips everything.
     #[test]
-    #[ignore = "known bug: a Scroll squeezed to zero height does not clip its content"]
     fn a_scroll_squeezed_to_nothing_clips_its_content() {
         let _serial = serial();
         let component = components::named("scroll_form");

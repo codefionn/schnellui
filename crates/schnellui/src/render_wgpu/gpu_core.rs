@@ -158,9 +158,10 @@ fn scroll_child_ctx(scene: &Scene, id: WidgetId, offset: Point, clip: Rect) -> (
     let cc = match scene.layout(id) {
         // the viewport frame itself is drawn at the parent `offset` (it is not
         // scrolled, only its children are), so offset the clip rect.
-        Some(b) if !b.rect.is_empty() => clip.intersect(&shifted(b.rect, offset)),
-        // no layout yet (pre-first-layout mount): keep the parent clip.
-        _ => clip,
+        Some(b) => clip.intersect(&shifted(b.rect, offset)),
+        // no layout yet (pre-first-layout mount): keep the parent clip. A laid-out
+        // empty viewport clips everything.
+        None => clip,
     };
     (co, cc)
 }

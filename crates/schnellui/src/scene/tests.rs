@@ -974,6 +974,29 @@ fn composited_geometry_resolves_nested_properties_and_scroll() {
 }
 
 #[test]
+fn a_viewport_squeezed_to_nothing_clips_all_but_an_unlaid_one_does_not() {
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Scroll, None);
+    scene.set_root(root);
+    let child = scene.insert(WidgetKind::Column, Some(root));
+    scene.set_rect(child, Rect::new(0.0, 0.0, 50.0, 50.0));
+    // Not laid out yet: no clip to apply.
+    assert_eq!(
+        scene.composited_rect(child),
+        Rect::new(0.0, 0.0, 50.0, 50.0)
+    );
+    // Laid out, but squeezed to zero height: nothing of the content shows.
+    scene.set_rect(root, Rect::new(0.0, 10.0, 100.0, 0.0));
+    assert!(scene.composited_rect(child).is_empty());
+    assert!(scene.composite_context(child).1.is_empty());
+    scene.set_rect(root, Rect::new(0.0, 10.0, 100.0, 20.0));
+    assert_eq!(
+        scene.composited_rect(child),
+        Rect::new(0.0, 10.0, 50.0, 20.0)
+    );
+}
+
+#[test]
 fn translated_child_invalidates_cached_subtree_and_hit_index() {
     use crate::scene::CompositeProperties;
     let mut scene = Scene::new();
