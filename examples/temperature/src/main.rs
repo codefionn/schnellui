@@ -2,9 +2,10 @@
 //!
 //! The lesson: **one source of truth, everything else derived.** `celsius: i64` is
 //! the *only* signal. `fahrenheit` is a **memo** (`create_memo`) — a cached value
-//! derived as `c * 9 / 5 + 32`, *not* a second signal. A second signal could drift
-//! out of sync and would store state already implied by `celsius`; a memo cannot
-//! drift, because it is only ever a *function* of its inputs. The "+"/"−" buttons
+//! derived as `c × 1.8 + 32` rounded to a whole degree, *not* a second signal.
+//! A second signal could drift out of sync and would store state already
+//! implied by `celsius`; a memo cannot drift, because it is only ever a
+//! *function* of its inputs. The "+"/"−" buttons
 //! mutate **only** `celsius`; fahrenheit follows automatically — that is the point.
 //!
 //! ## Push-then-pull (SOUL §3.1)
@@ -51,6 +52,12 @@ enum Scenario {
     /// *driven*: start at 0 °C, dispatch 5 `Click`s at the "+" button so the signal
     /// climbs to 5 °C — the memo follows to 41 °F (SOUL §7.5 drive, §6.3).
     Warmer,
+    /// *driven*: one `Click` at "+" makes 1 °C. 33.8 °F rounds to 34; integer
+    /// division used to show 33.
+    Mild,
+    /// *driven*: one `Click` at "−" makes −1 °C. 30.2 °F rounds to 30; integer
+    /// division, which truncates toward zero, used to show 31.
+    Chilly,
 }
 
 impl Scenario {
@@ -59,6 +66,8 @@ impl Scenario {
         match self {
             Scenario::Freezing => "freezing",
             Scenario::Warmer => "warmer",
+            Scenario::Mild => "mild",
+            Scenario::Chilly => "chilly",
         }
     }
 }
@@ -127,7 +136,9 @@ fn temperature_view(start: i64) -> impl View {
     // The DERIVED value: a memo, not a second signal (see the module docs for *why*).
     // `create_memo` caches the result and recomputes only when `celsius` changes —
     // and it reads `celsius` inside, so that dependency is tracked automatically.
-    let fahrenheit = create_memo(move || celsius.get() * 9 / 5 + 32);
+    // Rounded to the nearest degree. Integer `* 9 / 5` truncates toward zero,
+    // so 1 °C read 33 °F and −1 °C read 31 °F.
+    let fahrenheit = create_memo(move || (celsius.get() as f64 * 1.8 + 32.0).round() as i64);
 
     view! {
         column {
@@ -164,6 +175,13 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             let mut app =
                 App::mount_with_size_scaled(stage(temperature_view(0)), width, height, scale);
             drive_clicks(&mut app, "+", 5);
+            app
+        }
+        Scenario::Mild | Scenario::Chilly => {
+            let mut app =
+                App::mount_with_size_scaled(stage(temperature_view(0)), width, height, scale);
+            let button = if scenario == Scenario::Mild { "+" } else { "-" };
+            drive_clicks(&mut app, button, 1);
             app
         }
     }
@@ -232,13 +250,17 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     // (celsius must contain, fahrenheit must contain) — the memo relation, observed.
     let (c_needle, f_needle) = match scenario {
         Scenario::Freezing => ("0", "32"), // 0 °C → 32 °F
-        Scenario::Warmer => ("5", "41"),   // 5 °C → 41 °F  (5*9/5+32)
+        Scenario::Warmer => ("5", "41"),   // 5 °C → 41 °F
+        Scenario::Mild => ("1", "34"),     // 1 °C → 33.8 °F
+        Scenario::Chilly => ("-1", "30"),  // −1 °C → 30.2 °F
     };
-    if !cel.contains(c_needle) {
-        return Err(format!("celsius {cel:?} does not contain {c_needle:?}"));
+    // The whole number after the label, so "31" never passes for "1".
+    let number = |value: &str| value.rsplit(' ').next().unwrap_or_default().to_string();
+    if number(&cel) != c_needle {
+        return Err(format!("celsius {cel:?} is not {c_needle:?}"));
     }
-    if !fah.contains(f_needle) {
-        return Err(format!("fahrenheit {fah:?} does not contain {f_needle:?}"));
+    if number(&fah) != f_needle {
+        return Err(format!("fahrenheit {fah:?} is not {f_needle:?}"));
     }
     Ok(())
 }
