@@ -1923,3 +1923,41 @@ fn a_stretched_text_field_paints_across_its_box_before_any_input() {
     assert!(laid > 200.0, "the dialog stretched the field");
     assert_eq!(painted, laid, "the field paints as wide as it is laid out");
 }
+
+/// Two dialogs scoped to side-by-side panels, as the playground's Dialogs
+/// page shows them, in a window narrower than the panels. Each dialog layer
+/// must stay on its own panel. It used to be pushed left to fit the window,
+/// as a dropdown popup is, and covered the panel beside it.
+#[test]
+fn a_scoped_dialog_stays_on_its_panel_in_a_narrow_window() {
+    use schnellui::widgets::{Dialog, Row, Stack, Text};
+
+    let panel = |title: &'static str| {
+        Stack::new().size(290.0, 250.0).child(
+            Dialog::new(title)
+                .modeless()
+                .non_fixed()
+                .size(240.0, 180.0)
+                .child(Text::new(title)),
+        )
+    };
+    let view = Row::new()
+        .gap(12.0)
+        .child(panel("Left"))
+        .child(panel("Right"));
+    let mut app = App::mount_with_size(view, 365, 400);
+    app.frame();
+    let scene = app.scene();
+    for layer in scene.preorder().filter(|id| {
+        scene
+            .node(*id)
+            .is_some_and(|n| n.kind == WidgetKind::DialogLayer)
+    }) {
+        let parent = scene.node(layer).and_then(|n| n.parent).unwrap();
+        assert_eq!(
+            scene.layout(layer).unwrap().rect,
+            scene.layout(parent).unwrap().rect,
+            "a scoped dialog layer covers exactly its panel"
+        );
+    }
+}

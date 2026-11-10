@@ -915,13 +915,17 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
 /// left when it runs past the right edge, and opens it upward
 /// (`anchor_above`) when it runs past the bottom and fits above. When it fits
 /// on neither side it slides up to end at the bottom edge, top edge first.
+///
+/// A box that also fills its parent (a dialog layer scoped to a panel) is
+/// pinned to that parent, not floating: it stays where the parent is, even
+/// when the parent runs past the window.
 fn keep_anchored_in_view(
     viewport: Option<Rect>,
     style: &ContainerStyle,
     at: Point,
     size: taffy::Size<f32>,
 ) -> Point {
-    let Some(view) = viewport else {
+    let Some(view) = viewport.filter(|_| !style.fill) else {
         return at;
     };
     let mut at = at;
