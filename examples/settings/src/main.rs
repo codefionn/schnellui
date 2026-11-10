@@ -22,7 +22,6 @@ use clap::{Parser, ValueEnum};
 use schnellui::a11y::{self, to_access_id, Role};
 use schnellui::accesskit_action::{Action, ActionRequest};
 use schnellui::accesskit_reexport::TreeId;
-use schnellui::scene::{Scene, WidgetId};
 use schnellui::signal::{create_memo, create_signal};
 // `view!` is re-exported from the umbrella crate; `View` is the trait every widget
 // (and every `view!` block) implements.
@@ -136,19 +135,22 @@ fn settings_view() -> impl View {
     view! {
         column(gap = 12.0) {
             text(size = 22.0) { "Settings" }
-            // Each row pairs a checkbox with its visible label. `on:toggle` receives
-            // the checkbox's *new* checked state and writes it straight into the
-            // signal — the same handler an inbound `Click` action fires (SOUL §6.3).
+            // Each row pairs a checkbox with its visible label, and the checkbox
+            // carries the same text as its accessible name: SOUL §7.5 locates
+            // widgets by Role+name, and a screen reader reads the name, not the
+            // text beside it. `on:toggle` receives the checkbox's *new* checked
+            // state and writes it straight into the signal — the same handler an
+            // inbound `Click` action fires (SOUL §6.3).
             row(gap = 8.0) {
-                checkbox(on:toggle = move |v: bool| dark.set(v))
+                checkbox(name = "dark mode", on:toggle = move |v: bool| dark.set(v))
                 text { "dark mode" }
             }
             row(gap = 8.0) {
-                checkbox(on:toggle = move |v: bool| notifications.set(v))
+                checkbox(name = "notifications", on:toggle = move |v: bool| notifications.set(v))
                 text { "notifications" }
             }
             row(gap = 8.0) {
-                checkbox(on:toggle = move |v: bool| telemetry.set(v))
+                checkbox(name = "telemetry", on:toggle = move |v: bool| telemetry.set(v))
                 text { "telemetry" }
             }
             // A decorative separator between the checkbox section and the switch /
@@ -157,7 +159,7 @@ fn settings_view() -> impl View {
             // A `Switch` toggling a preference. `on:toggle` writes its *new* state into
             // the signal — the same handler an inbound `Click` action fires (SOUL §6.3).
             row(gap = 8.0) {
-                switch(on:toggle = move |v: bool| reduced_motion.set(v))
+                switch(name = "reduced motion", on:toggle = move |v: bool| reduced_motion.set(v))
                 text { "reduced motion" }
             }
             // A read-only `ProgressBar` (SOUL §8.1). Its accessible value is the
@@ -181,11 +183,6 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
     // distinct from the background in the PNG (SOUL §7.3).
     app.set_clear_color(app.theme().page);
 
-    // The `Checkbox` primitive has no label slot, so it builds unnamed. We set each
-    // accessible name to match its visible label — SOUL §7.5 locates widgets by
-    // Role+name, so an unnamed checkbox could be neither driven nor asserted.
-    label_checkboxes(&mut app);
-
     if scenario == Scenario::AllEnabled {
         for name in SETTINGS {
             toggle_checkbox(&mut app, name);
@@ -195,30 +192,6 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
         toggle_switch(&mut app);
     }
     app
-}
-
-/// Assigns each checkbox its accessible name, in tree order, from [`SETTINGS`].
-fn label_checkboxes(app: &mut App) {
-    fn collect(scene: &Scene, id: WidgetId, out: &mut Vec<WidgetId>) {
-        let is_checkbox = scene
-            .a11y(id)
-            .is_some_and(|a| a.role == Role::CheckBox.as_u16());
-        if is_checkbox {
-            out.push(id);
-        }
-        if let Some(node) = scene.node(id) {
-            for &c in &node.children {
-                collect(scene, c, out);
-            }
-        }
-    }
-    let mut ids = Vec::new();
-    if let Some(root) = app.scene().root() {
-        collect(app.scene(), root, &mut ids);
-    }
-    for (id, name) in ids.into_iter().zip(SETTINGS) {
-        app.scene_mut().a11y_mut(id).name = Some(name.to_string());
-    }
 }
 
 /// Drives one `Click` `ActionRequest` at the checkbox named `name`, located by
@@ -279,8 +252,10 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     // there through the real inbound `Click` `ActionRequest` path (SOUL §6.3, §7.5).
     // Located by `Role::Switch` (semantics, never pixels), asserted from the a11y dump.
     let want_switch = scenario == Scenario::SwitchOn;
-    let switch =
-        find_by_role_name(&tree, "switch", None).ok_or_else(|| "missing switch".to_string())?;
+    // Its visible label is a sibling text, so the switch carries the same
+    // name itself, or a screen reader announces an unnamed switch.
+    let switch = find_by_role_name(&tree, "switch", Some("reduced motion"))
+        .ok_or_else(|| "missing switch named \"reduced motion\"".to_string())?;
     let switch_checked = switch.state.iter().any(|s| s == "checked");
     if switch_checked != want_switch {
         return Err(format!(
