@@ -1571,6 +1571,32 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
         let _ = strip_active_decoration(runtime, scene);
     }
 
+    // A decoration whose target stays mounted can still have laid its pieces
+    // on descendants that go: a ring on a scroll view recolours the rows
+    // inside it, and a virtual list recycles those rows. Their paint goes with
+    // them, so forget the records rather than strip paint that is gone.
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let rt = &mut *rt;
+        for decoration in [&mut rt.ring, &mut rt.active, &mut rt.hover]
+            .into_iter()
+            .flatten()
+        {
+            decoration
+                .foreground
+                .retain(|restore| !removed(restore.owner));
+            if decoration.border_owner.is_some_and(&removed) {
+                decoration.border_owner = None;
+            }
+            if decoration
+                .background
+                .is_some_and(|(owner, _)| removed(owner))
+            {
+                decoration.background = None;
+            }
+        }
+    });
+
     context_menu::purge_nodes(runtime, nodes);
     terminal_grid::purge_nodes(runtime, scene, nodes);
     for &id in nodes {

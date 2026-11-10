@@ -1267,3 +1267,65 @@ mod context_menu_clipboard {
         assert_eq!(value(&host, input), "Buy oat milkBuy oat milk");
     }
 }
+
+/// A decoration on a scroll view lays its recolours on the rows inside it. A
+/// virtual list recycling those rows must take the records with them.
+mod ring_on_a_virtual_list {
+    use super::super::headless::{HeadlessHost, HostKey};
+    use crate::scene::Color;
+    use crate::widgets::{
+        Button, Column, InteractionStates, InteractionStyle, Pad, Row, Theme, VirtualList,
+        VirtualListController,
+    };
+    use crate::{theme, App, ThemeMode};
+    use std::time::Duration;
+
+    const fn every_channel() -> InteractionStates {
+        let style = InteractionStyle {
+            background: Some(Color::rgba(70, 40, 90, 0x50)),
+            foreground: Some(Color::rgb(200, 30, 30)),
+            border: Some(Color::rgb(30, 30, 200)),
+        };
+        InteractionStates {
+            hover: style,
+            focus: style,
+            active: style,
+        }
+    }
+
+    #[test]
+    fn paging_a_ringed_virtual_list_leaves_no_record_on_a_recycled_row() {
+        let loud = Theme {
+            interactions: every_channel(),
+            ..theme::LIGHT
+        };
+        let controller = VirtualListController::new(0_u32..60, 30.0);
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(loud),
+            move || {
+                Column::new()
+                    .child(Pad::all(8.0).child(Row::new().child(Button::new("Append"))))
+                    .child(
+                        VirtualList::new(controller.clone(), |key: &u32| {
+                            Button::new(format!("Row {key}"))
+                        })
+                        .label("Rows")
+                        .size(300.0, 150.0)
+                        .scrollbar(true),
+                    )
+            },
+            340,
+            240,
+            1.0,
+        );
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        // Shift+Tab lands on the list's scroll view, which wears the ring.
+        host.key(&HostKey::Tab, true, false);
+        host.transition_theme(theme::LIGHT, Duration::from_millis(50));
+        host.advance(Duration::from_millis(1));
+        // Paging unmounts the rows the ring recoloured.
+        host.key(&HostKey::Space, false, false);
+        host.key(&HostKey::Space, false, false);
+    }
+}
