@@ -377,6 +377,30 @@ impl Watch {
         if seen {
             return Ok(());
         }
+        // The target carries the focus ring. A control at the very end of its
+        // content has its ring cut there whatever the viewport does, so with a
+        // viewport resting at an end the control's own box is what must show.
+        let mut pinned = false;
+        let mut cur = schnellui::widgets::enclosing_scroll(scene, id);
+        while let Some(viewport) = cur {
+            if let Some(m) = scroll_metrics(scene, viewport) {
+                pinned |= m.offset <= EPS || m.offset >= m.max_offset - EPS;
+            }
+            cur = schnellui::widgets::enclosing_scroll(scene, viewport);
+        }
+        if let (true, Some(rect)) = (pinned, scene.layout(id).map(|l| l.rect)) {
+            let boxed = Rect::new(
+                rect.x + offset.x,
+                rect.y + offset.y,
+                rect.width,
+                rect.height,
+            );
+            if boxed.height > clip.height + EPS
+                || (boxed.y >= clip.y - EPS && boxed.bottom() <= clip.bottom() + EPS)
+            {
+                return Ok(());
+            }
+        }
         Err(format!(
             "focused {kind:?} {id:?} is at {shown:?} but its viewports show {clip:?} ({})",
             if moved {

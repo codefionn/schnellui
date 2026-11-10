@@ -136,16 +136,15 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             .primitives
             .splice(..end, desired.into_iter().flatten());
     } else {
-        // Keep the washes at the front, in order, and the chrome after them.
+        // The chrome first, then the washes in the order they went on, then
+        // the strokes: where laying every decoration again puts them.
         let mut at = 0;
         paint.primitives.retain(|_| {
             at += 1;
             at > end || washes.contains(&(at - 1))
         });
-        let kept = paint.primitives.len() - (at - end);
-        paint
-            .primitives
-            .splice(kept..kept, desired.into_iter().flatten());
+        let chrome = desired.map_or(0, |primitives| primitives.len());
+        paint.primitives.splice(..0, desired.into_iter().flatten());
         runtime.with(|rt| {
             let mut rt = rt.borrow_mut();
             let rt = &mut *rt;
@@ -155,7 +154,8 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             {
                 if let Some((owner, position)) = decoration.background.as_mut() {
                     if *owner == id {
-                        *position = washes.iter().filter(|&&other| other < *position).count();
+                        *position =
+                            chrome + washes.iter().filter(|&&other| other < *position).count();
                     }
                 }
             }

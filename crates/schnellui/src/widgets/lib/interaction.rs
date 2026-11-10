@@ -147,13 +147,6 @@ fn decoration_geometry(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option
         }
     }
 
-    // A viewport's decoration belongs to the viewport: its own paint is
-    // composited after its content and does not scroll, where paint put on
-    // the last thing the content draws would scroll away, or sit clipped
-    // under the content, and a viewport with no paint in it would have none.
-    if scene.node(id).map(|node| node.kind) == Some(WidgetKind::Scroll) {
-        return scene.layout(id).map(|layout| (layout.rect, id));
-    }
     let mut bounds = None;
     let mut owner = None;
     visit(runtime, scene, id, &mut bounds, &mut owner);
@@ -830,6 +823,16 @@ fn apply_interaction_style(
     let (geometry, owner) = decoration_geometry(runtime, scene, id)?;
     let component = interaction_component(scene, id);
     let kind = scene.node(id).map(|node| node.kind);
+    // A viewport's decoration belongs to the viewport. Its own paint is
+    // composited after its content and does not scroll, where paint put on
+    // the last thing the content draws would scroll away with it, or sit
+    // clipped under the viewport's edge. The geometry stays the content's:
+    // that is what tells a decoration it needs laying again.
+    let owner = if kind == Some(WidgetKind::Scroll) {
+        id
+    } else {
+        owner
+    };
     // A button with a block shadow is washed and ringed around its body. The
     // shadow is the ground it stands on, not part of the face.
     let mut rect = shadowed_button_body(scene, id).unwrap_or(geometry);
