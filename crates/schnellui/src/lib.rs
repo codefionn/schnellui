@@ -516,6 +516,11 @@ pub struct App {
     active_theme: Theme,
     theme_transition_duration: Duration,
     theme_transition: Option<ActiveThemeTransition>,
+    /// A context menu that was open on a control when the tree was rebuilt:
+    /// its source's counterpart, the point and whether it offered Paste. The
+    /// menu places itself on laid-out geometry, so it reopens after the
+    /// replacement's first layout.
+    reopen_context_menu: Option<(scene::WidgetId, scene::Point, bool)>,
     theme_binding: Option<bindings::ThemeBinding>,
     /// Whether motion is allowed by the host platform's accessibility preference.
     /// Headless/custom hosts default to `true` and can update this through

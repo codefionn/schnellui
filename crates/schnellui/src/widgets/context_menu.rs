@@ -181,6 +181,10 @@ struct OpenMenu {
     root: WidgetId,
     parent: WidgetId,
     items: Vec<WidgetId>,
+    /// Where it was opened and whether Paste was offered, so a rebuilt tree
+    /// can open the same menu on the source's counterpart.
+    position: Point,
+    can_paste: bool,
 }
 
 #[derive(Default)]
@@ -579,6 +583,8 @@ pub fn open_context_menu(
             root,
             parent,
             items: item_ids,
+            position,
+            can_paste,
         });
     });
     true
@@ -617,6 +623,20 @@ pub(crate) fn context_menu_open_for(runtime: &crate::widgets::Runtime, id: Widge
             .open
             .as_ref()
             .is_some_and(|open| open.source == id)
+    })
+}
+
+/// The open menu's source, the point it was opened at and whether it offered
+/// Paste: what a rebuild needs to open it again on the source's counterpart.
+pub(crate) fn open_context_menu_anchor(
+    runtime: &crate::widgets::Runtime,
+) -> Option<(WidgetId, Point, bool)> {
+    runtime.context_menu.with(|state| {
+        state
+            .borrow()
+            .open
+            .as_ref()
+            .map(|open| (open.source, open.position, open.can_paste))
     })
 }
 

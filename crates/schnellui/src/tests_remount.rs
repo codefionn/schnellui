@@ -859,3 +859,84 @@ fn escape_exits_is_off_by_default_and_survives_a_host_remount() {
     replacement.inherit_host_configuration(&mut previous);
     assert!(replacement.escape_exits());
 }
+
+/// Right-click a field, then let the tree be rebuilt under the open menu: a
+/// theme change (instant, or a fade frame) or a remount that keeps the field.
+/// The menu stays open where it was, and its rows still act.
+#[test]
+fn an_open_context_menu_survives_a_rebuild_that_keeps_its_source() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::widgets::{Column, ContextMenu, ContextMenuItem, TextInput};
+
+    let said = Rc::new(Cell::new(0));
+    let view = {
+        let said = said.clone();
+        move || {
+            let said = said.clone();
+            Column::new().child(
+                TextInput::new("note").label("Note").context_menu(
+                    ContextMenu::new()
+                        .item(ContextMenuItem::new("Shout").on_select(move || said.set(1))),
+                ),
+            )
+        }
+    };
+    let open_at = |app: &mut App| {
+        let field = app.find_widget(Role::TextInput, Some("Note")).unwrap();
+        let r = app.scene().layout(field).unwrap().rect;
+        let at = schnellui::scene::Point {
+            x: r.x + 10.0,
+            y: r.y + 5.0,
+        };
+        assert!(app.open_context_menu(field, at, false));
+        app.frame();
+        at
+    };
+    let item_rect = |app: &App| {
+        let id = app.find_widget(Role::MenuItem, Some("Shout")).unwrap();
+        app.scene().layout(id).unwrap().rect
+    };
+
+    let mut app = App::mount_themed_with_size_scaled(
+        ThemeMode::Fixed(theme::LIGHT),
+        view.clone(),
+        300,
+        200,
+        1.0,
+    );
+    app.frame();
+    open_at(&mut app);
+    let before = item_rect(&app);
+    assert!(app.set_theme(theme::DARK));
+    app.frame();
+    assert!(
+        app.context_menu_is_open(),
+        "a theme rebuild closed the menu"
+    );
+    assert_eq!(item_rect(&app), before, "the menu moved");
+
+    let mut previous = App::mount_themed_with_size_scaled(
+        ThemeMode::Fixed(theme::LIGHT),
+        view.clone(),
+        300,
+        200,
+        1.0,
+    );
+    previous.frame();
+    open_at(&mut previous);
+    let mut replacement =
+        App::mount_themed_with_size_scaled(ThemeMode::Fixed(theme::LIGHT), view, 300, 200, 1.0);
+    replacement.inherit_remount_state(&previous);
+    replacement.frame();
+    assert!(
+        replacement.context_menu_is_open(),
+        "a remount closed the menu"
+    );
+    let shout = replacement
+        .find_widget(Role::MenuItem, Some("Shout"))
+        .unwrap();
+    replacement.activate_context_menu_item(shout);
+    assert_eq!(said.get(), 1, "the carried menu's row still acts");
+}

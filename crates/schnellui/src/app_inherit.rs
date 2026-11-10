@@ -33,6 +33,7 @@ impl App {
                 .flatten()
         });
 
+        let previous_menu = schnellui::widgets::open_context_menu_anchor(&previous.widgets);
         let mut stateful_nodes: Vec<_> = previous
             .scene
             .preorder()
@@ -50,6 +51,9 @@ impl App {
         }
         if let Some(trigger) = previous_option_trigger {
             stateful_nodes.push(trigger);
+        }
+        if let Some((source, _, _)) = previous_menu {
+            stateful_nodes.push(source);
         }
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
@@ -88,6 +92,13 @@ impl App {
         if let Some(focus) = restored {
             self.restore_focus_after_remount(focus);
         }
+
+        // A context menu open on a control that survives the rebuild stays
+        // open where it was. Otherwise a theme fade or a background remount
+        // would close it under the pointer a frame after it opened.
+        self.reopen_context_menu = previous_menu.and_then(|(source, position, can_paste)| {
+            Some((counterparts.get(source)?, position, can_paste))
+        });
     }
 
     /// Moves app-level host registrations into an internally reconstructed tree.

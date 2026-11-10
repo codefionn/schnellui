@@ -432,6 +432,11 @@ impl App {
         // Layout slides paint to new origins but never resizes a hover wash or
         // focus ring that was sized before it; lay those again where the
         // decorated paint changed size.
+        if let Some((source, position, can_paste)) =
+            self.reopen_context_menu.take_if(|_| self.laid_out)
+        {
+            let _ = self.open_context_menu(source, position, can_paste);
+        }
         if layout_changed {
             schnellui::widgets::relay_moved_decorations(&self.widgets, &mut self.scene);
         }
