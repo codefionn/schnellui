@@ -21,7 +21,6 @@ use crate::widgets::{
     theme_for, ClickHandler, BUTTON_TEXT_SIZE, PAD_H,
 };
 
-const CONTEXT_MENU_OVERLAY_LEVEL: u8 = 30;
 const CONTEXT_MENU_MIN_WIDTH: f32 = 140.0;
 const CONTEXT_MENU_MARGIN: f32 = 4.0;
 /// Vertical padding of a menu row, each side: menus stay denser than buttons.
@@ -427,7 +426,7 @@ pub fn open_context_menu(
     };
     let root = scene.insert(WidgetKind::Column, Some(parent));
     remember_node_theme(runtime, root, theme);
-    scene.set_overlay_level(root, CONTEXT_MENU_OVERLAY_LEVEL);
+    scene.set_overlay_level(root, crate::widgets::POPUP_OVERLAY_LEVEL);
     scene.set_layout(
         root,
         LayoutBox {

@@ -1827,6 +1827,50 @@ fn a_bold_label_is_shaped_in_the_bold_face() {
     assert!(width("Allowed hosts") > width("Allowed hosts "));
 }
 
+/// The playground's Dialogs page: open the Theme dropdown above the
+/// embedded "Review changes" dialog. The dialog covered the lower options,
+/// which could be neither seen nor clicked.
+#[test]
+fn an_open_dropdown_on_the_page_is_above_a_modeless_dialog() {
+    use schnellui::scene::Point;
+    use schnellui::widgets::{Column, Dialog, Dropdown, DropdownOption, Stack, Text};
+    let view = Column::new()
+        .child(
+            Dropdown::new("Theme")
+                .open(true)
+                .option(DropdownOption::new("Light").selected(true))
+                .option(DropdownOption::new("Dark"))
+                .option(DropdownOption::new("Forest"))
+                .option(DropdownOption::new("Candy")),
+        )
+        .child(
+            Stack::new().size(400.0, 300.0).child(
+                Dialog::new("Review changes")
+                    .modeless()
+                    .non_fixed()
+                    .size(380.0, 200.0)
+                    .child(Text::new("Three files changed")),
+            ),
+        );
+    let mut app = App::mount_with_size(view, 640, 600);
+    app.frame();
+    let dialog = app
+        .find_widget(Role::Dialog, Some("Review changes"))
+        .unwrap();
+    let covered = app.scene().composited_rect(dialog);
+    let option = app.find_widget(Role::ListBoxOption, Some("Candy")).unwrap();
+    let rect = app.scene().composited_rect(option);
+    let center = Point {
+        x: rect.x + rect.width / 2.0,
+        y: rect.y + rect.height / 2.0,
+    };
+    assert!(
+        covered.contains(center),
+        "the test needs the dialog under Candy"
+    );
+    assert_eq!(app.hit_test(center), Some(option));
+}
+
 #[test]
 fn a_dropdown_is_at_least_its_min_width() {
     use schnellui::widgets::{Column, Dropdown, DropdownOption};

@@ -227,7 +227,8 @@ impl View for ComboBox {
                 y: intrinsic.height,
             });
             ctx.layout.set_container(popup, style);
-            ctx.scene.set_overlay(popup);
+            ctx.scene
+                .set_overlay_level(popup, crate::widgets::POPUP_OVERLAY_LEVEL);
 
             let normalized = this.value.trim().to_lowercase();
             let exact = this

@@ -341,7 +341,8 @@ impl View for Dropdown {
             });
             style.anchor_above = Some(-POPUP_GAP);
             ctx.layout.set_container(popup, style);
-            ctx.scene.set_overlay(popup);
+            ctx.scene
+                .set_overlay_level(popup, crate::widgets::POPUP_OVERLAY_LEVEL);
             let rows = ctx.scene.insert(WidgetKind::Column, Some(popup));
             ctx.layout
                 .set_container(rows, ContainerStyle::new(Container::Column));

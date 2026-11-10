@@ -692,6 +692,10 @@ fn emit_hover_tooltip(
 /// [`Image::alt`] / [`Svg::alt`](crate::widgets::Svg::alt) text automatically.
 const TOOLTIP_OVERLAY_LEVEL: u8 = 5;
 
+/// Dropdown and combobox lists and context menus. Someone is choosing from
+/// one right now, so it opens above every dialog, modal ones included.
+pub(crate) const POPUP_OVERLAY_LEVEL: u8 = 30;
+
 pub(crate) fn register_hover_tooltip(
     runtime: &Runtime,
     scene: &mut Scene,
