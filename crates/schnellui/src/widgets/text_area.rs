@@ -445,28 +445,8 @@ impl AreaCache {
         if sub >= shaped.lines.len() {
             return Some((line, len, len));
         }
-        let (start, end, glyphs) = wrapped_row(shaped, sub, len);
-        let x = x - shaped.lines[sub].x;
-        let (mut caret, mut hit) = (None, None);
-        let mut pen = 0.0f32;
-        for g in glyphs {
-            if caret.is_none() && x < pen + g.x_advance * 0.5 {
-                caret = Some(g.cluster as usize);
-            }
-            if hit.is_none() && x < pen + g.x_advance {
-                hit = Some(g.cluster as usize);
-            }
-            pen += g.x_advance;
-        }
-        // Past the end of a row that a later row continues: `end` would
-        // put the caret at the start of that later row, so stop before the
-        // row's last glyph instead.
-        let tail = if sub + 1 < shaped.lines.len() {
-            glyphs.last().map_or(start, |g| g.cluster as usize)
-        } else {
-            end
-        };
-        Some((line, caret.unwrap_or(tail), hit.unwrap_or(tail)))
+        let (caret, hit) = wrapped_row_hit(shaped, sub, len, x);
+        Some((line, caret, hit))
     }
 
     /// Visual row at which line `i` starts.
@@ -728,46 +708,98 @@ impl AreaState {
         w
     }
 
-    /// The caret byte one row above/below `row` at physical offset `goal`.
+    /// The shaped wrapped line `line`, when the cache holds a current one.
+    fn wrapped_shape(&self, line: usize) -> Option<&ShapedText> {
+        let wrapping = self
+            .cache
+            .shape_key
+            .is_some_and(|k| k.wrap != WrapMode::NoWrap);
+        if !wrapping || !self.cache.usable() {
+            return None;
+        }
+        let info = self.cache.lines.get(line)?;
+        info.shape
+            .as_deref()
+            .filter(|_| info.epoch == self.cache.epoch)
+    }
+
+    /// Visual sub-row and physical x (from the line's origin) of byte `caret`.
+    fn caret_row_x(&mut self, caret: usize, shaper: &mut TextShaper) -> (usize, f32) {
+        let line = self.cache.line_of(caret);
+        let ls = self.cache.starts[line];
+        if let Some(shaped) = self.wrapped_shape(line) {
+            let len = self.cache.line_end(line, self.value.len()) - ls;
+            return caret_x_in_wrapped(shaped, caret - ls, len, 1.0);
+        }
+        (0, self.flat_advance(line, caret - ls, shaper))
+    }
+
+    /// The caret byte one visual row above/below `caret` at physical offset
+    /// `goal`. A wrapped line is stepped row by row; past its first/last row
+    /// the motion lands on the neighbouring line's last/first row.
     fn vertical_target(
         &mut self,
-        row: usize,
+        caret: usize,
         down: bool,
         goal: f32,
         shaper: &mut TextShaper,
     ) -> usize {
-        let target_row = if down {
-            if row + 1 >= self.cache.starts.len() {
+        let line = self.cache.line_of(caret);
+        let ls = self.cache.starts[line];
+        if let Some(shaped) = self.wrapped_shape(line) {
+            let len = self.cache.line_end(line, self.value.len()) - ls;
+            let (sub, _) = caret_x_in_wrapped(shaped, caret - ls, len, 1.0);
+            let last = shaped.lines.len().saturating_sub(1);
+            if down && sub < last {
+                return ls + wrapped_row_hit(shaped, sub + 1, len, goal).0;
+            }
+            if !down && sub > 0 {
+                return ls + wrapped_row_hit(shaped, sub - 1, len, goal).0;
+            }
+        }
+        let target_line = if down {
+            if line + 1 >= self.cache.starts.len() {
                 // last line: Down parks at the very end (standard editor)
                 return self.value.len();
             }
-            row + 1
+            line + 1
         } else {
-            if row == 0 {
+            if line == 0 {
                 // first line: Up parks at the very start
                 return 0;
             }
-            row - 1
+            line - 1
         };
-        self.cache.starts[target_row] + self.flat_byte_at_x(target_row, goal, shaper)
+        let ts = self.cache.starts[target_line];
+        if let Some(shaped) = self.wrapped_shape(target_line) {
+            let len = self.cache.line_end(target_line, self.value.len()) - ts;
+            let sub = if down {
+                0
+            } else {
+                shaped.lines.len().saturating_sub(1)
+            };
+            if sub < shaped.lines.len() {
+                return ts + wrapped_row_hit(shaped, sub, len, goal).0;
+            }
+            return ts + len;
+        }
+        ts + self.flat_byte_at_x(target_line, goal, shaper)
     }
 
-    /// Up/Down: land on the previous/next line at the goal column. Needs the
-    /// shaper for x↔byte mapping on the target line.
+    /// Up/Down: land on the previous/next visual row at the goal column. Needs
+    /// the shaper for x↔byte mapping on the target row.
     fn vertical(&mut self, down: bool, select: bool, shaper: &mut TextShaper) -> Change {
         let before = selection_list(self.caret, self.anchor, &self.secondary);
-        let row = self.cache.line_of(self.caret);
         // Establish (or keep) the goal column in physical px.
         let goal = match self.goal_x {
             Some(g) => g,
             None => {
-                let rel = self.caret - self.cache.starts[row];
-                let g = self.flat_advance(row, rel, shaper);
+                let g = self.caret_row_x(self.caret, shaper).1;
                 self.goal_x = Some(g);
                 g
             }
         };
-        let target = self.vertical_target(row, down, goal, shaper);
+        let target = self.vertical_target(self.caret, down, goal, shaper);
         self.caret = target;
         if !select {
             self.anchor = target;
@@ -775,9 +807,8 @@ impl AreaState {
 
         for i in 0..self.secondary.len() {
             let caret = self.secondary[i].caret;
-            let row = self.cache.line_of(caret);
-            let goal = self.flat_advance(row, caret - self.cache.starts[row], shaper);
-            let target = self.vertical_target(row, down, goal, shaper);
+            let goal = self.caret_row_x(caret, shaper).1;
+            let target = self.vertical_target(caret, down, goal, shaper);
             self.secondary[i].caret = target;
             if !select {
                 self.secondary[i].anchor = target;
@@ -1102,6 +1133,33 @@ fn wrapped_row(
     let g0 = (line.glyph_start as usize).min(shaped.glyphs.len());
     let g1 = (g0 + line.glyph_count as usize).min(shaped.glyphs.len());
     (start, end, &shaped.glyphs[g0..g1])
+}
+
+/// The caret byte and the byte under physical offset `x` (from the line's
+/// origin) on visual row `sub` of a wrapped line of `len` bytes.
+fn wrapped_row_hit(shaped: &ShapedText, sub: usize, len: usize, x: f32) -> (usize, usize) {
+    let (start, end, glyphs) = wrapped_row(shaped, sub, len);
+    let x = x - shaped.lines[sub].x;
+    let (mut caret, mut hit) = (None, None);
+    let mut pen = 0.0f32;
+    for g in glyphs {
+        if caret.is_none() && x < pen + g.x_advance * 0.5 {
+            caret = Some(g.cluster as usize);
+        }
+        if hit.is_none() && x < pen + g.x_advance {
+            hit = Some(g.cluster as usize);
+        }
+        pen += g.x_advance;
+    }
+    // Past the end of a row that a later row continues: `end` would put the
+    // caret at the start of that later row, so stop before the row's last
+    // glyph instead.
+    let tail = if sub + 1 < shaped.lines.len() {
+        glyphs.last().map_or(start, |g| g.cluster as usize)
+    } else {
+        end
+    };
+    (caret.unwrap_or(tail), hit.unwrap_or(tail))
 }
 
 // ---------------------------------------------------------------------------
@@ -2043,6 +2101,225 @@ mod tests {
             (1..24).contains(&second_row),
             "the first line's second row starts inside it, not at {second_row}"
         );
+    }
+
+    /// Up/Down in a wrapping area: a wrapped paragraph and its fixture.
+    struct Wrapped {
+        runtime: crate::widgets::Runtime,
+        scene: Scene,
+        text: TextShaper,
+        atlas: GlyphAtlas,
+        id: WidgetId,
+        rect: Rect,
+    }
+
+    impl Wrapped {
+        fn new(value: &str, wrap: WrapMode) -> Wrapped {
+            let runtime = crate::widgets::Runtime::new();
+            let (mut scene, _l, mut text, mut atlas, id) =
+                build_area(&runtime, TextArea::new(value).wrap(wrap));
+            let rect = Rect::new(10.0, 10.0, 90.0, 400.0);
+            scene.set_layout(
+                id,
+                LayoutBox {
+                    rect,
+                    content: rect,
+                },
+            );
+            dispatch_focus(&runtime, &mut scene, &mut text, &mut atlas, Some(id));
+            // repaint at the laid-out width so the wrapped shapes are current
+            emit_text_area_paint(&runtime, &mut scene, &mut text, &mut atlas, id);
+            Wrapped {
+                runtime,
+                scene,
+                text,
+                atlas,
+                id,
+                rect,
+            }
+        }
+
+        fn set_caret(&self, caret: usize) {
+            self.runtime.with(|rt| {
+                let mut rt = rt.borrow_mut();
+                let st = rt.areas.get_mut(self.id).unwrap();
+                st.caret = caret;
+                st.anchor = caret;
+                st.goal_x = None;
+            });
+        }
+
+        fn press(&mut self, key: EditKey<'static>) {
+            dispatch_edit_key(
+                &self.runtime,
+                &mut self.scene,
+                &mut self.text,
+                &mut self.atlas,
+                self.id,
+                key,
+            );
+        }
+
+        fn down(&mut self) {
+            self.press(EditKey::Down { select: false });
+        }
+
+        fn up(&mut self) {
+            self.press(EditKey::Up { select: false });
+        }
+
+        fn caret(&self) -> usize {
+            caret_anchor(&self.runtime, self.id).0
+        }
+
+        /// Absolute byte where each visual row of source line `line` starts.
+        fn row_starts(&self, line: usize) -> Vec<usize> {
+            self.runtime.with(|rt| {
+                let rt = rt.borrow();
+                let st = rt.areas.get(self.id).unwrap();
+                let c = &st.cache;
+                let shaped = c.lines[line].shape.as_deref().unwrap();
+                let len = c.line_end(line, st.value.len()) - c.starts[line];
+                (0..shaped.lines.len())
+                    .map(|r| c.starts[line] + wrapped_row(shaped, r, len).0)
+                    .collect()
+            })
+        }
+
+        fn line_start(&self, line: usize) -> usize {
+            self.runtime
+                .with(|rt| rt.borrow().areas.get(self.id).unwrap().cache.starts[line])
+        }
+    }
+
+    const PARA: &str = "0123456789 0123456789 0123456789 0123456789";
+
+    #[test]
+    fn down_and_up_step_one_visual_row_of_a_wrapped_paragraph() {
+        let value = format!("{PARA}\nab\n{PARA}");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let rows = w.row_starts(0);
+        assert!(rows.len() >= 3, "wraps onto three rows or more: {rows:?}");
+        w.set_caret(3);
+        for (k, start) in rows.iter().enumerate().skip(1) {
+            w.down();
+            assert_eq!(w.caret(), start + 3, "Down to visual row {k}");
+        }
+        // last visual row -> next paragraph (short, clamped to its end)
+        w.down();
+        assert_eq!(w.caret(), w.line_start(1) + 2);
+        // and back up, row by row, keeping column 3
+        w.up();
+        assert_eq!(w.caret(), rows.last().unwrap() + 3);
+        for k in (0..rows.len() - 1).rev() {
+            w.up();
+            assert_eq!(w.caret(), rows[k] + 3, "Up to visual row {k}");
+        }
+        // first visual row of the first line parks at 0
+        w.up();
+        assert_eq!(w.caret(), 0);
+    }
+
+    #[test]
+    fn down_crosses_into_a_wrapped_paragraph_at_its_first_row_and_up_at_its_last() {
+        let value = format!("{PARA}\n{PARA}");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let first = w.row_starts(0);
+        let second = w.row_starts(1);
+        w.set_caret(*first.last().unwrap() + 2);
+        w.down();
+        assert_eq!(w.caret(), second[0] + 2, "first row of the next paragraph");
+        w.up();
+        assert_eq!(w.caret(), first.last().unwrap() + 2, "last row of previous");
+        // Down on the last row of the last line parks at the end
+        w.set_caret(*second.last().unwrap() + 1);
+        w.down();
+        assert_eq!(w.caret(), value.len());
+    }
+
+    #[test]
+    fn wrapped_vertical_motion_keeps_the_goal_column_across_a_short_row() {
+        let value = format!("{PARA}\nab\n{PARA}");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let rows = w.row_starts(0);
+        w.set_caret(rows[0] + 6);
+        for _ in 1..rows.len() {
+            w.down();
+        }
+        w.down();
+        assert_eq!(w.caret(), w.line_start(1) + 2, "clamped on 'ab'");
+        w.down();
+        assert_eq!(w.caret(), w.line_start(2) + 6, "goal column restored");
+    }
+
+    #[test]
+    fn shift_down_selects_one_visual_row_of_a_wrapped_paragraph() {
+        let mut w = Wrapped::new(PARA, WrapMode::Word);
+        let rows = w.row_starts(0);
+        assert!(rows.len() >= 2, "{rows:?}");
+        w.set_caret(3);
+        w.press(EditKey::Down { select: true });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (rows[1] + 3, 3));
+        w.press(EditKey::Up { select: true });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (3, 3));
+    }
+
+    #[test]
+    fn a_caret_moved_down_a_wrapped_row_paints_and_hits_on_that_row() {
+        let value = format!("{PARA}\nab");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let rows = w.row_starts(0);
+        w.set_caret(4);
+        w.down();
+        w.down();
+        let caret = w.caret();
+        assert_eq!(caret, rows[2] + 4);
+        let line_h = w.runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            rt.areas.get_mut(w.id).unwrap().line_height(&mut w.text)
+        });
+        let line = w
+            .scene
+            .paint(w.id)
+            .unwrap()
+            .primitives
+            .iter()
+            .find_map(|p| match p {
+                Primitive::Line { from, to, .. } if from.x == to.x => Some(*from),
+                _ => None,
+            })
+            .expect("a caret line");
+        let want_y = w.rect.y + AREA_PAD + 2.0 * line_h;
+        assert!((line.y - want_y).abs() < 0.01, "{} vs {want_y}", line.y);
+        dispatch_text_pointer(
+            &w.runtime,
+            &mut w.scene,
+            &mut w.text,
+            &mut w.atlas,
+            w.id,
+            Point {
+                x: line.x,
+                y: line.y + line_h * 0.5,
+            },
+            false,
+        );
+        assert_eq!(w.caret(), caret, "a click on the painted caret lands there");
+    }
+
+    #[test]
+    fn nowrap_vertical_motion_still_skips_whole_lines() {
+        let value = format!("{PARA}\nab\n{PARA}");
+        let mut w = Wrapped::new(&value, WrapMode::NoWrap);
+        w.set_caret(3);
+        w.down();
+        assert_eq!(w.caret(), w.line_start(1) + 2);
+        w.down();
+        assert_eq!(w.caret(), w.line_start(2) + 3);
+        w.up();
+        w.up();
+        assert_eq!(w.caret(), 3);
+        w.up();
+        assert_eq!(w.caret(), 0);
     }
 
     /// Press at the end of an area, drag to its start, type over the
