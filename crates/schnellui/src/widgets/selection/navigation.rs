@@ -235,7 +235,9 @@ impl Tab {
         self
     }
     /// Fills a selected [`TabAppearance::Underline`] tab, so the shown tab
-    /// reads as joined to the content under it and not only by its line.
+    /// reads as joined to the content under it and not only by its line. On a
+    /// [`TabAppearance::Navigation`] tab it replaces the theme's selection fill,
+    /// for example with a translucent one over an icon laid under the tab.
     pub fn selected_fill(mut self, color: Color) -> Tab {
         self.style.selected_fill = Some(color);
         self

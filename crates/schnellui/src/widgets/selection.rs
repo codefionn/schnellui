@@ -142,6 +142,10 @@ fn selection_colors(
         // An option row is a floating popup's only surface: a translucent
         // selection tint would show the content under the popup through it.
         over(t.selection, t.surface)
+    } else if selected && kind == WidgetKind::Tab {
+        // A navigation tab may bring its own fill, such as a translucent one over
+        // an icon and label the caller lays under it.
+        tab_style(runtime, id).selected_fill.unwrap_or(t.selection)
     } else if selected {
         t.selection
     } else if matches!(kind, WidgetKind::Tab | WidgetKind::ListItem) {

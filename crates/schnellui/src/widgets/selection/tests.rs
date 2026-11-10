@@ -1348,4 +1348,29 @@ mod tests {
         assert_eq!(color_of(&scene, kids[0], 0), fill);
         assert_eq!(color_of(&scene, kids[1], 0), Color::TRANSPARENT);
     }
+
+    #[test]
+    fn a_selected_navigation_tab_takes_its_own_fill() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let fill = Color::rgba(0x0F, 0x6E, 0x66, 0x24);
+        let (scene, _l, _t, _a, id) = build_one(
+            runtime,
+            TabBar::new()
+                .child(
+                    Tab::new("Account")
+                        .appearance(TabAppearance::Navigation)
+                        .selected_fill(fill)
+                        .selected(true),
+                )
+                .child(
+                    Tab::new("Audio")
+                        .appearance(TabAppearance::Navigation)
+                        .selected_fill(fill),
+                ),
+        );
+        let kids = scene.node(id).unwrap().children.clone();
+        assert_eq!(color_of(&scene, kids[0], 0), fill);
+        assert_eq!(color_of(&scene, kids[1], 0), Color::TRANSPARENT);
+    }
 }
