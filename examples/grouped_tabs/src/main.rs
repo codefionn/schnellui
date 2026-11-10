@@ -19,8 +19,8 @@ use schnellui::testing::find_by_role_name;
 use schnellui::theme::FOREST;
 use schnellui::widgets::{
     Align, BuildCtx, Button, ButtonAppearance, Column, Divider, GroupedTabList, GroupedTabMode,
-    InteractionStates, InteractionStyle, Justify, Pad, Row, Stack, TabGroup, TabNode, Text, Theme,
-    ThemeProvider, View, WrapMode,
+    InteractionStates, InteractionStyle, Justify, Pad, Row, Scroll, Stack, TabGroup, TabNode, Text,
+    Theme, ThemeProvider, View, WrapMode,
 };
 use schnellui::App;
 use schnellui_icons_md::{outlined, MdIcon};
@@ -569,76 +569,84 @@ fn example_view(scenario: Scenario, state: ExampleState) -> impl View {
         GroupedTabMode::Tree => "Click an open section again to fold it",
     };
 
-    Pad::all(PAGE_PADDING).child(
-        Column::new()
-            .gap(14.0)
-            .child(
-                Row::new()
-                    .width(712.0)
-                    .justify(Justify::SpaceBetween)
-                    .align(Align::End)
-                    .child(Text::new("Fieldwork").size(28.0).bold())
-                    // 13px text descends 4px less than 28px text; lift it onto
-                    // the title's baseline.
-                    .child(
-                        Pad::insets(EdgeInsets {
-                            top: 0.0,
-                            right: 0.0,
-                            bottom: 4.0,
-                            left: 0.0,
-                        })
-                        .child(caption(hint, 13.0)),
-                    ),
-            )
-            .child(Divider::new())
-            .child(
-                Row::new()
-                    .gap(30.0)
-                    .align(Align::Start)
-                    .child(navigation)
-                    .child(
-                        Pad::all(8.0).child(
-                            Column::new()
-                                .width(420.0)
-                                .gap(10.0)
-                                .child(
-                                    Text::dynamic(move || chosen.get())
-                                        .size(30.0)
-                                        .bold()
-                                        .role(Role::Status),
-                                )
-                                .child(ThemeProvider::new(
-                                    MUTED_THEME,
-                                    Text::dynamic(move || document(&chosen.get()).0.to_string())
+    // A window shorter than the page scrolls it, so every row action can be
+    // shown.
+    Scroll::new().fill().scrollbar(true).child(
+        Pad::all(PAGE_PADDING).child(
+            Column::new()
+                .gap(14.0)
+                .child(
+                    Row::new()
+                        .width(712.0)
+                        .justify(Justify::SpaceBetween)
+                        .align(Align::End)
+                        .child(Text::new("Fieldwork").size(28.0).bold())
+                        // 13px text descends 4px less than 28px text; lift it onto
+                        // the title's baseline.
+                        .child(
+                            Pad::insets(EdgeInsets {
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: 4.0,
+                                left: 0.0,
+                            })
+                            .child(caption(hint, 13.0)),
+                        ),
+                )
+                .child(Divider::new())
+                .child(
+                    Row::new()
+                        .gap(30.0)
+                        .align(Align::Start)
+                        .child(navigation)
+                        .child(
+                            Pad::all(8.0).child(
+                                Column::new()
+                                    .width(420.0)
+                                    .gap(10.0)
+                                    .child(
+                                        Text::dynamic(move || chosen.get())
+                                            .size(30.0)
+                                            .bold()
+                                            .role(Role::Status),
+                                    )
+                                    .child(ThemeProvider::new(
+                                        MUTED_THEME,
+                                        Text::dynamic(move || {
+                                            document(&chosen.get()).0.to_string()
+                                        })
                                         .size(13.0),
-                                ))
-                                .child(Divider::new())
-                                .child(
-                                    Text::dynamic(move || document(&chosen.get()).1.to_string())
+                                    ))
+                                    .child(Divider::new())
+                                    .child(
+                                        Text::dynamic(move || {
+                                            document(&chosen.get()).1.to_string()
+                                        })
                                         .size(16.0)
                                         .wrap(WrapMode::Word),
-                                )
-                                .child(Divider::new())
-                                .child(
-                                    Row::new()
-                                        .width(420.0)
-                                        .justify(Justify::SpaceBetween)
-                                        .align(Align::Center)
-                                        .child(
-                                            Column::new()
-                                                .gap(2.0)
-                                                .child(caption("Last change", 12.0))
-                                                .child(
-                                                    Text::dynamic(move || last_action.get())
-                                                        .size(14.0)
-                                                        .role(Role::Status),
-                                                ),
-                                        )
-                                        .child(Maybe(undo)),
-                                ),
+                                    )
+                                    .child(Divider::new())
+                                    .child(
+                                        Row::new()
+                                            .width(420.0)
+                                            .justify(Justify::SpaceBetween)
+                                            .align(Align::Center)
+                                            .child(
+                                                Column::new()
+                                                    .gap(2.0)
+                                                    .child(caption("Last change", 12.0))
+                                                    .child(
+                                                        Text::dynamic(move || last_action.get())
+                                                            .size(14.0)
+                                                            .role(Role::Status),
+                                                    ),
+                                            )
+                                            .child(Maybe(undo)),
+                                    ),
+                            ),
                         ),
-                    ),
-            ),
+                ),
+        ),
     )
 }
 
@@ -923,6 +931,22 @@ fn manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(760, 600), (760, 240), (760, 120)] {
+                let (mut app, _state) = scenario_app(scenario, w, h, 1.0);
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
 
     #[test]
     fn every_grouped_tab_scenario_satisfies_its_semantic_oracle() {

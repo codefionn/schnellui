@@ -16,3 +16,7 @@ schnellui.workspace = true
 schnellui-icons-md.workspace = true
 clap.workspace = true
 strum.workspace = true
+
+[dev-dependencies]
+# Tab-order reachability check (`testing::fuzz::tab_stops_reachable`).
+schnellui = { workspace = true, features = ["fuzzing"] }
