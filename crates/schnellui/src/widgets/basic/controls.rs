@@ -309,6 +309,9 @@ impl View for Radio {
             a.state = st.0;
         }
         crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
+        if let Some(height) = this.row_height {
+            with_handlers(&ctx.runtime, id, |h| h.radio_row = Some(height));
+        }
         emit_radio_paint(&ctx.runtime, ctx.scene, id, this.selected);
         let intrinsic = radio_intrinsic(&ctx.runtime, id);
         let row = this.row_height;

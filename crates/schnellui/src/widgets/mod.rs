@@ -1003,6 +1003,8 @@ pub(crate) struct Handlers {
     submits_form: bool,
     /// A [`Radio::arrows_select`]`(false)`: arrows move focus without selecting.
     radio_arrows_focus_only: bool,
+    /// A [`Radio::row`]: the height the mark is centred in before layout has run.
+    radio_row: Option<f32>,
     /// Pointer-drag lifecycle for dockable/reorderable content. Drag input is
     /// deliberately separate from `click`: a short press still activates the
     /// widget, while crossing the movement threshold starts capture.

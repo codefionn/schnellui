@@ -1074,7 +1074,19 @@ fn a_radio_row_selects_when_the_label_under_it_is_clicked() {
     assert_eq!(app.hit_test(over_label), Some(radio));
     assert!(app.dispatch_click(radio));
     assert_eq!(picked.get(), 1);
-    // The mark is still a circle at the start of the row.
+    // The mark is still a circle at the start of the row, level with the row's middle.
+    let first = app
+        .scene()
+        .paint(radio)
+        .unwrap()
+        .primitives
+        .first()
+        .cloned();
+    let Some(Primitive::SolidRect { rect: ring, .. }) = first else {
+        panic!("no ring painted");
+    };
+    let (mid, ring_mid) = (rect.y + rect.height * 0.5, ring.y + ring.height * 0.5);
+    assert!((mid - ring_mid).abs() < 0.5, "ring {ring:?} in {rect:?}");
     for p in &app.scene().paint(radio).unwrap().primitives {
         if let Primitive::SolidRect { rect: r, .. } = p {
             assert!(r.width <= 18.0 && r.x >= rect.x, "{r:?}");

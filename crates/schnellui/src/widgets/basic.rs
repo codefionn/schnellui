@@ -287,9 +287,12 @@ pub(crate) fn emit_radio_paint(
     // The mark keeps its size at the start of the node, centred in its height, so a radio
     // laid out wider or taller (see `Radio::row`) still draws a round mark.
     let laid = node_rect(scene, id, intrinsic);
+    // Before layout has run, the row's own height stands in for the box's.
+    let row = runtime.with(|rt| rt.borrow().handlers.get(id).and_then(|h| h.radio_row));
+    let height = laid.height.max(row.unwrap_or(0.0));
     let rect = Rect::new(
         laid.x,
-        laid.y + (laid.height - intrinsic.height).max(0.0) * 0.5,
+        laid.y + (height - intrinsic.height).max(0.0) * 0.5,
         intrinsic.width,
         intrinsic.height,
     );
