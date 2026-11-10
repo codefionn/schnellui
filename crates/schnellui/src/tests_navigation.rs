@@ -1318,3 +1318,46 @@ fn a_menu_button_in_a_modal_keeps_its_keyboard_walk() {
         "Tab gives focus back first"
     );
 }
+
+/// Escape closes an open dropdown inside a dialog before the dialog, even
+/// when the list was opened by an assistive click that left focus elsewhere.
+/// Before this, Escape in the playground with the Theme list opened that way
+/// skipped the list.
+#[test]
+fn escape_closes_an_open_list_before_its_dialog() {
+    use schnellui::widgets::{Button, Dialog, Dropdown, DropdownOption, Stack};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let dismissed = Rc::new(Cell::new(0));
+    let on_dismiss = dismissed.clone();
+    let toggled = Rc::new(Cell::new(0));
+    let on_toggle = toggled.clone();
+    let mut app = App::mount_with_size(
+        Stack::new().child(Button::new("Background")).child(
+            Dialog::new("Settings")
+                .on_dismiss(move || on_dismiss.set(on_dismiss.get() + 1))
+                .child(Button::new("Apply"))
+                .child(
+                    // Open as an assistive click leaves it: focus stays on Apply.
+                    Dropdown::new("Theme")
+                        .open(true)
+                        .on_toggle(move || on_toggle.set(on_toggle.get() + 1))
+                        .option(DropdownOption::new("Light"))
+                        .option(DropdownOption::new("Dark")),
+                ),
+        ),
+        600,
+        400,
+    );
+    app.frame();
+    let apply = app.find_widget(Role::Button, Some("Apply")).unwrap();
+    app.focus(Some(apply));
+    assert!(app.find_widget(Role::ListBoxOption, Some("Dark")).is_some());
+    // Focus moves that close a static `open(true)` list fire it too.
+    let before = toggled.get();
+    // Dropdown visibility is structural: closing fires `on_toggle` and the
+    // host remounts with the list shut.
+    app.dispatch_key(UiKey::Escape);
+    assert_eq!(toggled.get(), before + 1, "Escape asks the list to close");
+    assert_eq!(dismissed.get(), 0, "the dialog stays open");
+}

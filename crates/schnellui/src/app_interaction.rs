@@ -299,19 +299,8 @@ impl App {
                 _ => {}
             }
         }
-        // Escape closes an open dropdown or combo popup before the dialog
-        // around it. The expanded combo field itself was handled above; this
-        // covers a focused suggestion row.
-        if key == UiKey::Escape && focused.is_some_and(|id| self.focused_option_is_expanded(id)) {
-            return schnellui::widgets::dismiss_open_dropdowns(
-                &self.widgets,
-                &mut self.scene,
-                None,
-            );
-        }
         if key == UiKey::Escape {
-            return schnellui::widgets::dispatch_dialog_escape(&self.widgets, &mut self.scene)
-                .unwrap_or(false);
+            return self.dispatch_escape().unwrap_or(false);
         }
         if let UiKey::Tab { shift } = key {
             return self.focus_step(shift);
@@ -660,20 +649,6 @@ impl App {
         changed
     }
 
-    /// Whether `id` is a suggestion row whose combo box is expanded.
-    fn focused_option_is_expanded(&self, id: scene::WidgetId) -> bool {
-        let is_option = self
-            .scene
-            .a11y(id)
-            .is_some_and(|a| a11y::Role::from_u16(a.role) == a11y::Role::ListBoxOption);
-        is_option
-            && crate::owning_combo_trigger(&self.scene, id).is_some_and(|trigger| {
-                self.scene
-                    .a11y(trigger)
-                    .is_some_and(|a| a11y::StateFlags(a.state).contains(a11y::StateFlags::EXPANDED))
-            })
-    }
-
     /// Where Down lands in an open popup: the option after the chosen one
     /// (the chosen one when it is last), else the first visible option.
     /// Looks through the scroll viewport or padded surface around the rows.
@@ -793,6 +768,19 @@ impl App {
         let back = self.menu_focus_return();
         let dismissed = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
         dismissed | back.is_some_and(|id| self.focus(Some(id)))
+    }
+
+    /// Escape's ladder, the same from the keyboard path and the window: an
+    /// open menu closes first, then any open dropdown or combo list, then the
+    /// top dialog. `None` when nothing took it.
+    pub(crate) fn dispatch_escape(&mut self) -> Option<bool> {
+        if self.context_menu_is_open() {
+            return Some(self.dismiss_context_menu());
+        }
+        if schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, None) {
+            return Some(true);
+        }
+        schnellui::widgets::dispatch_dialog_escape(&self.widgets, &mut self.scene)
     }
 
     /// Records `opener` as the control a keyboard-opened menu returns focus

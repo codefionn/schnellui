@@ -383,22 +383,13 @@ impl WindowedApp {
                 }
                 return EventTail::Normal;
             }
-            // Escape dismisses the top-most dialog first. A
-            // persistent dialog still consumes it. Without an overlay it
+            // Escape closes an open menu, then an open list, then the
+            // top-most dialog. A persistent dialog still consumes it. Without an overlay it
             // exits the window only when the app asked for that
             // (`App::set_escape_exits`); otherwise it goes on to the
             // focused widget like any other key.
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
-                if self.app.dismiss_context_menu() {
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                    return EventTail::Skip;
-                }
-                match schnellui::widgets::dispatch_dialog_escape(
-                    &self.app.widgets.clone(),
-                    self.app.scene_mut(),
-                ) {
+                match self.app.dispatch_escape() {
                     Some(changed) => {
                         if changed {
                             if let Some(w) = &self.window {
