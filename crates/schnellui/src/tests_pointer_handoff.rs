@@ -349,20 +349,32 @@ fn bar_page(with_archive: bool) -> Column {
         .child(Button::new("Undo"))
 }
 
+/// Mounts `bar_page`, pointer-removes "Archive Planning" and remounts.
+fn bar_page_after_pointer_remove() -> App {
+    let mut previous = App::mount_with_size(bar_page(true), 400, 300);
+    previous.frame();
+    let gone = button(&previous, "Archive Planning");
+    assert!(previous.pointer_focus(Some(gone)));
+    let mut next = App::mount_with_size(bar_page(false), 400, 300);
+    next.inherit_remount_state(&previous);
+    next.frame();
+    next
+}
+
 #[test]
-fn a_hand_off_inside_a_tab_bar_steps_to_the_bars_stop_backwards() {
-    for backwards in [false, true] {
-        let mut previous = App::mount_with_size(bar_page(true), 400, 300);
-        previous.frame();
-        let gone = button(&previous, "Archive Planning");
-        assert!(previous.pointer_focus(Some(gone)));
-        let mut next = App::mount_with_size(bar_page(false), 400, 300);
-        next.inherit_remount_state(&previous);
-        next.frame();
-        assert!(next.dispatch_key(UiKey::Tab { shift: backwards }));
-        let expect = if backwards { "Engine" } else { "Archive Build" };
-        assert_eq!(focused_name(&next).as_deref(), Some(expect));
-    }
+fn a_hand_off_inside_a_tab_bar_steps_by_real_stop_positions() {
+    // The bar's stop (Engine) sits after the gap, so no stop precedes it:
+    // Shift+Tab wraps, exactly as it does from the first stop after the gap.
+    let mut next = bar_page_after_pointer_remove();
+    assert!(next.dispatch_key(UiKey::Tab { shift: false }));
+    assert_eq!(focused_name(&next).as_deref(), Some("Archive Build"));
+    assert!(next.dispatch_key(UiKey::Tab { shift: true }));
+    let from_stop = focused_name(&next);
+
+    let mut next = bar_page_after_pointer_remove();
+    assert!(next.dispatch_key(UiKey::Tab { shift: true }));
+    assert_eq!(focused_name(&next), from_stop, "same as from the next stop");
+    assert_eq!(from_stop.as_deref(), Some("Undo"));
 }
 
 #[test]

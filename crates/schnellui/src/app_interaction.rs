@@ -249,20 +249,7 @@ impl App {
                     (&order[position + 1..], &order[..=position])
                 };
                 if backwards {
-                    // A member of a roving group that is not its entry stands
-                    // for the group's one stop, wherever that sits: the lost
-                    // control was inside the bar, so Shift+Tab reaches the bar.
-                    behind
-                        .iter()
-                        .rev()
-                        .find_map(|&id| {
-                            if in_scope(&&id) {
-                                return Some(id);
-                            }
-                            let group = roving_group(scene, id)?;
-                            roving_entry(scene, order, group).filter(|&entry| in_modal(entry))
-                        })
-                        .or_else(last)
+                    behind.iter().rev().find(in_scope).copied().or_else(last)
                 } else {
                     ahead.iter().find(in_scope).copied().or_else(first)
                 }
