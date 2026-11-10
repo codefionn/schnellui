@@ -339,6 +339,40 @@ fn virtual_list_follow_end_rearms_when_streamed_rows_grow() {
 }
 
 #[test]
+fn virtual_list_tells_assistive_technology_where_an_insertion_moved_it() {
+    use widgets::{ComponentRef, Text, View as _, VirtualList, VirtualListController};
+
+    let controller = VirtualListController::new(10_usize..80, 20.0);
+    let scroll_ref = ComponentRef::new();
+    let mut app = App::mount_with_size(
+        VirtualList::new(controller.clone(), |key| Text::new(format!("row {key}")))
+            .label("anchored")
+            .size(240.0, 100.0)
+            .with_ref(scroll_ref),
+        280,
+        140,
+    );
+    app.frame();
+    let scroll = app.resolve_ref(scroll_ref).unwrap();
+    assert!(app.dispatch_scroll(scroll, 100.0));
+    app.frame();
+    let value = |app: &App| app.scene().a11y(scroll).and_then(|a| a.value.clone());
+    assert_eq!(value(&app).as_deref(), Some("100"));
+
+    // A row inserted above keeps the rows in view where they were, by moving
+    // the offset a row down.
+    controller.insert(0, 5);
+    app.frame();
+    let offset = app.scene().scroll_offset(scroll).y;
+    assert!(offset > 100.0, "the insertion moved the offset to {offset}");
+    assert_eq!(
+        value(&app),
+        Some(offset.round().to_string()),
+        "assistive technology reads the offset the list moved to"
+    );
+}
+
+#[test]
 fn virtual_list_follow_end_bootstraps_the_tail_not_the_first_row() {
     use widgets::{ComponentRef, Text, View as _, VirtualList, VirtualListController};
 

@@ -476,7 +476,7 @@ where
                 },
             );
         } else if let Some(offset) = sync_offset {
-            scene.set_scroll_offset(self.scroll, Point { x: 0.0, y: offset });
+            place_scroll(scene, self.scroll, offset);
         }
         true
     }
@@ -531,10 +531,17 @@ where
                 },
             );
         } else if let Some(offset) = sync_offset {
-            scene.set_scroll_offset(self.scroll, Point { x: 0.0, y: offset });
+            place_scroll(scene, self.scroll, offset);
         }
         true
     }
+}
+
+/// Moves the viewport to `offset` for the list's own reasons (an anchor kept
+/// across an insertion) and tells assistive technology where it went.
+fn place_scroll(scene: &mut Scene, scroll: WidgetId, offset: f32) {
+    scene.set_scroll_offset(scroll, Point { x: 0.0, y: offset });
+    scene.set_a11y_value_i64(scroll, offset.round() as i64);
 }
 
 fn set_spacer_height(layout: &mut LayoutEngine, id: WidgetId, height: f32) {
