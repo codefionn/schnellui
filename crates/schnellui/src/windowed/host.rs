@@ -822,41 +822,7 @@ impl WindowedApp {
     }
 
     pub(super) fn debug_tree(&self) -> Value {
-        fn add_rects(scene: &schnellui::scene::Scene, value: &mut Value) {
-            let Some(object) = value.as_object_mut() else {
-                return;
-            };
-            if let Some(id) = object.get("id").and_then(Value::as_u64) {
-                let widget = schnellui::a11y::resolve_target(
-                    scene,
-                    schnellui::a11y::accesskit_reexport::NodeId(id),
-                );
-                if let Some(rect) = widget.and_then(|widget| scene.layout(widget)) {
-                    object.insert(
-                        "rect".into(),
-                        json!({
-                            "x": rect.rect.x,
-                            "y": rect.rect.y,
-                            "width": rect.rect.width,
-                            "height": rect.rect.height,
-                        }),
-                    );
-                }
-            }
-            if let Some(children) = object.get_mut("children").and_then(Value::as_array_mut) {
-                for child in children {
-                    add_rects(scene, child);
-                }
-            }
-            if let Some(root) = object.get_mut("root") {
-                add_rects(scene, root);
-            }
-        }
-
-        let mut tree = serde_json::to_value(schnellui::a11y::dump_tree(self.app.scene()))
-            .expect("debug tree serialization");
-        add_rects(self.app.scene(), &mut tree);
-        tree
+        debug_tree_json(self.app.scene())
     }
 
     pub(super) fn resolve_debug_target(

@@ -184,10 +184,65 @@ fn point_json(point: Point) -> Value {
     json!({ "x": point.x, "y": point.y })
 }
 
+/// Where the scene draws `id` in window space: its layout box moved by every
+/// ancestor scroll offset and property translation, the position hit testing
+/// and the painter agree on. Not cut by clips, so a row scrolled out of view
+/// still reports where it would sit.
+fn screen_rect(
+    scene: &schnellui::scene::Scene,
+    id: SceneWidgetId,
+) -> Option<schnellui::scene::Rect> {
+    let mut rect = scene.layout(id)?.rect;
+    let offset = scene.composited_offset(id);
+    rect.x += offset.x;
+    rect.y += offset.y;
+    Some(rect)
+}
+
+fn rect_json(rect: schnellui::scene::Rect) -> Value {
+    json!({
+        "x": rect.x,
+        "y": rect.y,
+        "width": rect.width,
+        "height": rect.height,
+    })
+}
+
+/// The live accessibility tree with each node's window-space `rect`
+/// ([`screen_rect`]), as `GET /v1/tree` serves it.
+fn debug_tree_json(scene: &schnellui::scene::Scene) -> Value {
+    fn add_rects(scene: &schnellui::scene::Scene, value: &mut Value) {
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        if let Some(id) = object.get("id").and_then(Value::as_u64) {
+            let widget = schnellui::a11y::resolve_target(
+                scene,
+                schnellui::a11y::accesskit_reexport::NodeId(id),
+            );
+            if let Some(rect) = widget.and_then(|widget| screen_rect(scene, widget)) {
+                object.insert("rect".into(), rect_json(rect));
+            }
+        }
+        if let Some(children) = object.get_mut("children").and_then(Value::as_array_mut) {
+            for child in children {
+                add_rects(scene, child);
+            }
+        }
+        if let Some(root) = object.get_mut("root") {
+            add_rects(scene, root);
+        }
+    }
+
+    let mut tree =
+        serde_json::to_value(schnellui::a11y::dump_tree(scene)).expect("debug tree serialization");
+    add_rects(scene, &mut tree);
+    tree
+}
+
 fn widget_json(app: &App, id: SceneWidgetId) -> Value {
     let node = app.scene().node(id);
     let a11y = app.scene().a11y(id);
-    let layout = app.scene().layout(id);
     json!({
         "id": schnellui::a11y::to_access_id(id).0,
         "kind": node.map(|node| debug_label(node.kind)),
@@ -196,12 +251,7 @@ fn widget_json(app: &App, id: SceneWidgetId) -> Value {
         "value": a11y.and_then(|node| node.value.as_deref()),
         "actions": a11y.map(|node| schnellui::a11y::ActionFlags(node.actions).names()),
         "state": a11y.map(|node| schnellui::a11y::StateFlags(node.state).names()),
-        "rect": layout.map(|layout| json!({
-            "x": layout.rect.x,
-            "y": layout.rect.y,
-            "width": layout.rect.width,
-            "height": layout.rect.height,
-        })),
+        "rect": screen_rect(app.scene(), id).map(rect_json),
     })
 }
 

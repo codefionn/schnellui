@@ -1470,3 +1470,199 @@ mod ring_on_a_virtual_list {
         host.key(&HostKey::Space, false, false);
     }
 }
+
+/// Where a screen reader puts each node: its bounds taken through its own
+/// transform and every ancestor's, up to the root.
+fn accesskit_screen_rects(
+    scene: &crate::scene::Scene,
+) -> std::collections::HashMap<u64, (f64, f64, f64, f64)> {
+    use std::collections::HashMap;
+    let update = crate::a11y::build_full_tree_update(scene);
+    let mut parent: HashMap<u64, u64> = HashMap::new();
+    for (id, node) in &update.nodes {
+        for child in node.children() {
+            parent.insert(child.0, id.0);
+        }
+    }
+    let nodes: HashMap<u64, &accesskit::Node> =
+        update.nodes.iter().map(|(id, n)| (id.0, n)).collect();
+    let mut out = HashMap::new();
+    for (&id, node) in &nodes {
+        let Some(bounds) = node.bounds() else {
+            continue;
+        };
+        let mut rect = bounds;
+        let mut at = Some(id);
+        while let Some(current) = at {
+            if let Some(t) = nodes[&current].transform() {
+                rect = t.transform_rect_bbox(rect);
+            }
+            at = parent.get(&current).copied();
+        }
+        out.insert(id, (rect.x0, rect.y0, rect.x1, rect.y1));
+    }
+    out
+}
+
+fn debug_tree_rects(scene: &crate::scene::Scene) -> std::collections::HashMap<u64, [f64; 4]> {
+    fn walk(value: &serde_json::Value, out: &mut std::collections::HashMap<u64, [f64; 4]>) {
+        if let (Some(id), Some(r)) = (value["id"].as_u64(), value.get("rect")) {
+            let f = |k: &str| r[k].as_f64().unwrap();
+            out.insert(id, [f("x"), f("y"), f("width"), f("height")]);
+        }
+        for child in value["children"].as_array().into_iter().flatten() {
+            walk(child, out);
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    walk(&super::debug_tree_json(scene)["root"], &mut out);
+    out
+}
+
+/// The accessibility tree, the debug tree and the painter place every visible
+/// widget at the same window position.
+fn assert_three_rects_agree(app: &App, what: &str) {
+    let scene = app.scene();
+    let ak = accesskit_screen_rects(scene);
+    let dbg = debug_tree_rects(scene);
+    let mut checked = 0;
+    for id in scene.preorder() {
+        let key = crate::a11y::to_access_id(id).0;
+        let Some(layout) = scene.layout(id) else {
+            continue;
+        };
+        let drawn = scene.composited_rect(id);
+        // Only widgets wholly inside every clip: a clipped box is cut on one
+        // side and no longer says where the widget sits.
+        if layout.rect.is_empty() || (drawn.width - layout.rect.width).abs() > 0.01 {
+            continue;
+        }
+        if (drawn.height - layout.rect.height).abs() > 0.01 {
+            continue;
+        }
+        let d = dbg[&key];
+        let (x0, y0, x1, y1) = ak[&key];
+        let close = |a: f64, b: f64| (a - b).abs() < 0.01;
+        assert!(
+            close(d[0], drawn.x as f64) && close(d[1], drawn.y as f64),
+            "{what}: debug tree puts {id:?} at {:?} but it is drawn at {drawn:?}",
+            &d[..2]
+        );
+        assert!(
+            close(x0, drawn.x as f64)
+                && close(y0, drawn.y as f64)
+                && close(x1 - x0, drawn.width as f64)
+                && close(y1 - y0, drawn.height as f64),
+            "{what}: accessibility puts {id:?} at {:?} but it is drawn at {drawn:?}",
+            (x0, y0, x1 - x0, y1 - y0)
+        );
+        checked += 1;
+    }
+    assert!(checked >= 1, "{what}: only {checked} widgets compared");
+}
+
+fn tall_buttons(n: usize) -> crate::widgets::Column {
+    let mut col = crate::widgets::Column::new().gap(8.0);
+    for i in 0..n {
+        col = col.child(Button::new(format!("Button {i}")));
+    }
+    col
+}
+
+#[test]
+fn tree_rects_follow_a_scroll_moved_by_tab_wheel_and_keys() {
+    use crate::widgets::Scroll;
+    let mut app = App::mount_with_size(
+        Scroll::new().size(300.0, 120.0).child(tall_buttons(20)),
+        400,
+        300,
+    );
+    app.frame();
+    assert_three_rects_agree(&app, "unscrolled");
+    for i in 0..9 {
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        app.frame();
+        assert_three_rects_agree(&app, &format!("tab {i}"));
+    }
+    assert!(app.dispatch_wheel_at(Point { x: 50.0, y: 50.0 }, 37.0));
+    app.frame();
+    assert_three_rects_agree(&app, "wheel");
+    assert!(app.dispatch_key(UiKey::PageDown));
+    app.frame();
+    assert_three_rects_agree(&app, "page down");
+}
+
+#[test]
+fn tree_rects_follow_nested_scrolls() {
+    use crate::widgets::{Column, Scroll};
+    let inner = Scroll::new()
+        .label("inner")
+        .size(260.0, 100.0)
+        .child(tall_buttons(12));
+    let outer = Scroll::new().label("outer").size(300.0, 150.0).child(
+        Column::new()
+            .child(Button::new("Before"))
+            .child(inner)
+            .child(tall_buttons(10)),
+    );
+    let mut app = App::mount_with_size(outer, 400, 400);
+    app.frame();
+    for _ in 0..30 {
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        app.frame();
+        assert_three_rects_agree(&app, "nested tab");
+    }
+}
+
+#[test]
+fn tree_rects_follow_a_scroll_restored_after_a_remount() {
+    use crate::widgets::Scroll;
+    let build = || {
+        Scroll::new()
+            .label("page")
+            .restoration_key("page")
+            .size(300.0, 120.0)
+            .child(tall_buttons(20))
+    };
+    let mut app = App::mount_with_size(build(), 400, 300);
+    app.frame();
+    let sv = app.find_widget(Role::ScrollView, None).unwrap();
+    assert!(app.dispatch_scroll(sv, 80.0));
+    let mut replacement = App::mount_with_size(build(), 400, 300);
+    replacement.inherit_remount_state(&app);
+    replacement.frame();
+    let sv = replacement.find_widget(Role::ScrollView, None).unwrap();
+    assert!(replacement.scene().scroll_offset(sv).y > 0.0);
+    assert_three_rects_agree(&replacement, "restored");
+}
+
+#[test]
+fn tree_rects_follow_list_rows_and_a_text_area_in_a_scroll() {
+    use crate::widgets::{Column, List, ListItem, Scroll, TextArea};
+    let mut list = List::new();
+    for i in 0..30 {
+        list = list.child(ListItem::new(format!("Item {i}")));
+    }
+    let mut app = App::mount_with_size(Scroll::new().size(300.0, 120.0).child(list), 400, 300);
+    app.frame();
+    assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+    for i in 0..25 {
+        assert!(app.dispatch_key(UiKey::Down { shift: false }));
+        app.frame();
+        assert_three_rects_agree(&app, &format!("list row {i}"));
+    }
+
+    let area = Column::new()
+        .child(tall_buttons(6))
+        .child(TextArea::new("a\nb\nc\nd\ne\nf\ng\nh".repeat(4)));
+    let mut app = App::mount_with_size(Scroll::new().size(300.0, 120.0).child(area), 400, 300);
+    app.frame();
+    for i in 0..8 {
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        app.frame();
+        assert_three_rects_agree(&app, &format!("text area tab {i}"));
+    }
+    assert!(app.dispatch_key(UiKey::PageDown));
+    app.frame();
+    assert_three_rects_agree(&app, "text area page");
+}
