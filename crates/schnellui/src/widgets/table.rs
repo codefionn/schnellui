@@ -395,6 +395,17 @@ impl View for Table {
             ctx.scene.a11y_mut(row_id).role = Role::TableRow.as_u16();
             let is_header = row.is_header;
             let row_selected = !is_header && selectable && this.selected == Some(data_index);
+            if !is_header {
+                // A focused row is announced by its name: its cells in order.
+                let mut name = String::new();
+                for (i, cell) in row.cells.iter().enumerate() {
+                    if i > 0 {
+                        name.push_str(", ");
+                    }
+                    name.push_str(&cell.label);
+                }
+                ctx.scene.a11y_mut(row_id).name = Some(name);
+            }
             if !is_header && selectable {
                 // Only selectable data rows advertise actions (SOUL §6.1); the
                 // Click they advertise is the same path a pointer converges on.
@@ -947,6 +958,28 @@ mod tests {
     }
 
     // --- build-time semantics (SOUL §6.1 — the tree IS the table semantics) ---
+
+    #[test]
+    fn data_rows_are_named_by_their_cells() {
+        // Sequence: Tab onto a selectable table row in the playground Table
+        // page. The screen reader announced "row" and nothing else.
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let (scene, _l, _t, _a, id) = build_one(runtime, sample_table().on_select_row(|_| {}));
+        let names: Vec<Option<String>> = rows_of(&scene, id)
+            .iter()
+            .map(|&row| scene.a11y(row).unwrap().name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                None,
+                Some("Ada Lovelace, 36".into()),
+                Some("Grace Hopper, 85".into()),
+                Some("Al, 7".into()),
+            ]
+        );
+    }
 
     #[test]
     fn table_builds_semantic_rows_headers_and_cells() {
