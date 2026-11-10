@@ -205,16 +205,25 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
         BadgeTone, Column, Dropdown, DropdownOption, Image, LoadingSpinner, Pad, ProgressBar, Row,
         Slider, Text, TextInput,
     };
-    let clicks = create_signal(0i32);
+    let page = runtime.page();
+    let clicks = create_signal(page.gallery_clicks);
     let project = runtime.project();
     let project_runtime = runtime.clone();
+    let click_runtime = runtime.clone();
+    let email_runtime = runtime.clone();
+    let sync_runtime = runtime.clone();
+    let daily_runtime = runtime.clone();
+    let weekly_runtime = runtime.clone();
     let head = view! {
         column(gap = 12.0) {
             text(size = 22.0, bold) { "schnellui playground" }
             // actions: button (live + disabled), link, badge, and the live
             // click counter the button drives (SOUL §3.3)
             row(gap = 10.0, align = center) {
-                button(on:click = move || clicks.update(|v| *v += 1)) { "Increment" }
+                button(on:click = move || {
+                    clicks.update(|v| *v += 1);
+                    click_runtime.edit(|p| p.gallery_clicks = clicks.get());
+                }) { "Increment" }
                 button(disabled = true) { "Disabled" }
                 link(on:click = move || {}) { "Docs" }
                 badge(tone = BadgeTone::Accent) { "NEW" }
@@ -222,18 +231,34 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
             }
             // toggles, each with its own label, centered on the control
             row(gap = 8.0, align = center) {
-                checkbox(checked = true, name = "Email updates")
+                checkbox(
+                    checked = page.email,
+                    name = "Email updates",
+                    on:toggle = move |on: bool| email_runtime.edit(|p| p.email = on)
+                )
                 text { "Email updates" }
                 flex(basis = 6.0)
-                switch(on = true, name = "Sync")
+                switch(
+                    on = page.sync,
+                    name = "Sync",
+                    on:toggle = move |on: bool| sync_runtime.edit(|p| p.sync = on)
+                )
                 text { "Sync" }
             }
             // an exclusive radio pair: one Tab stop, arrows move the choice
             row(gap = 8.0, align = center) {
-                radio(selected = true, name = "Daily")
+                radio(
+                    selected = !page.weekly,
+                    name = "Daily",
+                    on:select = move || daily_runtime.edit(|p| p.weekly = false)
+                )
                 text { "Daily" }
                 flex(basis = 6.0)
-                radio(name = "Weekly")
+                radio(
+                    selected = page.weekly,
+                    name = "Weekly",
+                    on:select = move || weekly_runtime.edit(|p| p.weekly = true)
+                )
                 text { "Weekly" }
             }
         }
@@ -241,7 +266,9 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
     // ranges: a stepped input with its value, a determinate status on a thicker
     // bar (so it does not read as a slider without a thumb), and an
     // indeterminate status
-    let volume = create_signal(40.0f32);
+    let volume = create_signal(page.volume);
+    let volume_runtime = runtime.clone();
+    let owner_runtime = runtime.clone();
     let ranges = Row::new()
         .gap(10.0)
         .align(Align::Center)
@@ -250,7 +277,10 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
             Slider::new(volume.get(), 0.0, 100.0)
                 .step(5.0)
                 .name("Volume")
-                .on_change(move |v| volume.set(v)),
+                .on_change(move |v| {
+                    volume.set(v);
+                    volume_runtime.edit(|p| p.volume = v);
+                }),
         )
         .child(Text::dynamic(move || format!("{:.0}", volume.get())).size(14.0))
         .child(
@@ -282,8 +312,17 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
                 .label("Project name")
                 .on_input(move |value: &str| project_runtime.set_project(value)),
         )
-        .child(TextInput::new("Ada").label("Owner"))
+        .child(
+            TextInput::new(page.owner.clone())
+                .label("Owner")
+                .on_input(move |value: &str| owner_runtime.edit(|p| p.owner = value.to_string())),
+        )
         .child(Image::new("photo").alt("Project photo").size(52.0, 52.0));
+    let tab_runtimes: [PlaygroundRuntime; 3] = std::array::from_fn(|_| runtime.clone());
+    let [tab_a, tab_b, tab_c] = tab_runtimes;
+    let list_a = runtime.clone();
+    let list_b = runtime.clone();
+    let row_runtime = runtime.clone();
     let selection = view! {
         column(gap = 12.0) {
             divider
@@ -292,18 +331,18 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
             row(gap = 40.0) {
                 column(gap = 12.0) {
                     tabs(gap = 2.0) {
-                        tab(selected = true) { "General" }
-                        tab { "Privacy" }
-                        tab { "About" }
+                        tab(selected = page.gallery_tab == "General", on:select = move || tab_a.edit(|p| p.gallery_tab = "General")) { "General" }
+                        tab(selected = page.gallery_tab == "Privacy", on:select = move || tab_b.edit(|p| p.gallery_tab = "Privacy")) { "Privacy" }
+                        tab(selected = page.gallery_tab == "About", on:select = move || tab_c.edit(|p| p.gallery_tab = "About")) { "About" }
                     }
                     column(width = 200.0, align = stretch) {
                         list {
-                            list_item(selected = true) { "Inbox" }
-                            list_item { "Archive" }
+                            list_item(selected = page.gallery_list == "Inbox", on:select = move || list_a.edit(|p| p.gallery_list = "Inbox")) { "Inbox" }
+                            list_item(selected = page.gallery_list == "Archive", on:select = move || list_b.edit(|p| p.gallery_list = "Archive")) { "Archive" }
                         }
                     }
                 }
-                table(selected_row = 0) {
+                table(selected_row = page.gallery_row, on:select_row = move |i: usize| row_runtime.edit(|p| p.gallery_row = i)) {
                     table_row(header) { "Name" "Age" "City" }
                     table_row { "Ada Lovelace" "36" "London" }
                     table_row { "Grace Hopper" "85" "Arlington" }
@@ -372,13 +411,16 @@ fn click_count(clicks: i32) -> String {
 
 /// A button and the `Status` it drives — the smallest reactive loop — above the
 /// other button looks, so the page doubles as a reference for each state.
-fn counter_view() -> impl View {
-    let clicks = create_signal(0i32);
+fn counter_view(runtime: PlaygroundRuntime) -> impl View {
+    let clicks = create_signal(runtime.page().counter);
     view! {
         column(gap = 14.0, width = 460.0) {
             text(size = 22.0, bold) { "Button" }
             row(gap = 12.0, align = center) {
-                button(on:click = move || clicks.update(|v| *v += 1)) { "Increment" }
+                button(on:click = move || {
+                    clicks.update(|v| *v += 1);
+                    runtime.edit(|p| p.counter = clicks.get());
+                }) { "Increment" }
                 text(role = Role::Status) { (click_count(clicks.get())) }
             }
             divider
@@ -407,15 +449,24 @@ fn tab_body(name: &str) -> &'static str {
 
 /// A tab bar whose `on:select` handlers write the chosen tab's name into a signal
 /// the `Status` slot reads (SOUL §3.3, §6.3), with a panel for the chosen tab.
-fn tabs_view() -> impl View {
-    let chosen = create_signal(String::from("General"));
+fn tabs_view(runtime: PlaygroundRuntime) -> impl View {
+    let page = runtime.page().tabs;
+    let chosen = create_signal(String::from(page));
+    let pick = move |name: &'static str| {
+        let runtime = runtime.clone();
+        move || {
+            chosen.set(name.to_string());
+            runtime.edit(|p| p.tabs = name);
+        }
+    };
+    let (general, privacy, about) = (pick("General"), pick("Privacy"), pick("About"));
     view! {
         column(gap = 10.0, width = 460.0) {
             text(size = 22.0, bold) { "Tabs" }
             tabs(gap = 2.0) {
-                tab(selected = true, on:select = move || chosen.set("General".to_string())) { "General" }
-                tab(on:select = move || chosen.set("Privacy".to_string())) { "Privacy" }
-                tab(on:select = move || chosen.set("About".to_string())) { "About" }
+                tab(selected = page == "General", on:select = general) { "General" }
+                tab(selected = page == "Privacy", on:select = privacy) { "Privacy" }
+                tab(selected = page == "About", on:select = about) { "About" }
             }
             text(role = Role::Status) { (format!("Showing {}", chosen.get())) }
             divider
@@ -427,18 +478,33 @@ fn tabs_view() -> impl View {
 /// A single-selection list mirroring the tabs scenario (SOUL §6.3). The rows
 /// stretch to the column, so the selection fill is the same width on every row
 /// and matches the gallery's list.
-fn list_view() -> impl View {
-    let chosen = create_signal(String::from("Inbox"));
+fn list_view(runtime: PlaygroundRuntime) -> impl View {
+    let page = runtime.page().list;
+    let chosen = create_signal(String::from(page));
+    let pick = move |name: &'static str| {
+        let runtime = runtime.clone();
+        move || {
+            chosen.set(name.to_string());
+            runtime.edit(|p| p.list = name);
+        }
+    };
+    let (inbox, starred, sent, archive, trash) = (
+        pick("Inbox"),
+        pick("Starred"),
+        pick("Sent"),
+        pick("Archive"),
+        pick("Trash"),
+    );
     view! {
         column(gap = 10.0) {
             text(size = 22.0, bold) { "List" }
             column(width = 240.0, align = stretch) {
                 list {
-                    list_item(selected = true, on:select = move || chosen.set("Inbox".to_string())) { "Inbox" }
-                    list_item(on:select = move || chosen.set("Starred".to_string())) { "Starred" }
-                    list_item(on:select = move || chosen.set("Sent".to_string())) { "Sent" }
-                    list_item(on:select = move || chosen.set("Archive".to_string())) { "Archive" }
-                    list_item(on:select = move || chosen.set("Trash".to_string())) { "Trash" }
+                    list_item(selected = page == "Inbox", on:select = inbox) { "Inbox" }
+                    list_item(selected = page == "Starred", on:select = starred) { "Starred" }
+                    list_item(selected = page == "Sent", on:select = sent) { "Sent" }
+                    list_item(selected = page == "Archive", on:select = archive) { "Archive" }
+                    list_item(selected = page == "Trash", on:select = trash) { "Trash" }
                 }
             }
             text(role = Role::Status) { (format!("Opened {}", chosen.get())) }
@@ -528,12 +594,16 @@ const PEOPLE: [&str; 3] = ["Ada Lovelace", "Grace Hopper", "Alan Turing"];
 
 /// The table with row selection: `on:select_row` receives the **data-row index**
 /// (header rows don't count) and feeds the `Status` slot (SOUL §8.1, §6.3).
-fn table_view() -> impl View {
-    let selected = create_signal(0usize);
+fn table_view(runtime: PlaygroundRuntime) -> impl View {
+    let row = runtime.page().table;
+    let selected = create_signal(row);
     view! {
         column(gap = 10.0) {
             text(size = 22.0, bold) { "Table" }
-            table(selected_row = 0, on:select_row = move |i: usize| selected.set(i)) {
+            table(selected_row = row, on:select_row = move |i: usize| {
+                selected.set(i);
+                runtime.edit(|p| p.table = i);
+            }) {
                 table_row(header) { "Name" "Age" "City" }
                 table_row { "Ada Lovelace" "36" "London" }
                 table_row { "Grace Hopper" "85" "Arlington" }
@@ -770,7 +840,51 @@ struct PlaygroundRuntimeState {
     density: DensityState,
     /// The gallery's Project name, kept across the remounts a dropdown makes.
     project: String,
+    /// The scenario on stage, so a remount can tell a switch from a rebuild.
+    current: Option<Scenario>,
+    /// What the user did on the scenario pages, kept across remounts.
+    page: PageState,
     pending_mount: Option<MountState>,
+}
+
+/// The interactive state of every scenario page. The views read it at build
+/// time and their handlers write it back, so a remount rebuilds the page as the
+/// user left it. Entering a scenario resets its fields to the defaults.
+#[derive(Clone, PartialEq)]
+struct PageState {
+    gallery_clicks: i32,
+    email: bool,
+    sync: bool,
+    weekly: bool,
+    volume: f32,
+    owner: String,
+    gallery_tab: &'static str,
+    gallery_list: &'static str,
+    gallery_row: usize,
+    counter: i32,
+    tabs: &'static str,
+    list: &'static str,
+    table: usize,
+}
+
+impl Default for PageState {
+    fn default() -> Self {
+        Self {
+            gallery_clicks: 0,
+            email: true,
+            sync: true,
+            weekly: false,
+            volume: 40.0,
+            owner: "Ada".to_string(),
+            gallery_tab: "General",
+            gallery_list: "Inbox",
+            gallery_row: 0,
+            counter: 0,
+            tabs: "General",
+            list: "Inbox",
+            table: 0,
+        }
+    }
 }
 
 /// The gallery's Density dropdown, carried across its open/close remounts.
@@ -792,6 +906,8 @@ impl Default for PlaygroundRuntime {
                 chosen: "Comfortable",
             },
             project: String::new(),
+            current: None,
+            page: PageState::default(),
             pending_mount: None,
         }))
     }
@@ -823,6 +939,46 @@ impl PlaygroundRuntime {
 
     fn set_density(&self, density: DensityState) {
         self.0.update(|state| state.density = density);
+    }
+
+    fn page(&self) -> PageState {
+        self.0.read(|state| state.page.clone())
+    }
+
+    fn edit(&self, change: impl FnOnce(&mut PageState)) {
+        self.0.update(|state| change(&mut state.page));
+    }
+
+    /// Marks `scenario` as the one on stage. Returns whether it was entered
+    /// (it was not already on stage), resetting its page state to the defaults.
+    fn enter(&self, scenario: Scenario) -> bool {
+        self.0.update(|state| {
+            if state.current == Some(scenario) {
+                return false;
+            }
+            state.current = Some(scenario);
+            let fresh = PageState::default();
+            let page = &mut state.page;
+            match scenario {
+                Scenario::Gallery => {
+                    page.gallery_clicks = fresh.gallery_clicks;
+                    page.email = fresh.email;
+                    page.sync = fresh.sync;
+                    page.weekly = fresh.weekly;
+                    page.volume = fresh.volume;
+                    page.owner = fresh.owner;
+                    page.gallery_tab = fresh.gallery_tab;
+                    page.gallery_list = fresh.gallery_list;
+                    page.gallery_row = fresh.gallery_row;
+                }
+                Scenario::CounterClicked => page.counter = fresh.counter,
+                Scenario::TabsSecondSelected => page.tabs = fresh.tabs,
+                Scenario::ListSecondSelected => page.list = fresh.list,
+                Scenario::TableSecondRowSelected => page.table = fresh.table,
+                _ => {}
+            }
+            true
+        })
     }
 
     fn request_mount(&self, mount: MountState) {
@@ -956,6 +1112,12 @@ fn click(app: &mut App, role: Role, name: Option<&str>) {
 /// remount — headless shots take the closed, deterministic chrome, SOUL §7.3).
 fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> App {
     let scenario = state.scenario;
+    // A scenario is entered on its first mount, a switcher-tab change, and every
+    // headless run. It then starts from its defaults and is driven to its target
+    // below. A remount of the scenario already on stage (theme open/close, theme
+    // pick, Density or Fruit toggles) keeps what the user did and drives nothing:
+    // a scripted click there would land outside an open list and close it again.
+    let entered = runtime.enter(scenario);
     let (width, height, scale) = (cli.width, cli.height, cli.scale);
     // The ambient design system is read at build time (SOUL §8.1), so it is set
     // BEFORE the mount below; the remount hook re-enters here on a theme switch.
@@ -983,21 +1145,42 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
         ),
         Scenario::CounterClicked => App::mount_with_theme_size_scaled(
             theme,
-            stage(runtime.clone(), scenario, sw, t, so, counter_view()),
+            stage(
+                runtime.clone(),
+                scenario,
+                sw,
+                t,
+                so,
+                counter_view(runtime.clone()),
+            ),
             width,
             height,
             scale,
         ),
         Scenario::TabsSecondSelected => App::mount_with_theme_size_scaled(
             theme,
-            stage(runtime.clone(), scenario, sw, t, so, tabs_view()),
+            stage(
+                runtime.clone(),
+                scenario,
+                sw,
+                t,
+                so,
+                tabs_view(runtime.clone()),
+            ),
             width,
             height,
             scale,
         ),
         Scenario::ListSecondSelected => App::mount_with_theme_size_scaled(
             theme,
-            stage(runtime.clone(), scenario, sw, t, so, list_view()),
+            stage(
+                runtime.clone(),
+                scenario,
+                sw,
+                t,
+                so,
+                list_view(runtime.clone()),
+            ),
             width,
             height,
             scale,
@@ -1018,7 +1201,14 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
         ),
         Scenario::TableSecondRowSelected => App::mount_with_theme_size_scaled(
             theme,
-            stage(runtime.clone(), scenario, sw, t, so, table_view()),
+            stage(
+                runtime.clone(),
+                scenario,
+                sw,
+                t,
+                so,
+                table_view(runtime.clone()),
+            ),
             width,
             height,
             scale,
@@ -1050,6 +1240,7 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
     app.set_clear_color(theme.page);
 
     match scenario {
+        _ if !entered => {}
         Scenario::CounterClicked => {
             for _ in 0..3 {
                 click(&mut app, Role::Button, Some("Increment"));
@@ -1423,4 +1614,156 @@ fn main() -> ExitCode {
         .clone()
         .unwrap_or_else(|| format!("{}.png", scenario.name()));
     render_one(scenario, &cli, &out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::accesskit_action::ActionData;
+
+    /// A live (windowed) CLI, so the chrome and dropdowns park remounts.
+    fn live_cli() -> Cli {
+        Cli::parse_from(["playground", "--headless-windowed"])
+    }
+
+    fn mount(runtime: &PlaygroundRuntime, scenario: Scenario) -> App {
+        let mut app = scenario_app(
+            runtime,
+            MountState {
+                scenario,
+                theme: ThemeChoice::Light,
+                theme_open: false,
+            },
+            &live_cli(),
+        );
+        app.frame();
+        app
+    }
+
+    fn set_value(app: &mut App, role: Role, name: &str, value: &str) {
+        let id = app.find_widget(role, Some(name)).expect("widget to set");
+        app.dispatch_action(&ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: to_access_id(id),
+            data: Some(ActionData::Value(value.into())),
+        });
+    }
+
+    /// Emulates the host's remount hook: drains every parked mount, rebuilds
+    /// and carries the old app's state over. Returns how many remounts ran.
+    fn remount(runtime: &PlaygroundRuntime, app: &mut App) -> usize {
+        let mut count = 0;
+        while let Some(state) = runtime.take_mount() {
+            let mut next = scenario_app(runtime, state, &live_cli());
+            next.inherit_remount_state(app);
+            next.frame();
+            *app = next;
+            count += 1;
+            assert!(count < 5, "remounts do not settle");
+        }
+        count
+    }
+
+    fn node(app: &App, role: &str, name: &str) -> A11yNodeDump {
+        let tree = a11y::dump_tree(app.scene());
+        find_by_role_name(&tree, role, Some(name))
+            .unwrap_or_else(|| panic!("no {role} named {name:?}"))
+            .clone()
+    }
+
+    fn selected(app: &App, role: &str, name: &str) -> bool {
+        has_state(&node(app, role, name), "selected")
+    }
+
+    fn status_has(app: &App, needle: &str) -> bool {
+        let tree = a11y::dump_tree(app.scene());
+        all_with_role(&tree, "status")
+            .iter()
+            .any(|s| s.value.as_deref().is_some_and(|v| v.contains(needle)))
+    }
+
+    #[test]
+    fn gallery_state_survives_opening_density() {
+        let runtime = PlaygroundRuntime::default();
+        let mut app = mount(&runtime, Scenario::Gallery);
+        set_value(&mut app, Role::Slider, "Volume", "100");
+        click(&mut app, Role::Radio, Some("Weekly"));
+        click(&mut app, Role::Switch, Some("Sync"));
+        click(&mut app, Role::CheckBox, Some("Email updates"));
+        click(&mut app, Role::Button, Some("Increment"));
+        set_value(&mut app, Role::TextInput, "Owner", "Ada Lovelace");
+        click(&mut app, Role::Tab, Some("About"));
+        click(&mut app, Role::ListItem, Some("Archive"));
+        click(&mut app, Role::Cell, Some("Grace Hopper"));
+        app.frame();
+        click(&mut app, Role::ComboBox, Some("Density"));
+        assert_eq!(remount(&runtime, &mut app), 1);
+
+        assert_eq!(node(&app, "slider", "Volume").value.as_deref(), Some("100"));
+        let on = |role: &str, name: &str| {
+            let n = node(&app, role, name);
+            has_state(&n, "checked") || has_state(&n, "selected")
+        };
+        assert!(on("radio", "Weekly") && !on("radio", "Daily"));
+        assert!(!on("switch", "Sync"));
+        assert!(!on("checkbox", "Email updates"));
+        assert!(status_has(&app, "Clicked once"));
+        assert_eq!(
+            node(&app, "text_input", "Owner").value.as_deref(),
+            Some("Ada Lovelace")
+        );
+        assert!(selected(&app, "tab", "About") && !selected(&app, "tab", "General"));
+        assert!(selected(&app, "list_item", "Archive"));
+        let tree = a11y::dump_tree(app.scene());
+        let rows = all_with_role(&tree, "row");
+        let grace = rows
+            .iter()
+            .find(|r| {
+                r.children
+                    .iter()
+                    .any(|c| c.name.as_deref() == Some("Grace Hopper"))
+            })
+            .expect("grace row");
+        assert!(has_state(grace, "selected"));
+    }
+
+    #[test]
+    fn tabs_theme_dropdown_opens_once_and_keeps_the_tab() {
+        let runtime = PlaygroundRuntime::default();
+        let mut app = mount(&runtime, Scenario::TabsSecondSelected);
+        assert!(selected(&app, "tab", "Privacy"));
+        click(&mut app, Role::Tab, Some("About"));
+        app.frame();
+        click(&mut app, Role::ComboBox, Some("Theme"));
+        assert_eq!(remount(&runtime, &mut app), 1);
+        let tree = a11y::dump_tree(app.scene());
+        assert!(!all_with_role(&tree, "list_box_option").is_empty());
+        assert!(selected(&app, "tab", "About"));
+        assert!(status_has(&app, "Showing About"));
+    }
+
+    #[test]
+    fn button_count_survives_theme_open_and_close() {
+        let runtime = PlaygroundRuntime::default();
+        let mut app = mount(&runtime, Scenario::CounterClicked);
+        assert!(status_has(&app, "Clicked 3 times"));
+        click(&mut app, Role::ComboBox, Some("Theme"));
+        assert_eq!(remount(&runtime, &mut app), 1);
+        assert!(status_has(&app, "Clicked 3 times"));
+        click(&mut app, Role::ComboBox, Some("Theme"));
+        assert_eq!(remount(&runtime, &mut app), 1);
+        assert!(status_has(&app, "Clicked 3 times"));
+    }
+
+    #[test]
+    fn reentering_a_scenario_starts_from_its_defaults() {
+        let runtime = PlaygroundRuntime::default();
+        let mut app = mount(&runtime, Scenario::CounterClicked);
+        click(&mut app, Role::Tab, Some("Tabs"));
+        remount(&runtime, &mut app);
+        click(&mut app, Role::Tab, Some("Button"));
+        remount(&runtime, &mut app);
+        assert!(status_has(&app, "Clicked 3 times"));
+    }
 }
