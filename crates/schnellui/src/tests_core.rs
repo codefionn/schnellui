@@ -1042,6 +1042,43 @@ fn focus_step_leaves_a_radio_group_for_the_next_control() {
     assert_eq!(app.focused_widget(), Some(daily));
 }
 
+/// `arrows_select(false)`: arrows walk the group without selecting, Space selects.
+#[test]
+fn radios_without_arrow_selection_move_focus_only() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::widgets::{Column, Radio};
+
+    let picks = Rc::new(Cell::new(0));
+    let (a, b) = (picks.clone(), picks.clone());
+    let view = Column::new()
+        .child(
+            Radio::new(true)
+                .name("CPU")
+                .arrows_select(false)
+                .on_select(move || a.set(a.get() + 1)),
+        )
+        .child(
+            Radio::new(false)
+                .name("GPU")
+                .arrows_select(false)
+                .on_select(move || b.set(b.get() + 1)),
+        );
+    let mut app = App::mount_with_size(view, 400, 300);
+    app.frame();
+
+    let cpu = app.find_widget(Role::Radio, Some("CPU")).unwrap();
+    let gpu = app.find_widget(Role::Radio, Some("GPU")).unwrap();
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(cpu));
+    assert!(app.dispatch_key(UiKey::Down { shift: false }));
+    assert_eq!(app.focused_widget(), Some(gpu));
+    assert_eq!(picks.get(), 0, "an arrow only moves focus");
+    assert!(app.dispatch_key(UiKey::Space { shift: false }));
+    assert_eq!(picks.get(), 1, "Space selects");
+}
+
 #[test]
 fn modal_dialog_traps_focus_blocks_background_actions_and_takes_escape() {
     use std::cell::Cell;

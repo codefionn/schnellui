@@ -241,6 +241,7 @@ pub struct Radio {
     pub(crate) selected: bool,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_select: Option<Box<dyn FnMut() + 'static>>,
+    pub(crate) arrows_select: bool,
 }
 
 impl Radio {
@@ -250,7 +251,15 @@ impl Radio {
             selected,
             name: None,
             on_select: None,
+            arrows_select: true,
         }
+    }
+    /// Whether arrow keys select the radio they move to (the default, the browser
+    /// radio-group contract). With `false` the arrows only move focus and Space or a
+    /// click selects: for options whose selection is costly, such as switching a device.
+    pub fn arrows_select(mut self, on: bool) -> Radio {
+        self.arrows_select = on;
+        self
     }
     /// The radio's accessible name, usually the text of the label beside it.
     pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Radio {
@@ -298,8 +307,21 @@ impl View for Radio {
         if let Some(f) = this.on_select {
             with_handlers(&ctx.runtime, id, |h| h.click = Some(f));
         }
+        if !this.arrows_select {
+            with_handlers(&ctx.runtime, id, |h| h.radio_arrows_focus_only = true);
+        }
         id
     }
+}
+
+/// Whether arrow keys on radio `id` select it, as [`Radio::arrows_select`] set.
+pub fn radio_arrows_select(runtime: &crate::widgets::Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| {
+        !rt.borrow()
+            .handlers
+            .get(id)
+            .is_some_and(|h| h.radio_arrows_focus_only)
+    })
 }
 
 // ---------------------------------------------------------------------------

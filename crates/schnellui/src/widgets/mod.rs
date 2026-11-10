@@ -990,6 +990,8 @@ pub(crate) struct Handlers {
     submit: Option<ClickHandler>,
     /// A [`Button::submit`]: activating it submits the nearest enclosing form.
     submits_form: bool,
+    /// A [`Radio::arrows_select`]`(false)`: arrows move focus without selecting.
+    radio_arrows_focus_only: bool,
     /// Pointer-drag lifecycle for dockable/reorderable content. Drag input is
     /// deliberately separate from `click`: a short press still activates the
     /// widget, while crossing the movement threshold starts capture.

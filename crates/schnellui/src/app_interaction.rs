@@ -450,7 +450,8 @@ impl App {
                 }
             }
             // Arrows on a focused radio move focus *and* selection within the
-            // group (the browser radio-group contract).
+            // group (the browser radio-group contract), or focus only for a
+            // radio built with `arrows_select(false)`.
             Some(WidgetKind::Radio) => {
                 let dir = match key {
                     UiKey::Right { .. } | UiKey::Down { .. } => Some(1i32),
@@ -552,7 +553,9 @@ impl App {
         let len = radios.len() as i32;
         let next = radios[((pos as i32 + dir).rem_euclid(len)) as usize];
         let mut changed = self.focus(Some(next));
-        changed |= schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, next);
+        if schnellui::widgets::radio_arrows_select(&self.widgets, next) {
+            changed |= schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, next);
+        }
         changed
     }
 
