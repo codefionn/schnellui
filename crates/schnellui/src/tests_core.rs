@@ -2090,8 +2090,13 @@ fn escape_in_a_docked_region_returns_focus_to_where_it_came_from() {
     assert_eq!(app.dispatch_escape(), Some(true));
     assert_eq!(app.focused_widget(), Some(outside));
 
-    // A closed region returns nothing.
-    app.apply_subtree_replacement(SubtreeReplacement::new(dock, content(true), "closed"))
+    // A region that closes with focus inside it hands focus back, and then returns nothing.
+    assert!(app.focus(Some(app.find_widget(Role::Button, Some("Inside")).unwrap())));
+    app.apply_subtree_replacement(SubtreeReplacement::new(dock, content(false), "closed"))
+        .unwrap();
+    app.frame();
+    assert_eq!(app.focused_widget(), Some(outside));
+    app.apply_subtree_replacement(SubtreeReplacement::new(dock, content(true), "reopened"))
         .unwrap();
     app.frame();
     let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();

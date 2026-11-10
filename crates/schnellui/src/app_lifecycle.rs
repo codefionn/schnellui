@@ -126,30 +126,45 @@ impl App {
         Ok(root)
     }
 
-    /// The control focused now, unless it lies inside the branch of `target`: what a docked
-    /// region returns focus to.
-    pub(crate) fn region_focus_before(
-        &self,
-        target: scene::ComponentRef,
-    ) -> Option<(scene::WidgetId, bool)> {
-        let focused = self.focused_widget()?;
-        let root = self.scene.resolve_ref(target)?;
-        (!schnellui::widgets::is_in_subtree(&self.scene, focused, root))
-            .then(|| (focused, self.focus_ring_shown()))
+    /// Where focus is before the branch of `target` is replaced: the control it lies on when
+    /// that is outside the branch (what a docked region returns focus to), or that it lies
+    /// inside.
+    pub(crate) fn region_focus_before(&self, target: scene::ComponentRef) -> RegionFocus {
+        let Some(focused) = self.focused_widget() else {
+            return RegionFocus::default();
+        };
+        let inside = self
+            .scene
+            .resolve_ref(target)
+            .is_some_and(|root| schnellui::widgets::is_in_subtree(&self.scene, focused, root));
+        RegionFocus {
+            outside: (!inside).then(|| (focused, self.focus_ring_shown())),
+            inside,
+        }
     }
 
-    /// Records or forgets what a docked region returns focus to after a replacement.
+    /// Records or forgets what a docked region returns focus to after a replacement. A region
+    /// that closes with focus inside it hands focus back to that control.
     pub(crate) fn note_region_return(
         &mut self,
         target: scene::ComponentRef,
         escape_return: bool,
-        opener: Option<(scene::WidgetId, bool)>,
+        before: RegionFocus,
     ) {
         if !escape_return {
-            self.region_returns.retain(|entry| entry.region != target);
+            let entry = self
+                .region_returns
+                .iter()
+                .position(|entry| entry.region == target)
+                .map(|index| self.region_returns.remove(index));
+            if let Some(entry) = entry.filter(|_| before.inside) {
+                if app_inherit::takes_focus(&self.scene, entry.opener) {
+                    let _ = self.focus_after_replacement(entry.opener, entry.ring_visible);
+                }
+            }
             return;
         }
-        if let Some((opener, ring_visible)) = opener {
+        if let Some((opener, ring_visible)) = before.outside {
             self.region_returns.retain(|entry| entry.region != target);
             self.region_returns.push(RegionReturn {
                 region: target,

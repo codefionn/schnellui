@@ -603,6 +603,13 @@ struct ModalOpener {
     ring_visible: bool,
 }
 
+/// Where focus was before a docked region was replaced.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RegionFocus {
+    pub(crate) outside: Option<(WidgetId, bool)>,
+    pub(crate) inside: bool,
+}
+
 /// A docked region (see [`SubtreeReplacement::with_escape_return`]) and the control that had
 /// focus when it appeared.
 #[derive(Clone, Copy, Debug)]
