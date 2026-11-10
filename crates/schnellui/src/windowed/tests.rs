@@ -895,6 +895,45 @@ mod wheel_under_a_resting_pointer {
     }
 }
 
+/// Rows a wheel mounts under a pointer at rest are hovered when they appear,
+/// not when the pointer next moves.
+mod hover_after_a_relayout {
+    use super::super::headless::HeadlessHost;
+    use crate::scene::Point;
+    use crate::widgets::probes::hover_disagrees;
+    use crate::widgets::{Button, VirtualList, VirtualListController};
+    use crate::{theme, App, ThemeMode};
+
+    #[test]
+    fn a_fling_through_a_virtual_list_hovers_the_row_it_mounts_under_the_pointer() {
+        let controller = VirtualListController::new(0_u32..200, 30.0);
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            move || {
+                VirtualList::new(controller.clone(), |key: &u32| {
+                    Button::new(format!("Row {key}"))
+                })
+                .label("Rows")
+                .size(300.0, 200.0)
+            },
+            340,
+            240,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        let pointer = Point { x: 40.0, y: 90.0 };
+        host.pointer_move(pointer);
+        // Far enough that none of the rows now in view is mounted yet.
+        host.wheel(2500.0);
+        assert_eq!(
+            hover_disagrees(&host.app().widgets, host.app().scene(), pointer, false),
+            None
+        );
+    }
+}
+
 /// Input that arrives faster than frames are drawn: several pointer events
 /// land between two redraws.
 mod input_between_frames {
