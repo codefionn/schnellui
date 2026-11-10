@@ -27,7 +27,7 @@ use schnellui::signal::{create_memo, create_signal};
 // (and every `view!` block) implements.
 use schnellui::testing::{assert_value_contains, find_by_role_name};
 use schnellui::view;
-use schnellui::widgets::{Pad, View};
+use schnellui::widgets::{Pad, Scroll, View};
 use schnellui::App;
 use strum::IntoEnumIterator;
 
@@ -37,8 +37,13 @@ use strum::IntoEnumIterator;
 const SETTINGS: [&str; 3] = ["dark mode", "notifications", "telemetry"];
 const WINDOW_PADDING: f32 = 20.0;
 
+/// The page scrolls when the window is shorter than the panel, so every
+/// control can be brought into view (SOUL §6.3).
 fn stage(content: impl View) -> impl View {
-    Pad::all(WINDOW_PADDING).child(content)
+    Scroll::new()
+        .fill()
+        .scrollbar(true)
+        .child(Pad::all(WINDOW_PADDING).child(content))
 }
 
 /// The enumerable scenario table (SOUL §7.1 — `clap::ValueEnum` + `strum::EnumIter`,
@@ -349,4 +354,24 @@ fn main() -> ExitCode {
         .clone()
         .unwrap_or_else(|| format!("{}.png", scenario.name()));
     render_one(scenario, &cli, &out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, also in a window much
+    /// smaller than the page: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        for scenario in Scenario::iter() {
+            for (w, h) in [(360, 260), (360, 240), (360, 120)] {
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                let stops = tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+                assert!(stops >= 4, "{} at {w}x{h}: {stops} stops", scenario.name());
+            }
+        }
+    }
 }

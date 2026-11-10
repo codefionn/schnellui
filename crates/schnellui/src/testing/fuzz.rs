@@ -88,6 +88,60 @@ pub fn reveal_target(
     crate::widgets::reveal_target(&widgets, &app.scene, &mut app.text, id)
 }
 
+/// Whether the control `id`, or for a focused text area its caret row, shows
+/// inside the window: its [`reveal_target`] moved into window space and cut by
+/// every enclosing viewport leaves something to see.
+pub fn visible_in_window(app: &mut App, id: schnellui::scene::WidgetId) -> bool {
+    let Some(target) = reveal_target(app, id) else {
+        return false;
+    };
+    let (offset, clip) = app.scene().composite_context(id);
+    let size = app.size();
+    let window = schnellui::scene::Rect::new(0.0, 0.0, size.width, size.height);
+    let shown = schnellui::scene::Rect::new(
+        target.x + offset.x,
+        target.y + offset.y,
+        target.width,
+        target.height,
+    )
+    .intersect(&clip)
+    .intersect(&window);
+    !shown.is_empty()
+}
+
+/// Tabs once around the whole tab order and reports the first stop that stays
+/// out of the window with nothing to scroll it in. `Ok` carries the number of
+/// stops visited.
+pub fn tab_stops_reachable(app: &mut App) -> Result<usize, String> {
+    use crate::UiKey;
+    app.frame();
+    let mut first = None;
+    for visited in 0..512 {
+        app.dispatch_key(UiKey::Tab { shift: false });
+        app.frame();
+        let Some(id) = app.focused_widget() else {
+            return Ok(visited);
+        };
+        if first == Some(id) {
+            return Ok(visited);
+        }
+        first.get_or_insert(id);
+        if !visible_in_window(app, id) {
+            let name = app
+                .scene()
+                .a11y(id)
+                .map(|a| format!("{:?} {:?}", a.role, a.name))
+                .unwrap_or_default();
+            let rect = app.scene().layout(id).map(|l| l.rect);
+            return Err(format!(
+                "tab stop {visited} ({name}, layout {rect:?}) is outside the {:?} window",
+                app.size()
+            ));
+        }
+    }
+    Err("the tab order does not wrap within 512 stops".into())
+}
+
 /// All of the checks above, first failure first.
 pub fn invariants(app: &mut App) -> Result<(), String> {
     if let Some(fault) = decoration_faults(app) {
