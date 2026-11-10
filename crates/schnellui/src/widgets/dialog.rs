@@ -83,6 +83,9 @@ pub(crate) struct DialogLayerState {
     pub(crate) dismiss_on_backdrop: bool,
     pub(crate) dismiss_on_escape: bool,
     pub(crate) on_dismiss: Option<ClickHandler>,
+    /// The control inside this window that last had keyboard focus. Activating
+    /// the window with the pointer gives it focus back.
+    pub(crate) last_focus: Option<WidgetId>,
 }
 
 /// Paint configuration for the semantic dialog panel.
@@ -549,6 +552,7 @@ impl View for Dialog {
                     dismiss_on_backdrop: this.dismiss_on_backdrop,
                     dismiss_on_escape: this.dismiss_on_escape,
                     on_dismiss: this.on_dismiss,
+                    last_focus: None,
                 },
             );
             runtime.dialog_layer_ids.push(layer);
@@ -984,6 +988,46 @@ pub fn foreground_dialog_for_widget(scene: &mut Scene, id: WidgetId) -> bool {
         return false;
     };
     scene.bring_overlay_to_front(layer)
+}
+
+/// Notes `focused` as the control that last had focus in the window holding it.
+pub fn remember_dialog_focus(runtime: &crate::widgets::Runtime, scene: &Scene, focused: WidgetId) {
+    let Some(layer) = dialog_layer_for_widget(scene, focused) else {
+        return;
+    };
+    runtime.with(|runtime| {
+        if let Some(state) = runtime.borrow_mut().dialog_layers.get_mut(layer) {
+            state.last_focus = Some(focused);
+        }
+    });
+}
+
+/// The modeless window a press on `hit` activates, with the control that last
+/// had focus in it. `None` when `hit` is outside every window, in a modal (which
+/// owns focus already) or in the window that already holds focus.
+pub fn window_to_activate(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    hit: WidgetId,
+) -> Option<(WidgetId, Option<WidgetId>)> {
+    let layer = dialog_layer_for_widget(scene, hit)?;
+    if layer_is_modal(runtime, layer) {
+        return None;
+    }
+    if crate::a11y::focused(scene).is_some_and(|focused| is_in_subtree(scene, focused, layer)) {
+        return None;
+    }
+    let remembered = runtime.with(|runtime| {
+        runtime
+            .borrow()
+            .dialog_layers
+            .get(layer)
+            .and_then(|state| state.last_focus)
+    });
+    Some((
+        layer,
+        remembered.filter(|&id| is_in_subtree(scene, id, layer)),
+    ))
 }
 
 /// Raises the visually topmost dialog hit at `point`. This is used before a

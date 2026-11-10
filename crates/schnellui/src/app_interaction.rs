@@ -53,6 +53,44 @@ impl App {
         schnellui::widgets::reveal_widget(&self.widgets, &mut self.scene, &mut self.text, id)
     }
 
+    /// Activates the modeless window under a pointer press the way a desktop
+    /// does: it comes to the front and takes keyboard focus, restoring the
+    /// control that last had focus in it, else leaving nothing focused. Focus
+    /// stays out of the window behind it, and the ring stays hidden since this
+    /// is pointer focus. A press in the window that already holds focus, in a
+    /// modal or outside every window changes nothing. Returns whether a window
+    /// was activated.
+    pub(crate) fn activate_window_at(&mut self, hit: Option<scene::WidgetId>) -> bool {
+        let Some((layer, remembered)) = hit.and_then(|hit| {
+            schnellui::widgets::window_to_activate(&self.widgets, &self.scene, hit)
+        }) else {
+            return false;
+        };
+        schnellui::widgets::foreground_dialog_for_widget(&mut self.scene, layer);
+        self.pointer_focus(remembered);
+        true
+    }
+
+    /// The control a pointer press on `hit` can focus: `hit` or its nearest
+    /// focusable ancestor.
+    pub(crate) fn pointer_focus_target(
+        &self,
+        hit: Option<scene::WidgetId>,
+    ) -> Option<scene::WidgetId> {
+        let mut current = hit;
+        while let Some(id) = current {
+            if self
+                .scene
+                .a11y(id)
+                .is_some_and(|a| a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS))
+            {
+                return Some(id);
+            }
+            current = self.scene.node(id).and_then(|node| node.parent);
+        }
+        None
+    }
+
     /// Moves focus from a pointer press. This preserves the semantic focus used
     /// by keyboard dispatch and AccessKit while matching native HTML
     /// `:focus-visible`: ordinary pointer-focused controls do not wear the
@@ -60,21 +98,7 @@ impl App {
     /// border and caret, matching browser keyboard-input heuristics.
     pub(crate) fn pointer_focus(&mut self, target: Option<scene::WidgetId>) -> bool {
         let previous = self.focused_input_semantics();
-        let target = target.and_then(|target| {
-            let mut current = Some(target);
-            while let Some(id) = current {
-                if self
-                    .scene
-                    .a11y(id)
-                    .map(|a| a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS))
-                    .unwrap_or(false)
-                {
-                    return Some(id);
-                }
-                current = self.scene.node(id).and_then(|node| node.parent);
-            }
-            None
-        });
+        let target = self.pointer_focus_target(target);
         let dismissed =
             schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
         // Focus walking the rows of an open menu keeps it open.
@@ -108,6 +132,10 @@ impl App {
         &mut self,
         previous: Option<(u16, Option<String>)>,
     ) {
+        // A window gives focus back to this control when it is activated.
+        if let Some(focused) = self.focused_widget() {
+            schnellui::widgets::remember_dialog_focus(&self.widgets, &self.scene, focused);
+        }
         let current = self.focused_input_semantics();
         if previous == current {
             return;

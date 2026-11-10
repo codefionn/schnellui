@@ -1974,3 +1974,130 @@ mod backdrop_click {
         assert_eq!(dismissed.get(), 0);
     }
 }
+
+/// Activating a window with the pointer gives it keyboard focus, as on a
+/// desktop: the control that last had focus in it, else nothing.
+mod window_activation {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{ElementState, MouseButton};
+
+    use super::super::{event_handler::EventTail, WindowedApp};
+    use crate::a11y::Role;
+    use crate::widgets::{Button, Dialog, Stack, Text};
+    use crate::App;
+
+    fn window(title: &'static str, button: &'static str, x: f32, y: f32) -> Dialog {
+        Dialog::new(title)
+            .modeless()
+            .non_fixed()
+            .movable()
+            .at(x, y)
+            .size(240.0, 160.0)
+            .child(Text::new("Notes"))
+            .child(Button::new(button).on_click(|| {}))
+    }
+
+    /// Two windows that overlap: the second one is on top, over the first's
+    /// button.
+    fn host() -> WindowedApp {
+        let mut app = App::mount_with_size(
+            Stack::new()
+                .fill()
+                .child(window("Back", "Assign", 20.0, 20.0))
+                .child(window("Front", "Send", 120.0, 60.0)),
+            640,
+            480,
+        );
+        app.frame();
+        super::windowed_host(app, None)
+    }
+
+    fn press_release(host: &mut WindowedApp, x: f32, y: f32) {
+        host.on_cursor_moved(PhysicalPosition::new(f64::from(x), f64::from(y)));
+        for state in [ElementState::Pressed, ElementState::Released] {
+            if host.on_mouse_input(state, MouseButton::Left) == EventTail::Normal {
+                host.poll_remount();
+            }
+        }
+        host.on_redraw_requested();
+    }
+
+    fn rect(host: &WindowedApp, role: Role, name: &str) -> crate::scene::Rect {
+        let id = host.app.find_widget(role, Some(name)).unwrap();
+        host.app.scene().layout(id).unwrap().rect
+    }
+
+    fn click_button(host: &mut WindowedApp, name: &str) {
+        let r = rect(host, Role::Button, name);
+        press_release(host, r.x + r.width / 2.0, r.y + r.height / 2.0);
+    }
+
+    /// A point on a window's title bar, clear of the other window.
+    fn title(host: &WindowedApp, name: &str) -> (f32, f32) {
+        let r = rect(host, Role::Dialog, name);
+        (r.x + 40.0, r.y + 12.0)
+    }
+
+    fn focused_name(host: &WindowedApp) -> Option<String> {
+        let id = host.app.focused_widget()?;
+        host.app
+            .scene()
+            .a11y(id)?
+            .name
+            .clone()
+            .map(|n| n.to_string())
+    }
+
+    #[test]
+    fn pressing_a_back_window_title_takes_focus_from_the_window_in_front() {
+        let mut host = host();
+        // Assign raised Back over Front; the right end of Send sticks out.
+        let r = rect(&host, Role::Button, "Send");
+        press_release(&mut host, r.right() - 4.0, r.y + 4.0);
+        assert_eq!(focused_name(&host).as_deref(), Some("Send"));
+        let (x, y) = title(&host, "Back");
+        press_release(&mut host, x, y);
+        assert_eq!(focused_name(&host), None);
+    }
+
+    #[test]
+    fn pressing_a_back_window_body_takes_focus_from_the_window_in_front() {
+        let mut host = host();
+        click_button(&mut host, "Send");
+        let r = rect(&host, Role::Dialog, "Back");
+        press_release(&mut host, r.x + 20.0, r.y + 100.0);
+        assert_eq!(focused_name(&host), None);
+    }
+
+    #[test]
+    fn raising_a_window_restores_the_control_that_last_had_focus_in_it() {
+        let mut host = host();
+        // The corner of the button the front window does not cover.
+        let r = rect(&host, Role::Button, "Assign");
+        press_release(&mut host, r.x + 4.0, r.y + 4.0);
+        assert_eq!(focused_name(&host).as_deref(), Some("Assign"));
+        // Assign raised Back over Front; the right end of Send sticks out.
+        let r = rect(&host, Role::Button, "Send");
+        press_release(&mut host, r.right() - 4.0, r.y + 4.0);
+        assert_eq!(focused_name(&host).as_deref(), Some("Send"));
+        let (x, y) = title(&host, "Back");
+        press_release(&mut host, x, y);
+        assert_eq!(focused_name(&host).as_deref(), Some("Assign"));
+        let id = host.app.focused_widget().unwrap();
+        assert!(!crate::widgets::focus_ring_visible(&host.app.widgets, id));
+        // The right end of Front's title bar sticks out from under Back.
+        let r = rect(&host, Role::Dialog, "Front");
+        press_release(&mut host, r.right() - 20.0, r.y + 12.0);
+        assert_eq!(focused_name(&host).as_deref(), Some("Send"));
+    }
+
+    #[test]
+    fn pressing_a_control_in_a_back_window_still_raises_and_focuses_it() {
+        let mut host = host();
+        click_button(&mut host, "Send");
+        let r = rect(&host, Role::Button, "Assign");
+        // The corner of the button the front window does not cover.
+        press_release(&mut host, r.x + 4.0, r.y + 4.0);
+        assert_eq!(focused_name(&host).as_deref(), Some("Assign"));
+    }
+}

@@ -759,6 +759,8 @@ impl WindowedApp {
                     }
                     return EventTail::Skip;
                 }
+                // Pressing a window, on its title or anywhere else, activates it.
+                let activated = self.app.activate_window_at(hit);
                 if self.app.begin_dialog_pointer(p) {
                     let dismissed = schnellui::widgets::dismiss_open_dropdowns(
                         &self.app.widgets.clone(),
@@ -821,7 +823,12 @@ impl WindowedApp {
                     // press on a focusable widget focuses it; a press
                     // on anything else (or nothing) blurs — `focus`
                     // filters non-focusable targets down to a blur.
-                    redraw |= self.app.pointer_focus(hit);
+                    // A press on a window's plain body leaves the focus the
+                    // activation just gave it, instead of blurring it.
+                    if !activated || self.app.pointer_focus_target(hit).is_some() {
+                        redraw |= self.app.pointer_focus(hit);
+                    }
+                    redraw |= activated;
                     self.backdrop_press = None;
                     if !self.app.begin_drag(p) {
                         let backdrop = hit.filter(|&id| {
