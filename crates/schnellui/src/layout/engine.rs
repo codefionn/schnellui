@@ -725,7 +725,7 @@ impl LayoutEngine {
                                 y: abs.y + cl.location.y,
                             };
                             if let Some(style) = self.styles.get(child) {
-                                if style.anchor.is_some() {
+                                if style.anchor.is_some() && style.keep_in_view {
                                     at = keep_anchored_in_view(self.viewport, style, at, cl.size);
                                 }
                             }

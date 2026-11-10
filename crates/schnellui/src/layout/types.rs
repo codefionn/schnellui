@@ -289,6 +289,12 @@ pub struct ContainerStyle {
     /// the parent, when it would overflow the bottom of the root viewport
     /// and fits above. A dropdown popup opens upward near the window edge.
     pub anchor_above: Option<f32>,
+    /// With `anchor`: the box floats over the page as a popup does, so
+    /// layout moves it back inside the window when it would run past an
+    /// edge. Off for a box placed on a spot in its parent's own content,
+    /// such as a chart's hover box over a data point, which has to stay on
+    /// that spot even where the parent runs past the window.
+    pub keep_in_view: bool,
 }
 
 impl ContainerStyle {
@@ -308,6 +314,7 @@ impl ContainerStyle {
             min_height: None,
             anchor: None,
             anchor_above: None,
+            keep_in_view: true,
         }
     }
 }

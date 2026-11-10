@@ -1961,3 +1961,38 @@ fn a_scoped_dialog_stays_on_its_panel_in_a_narrow_window() {
         );
     }
 }
+
+/// A chart wider than the window keeps each data point's hover box on the
+/// point. Layout used to push the boxes past the window edge back inside it,
+/// as it does a popup, so hovering near the edge picked the wrong point.
+#[test]
+fn chart_marks_stay_on_their_points_in_a_narrow_window() {
+    use crate::charts::LineChart;
+    use widgets::Row;
+    let view = Row::new().child(
+        LineChart::new([28.0, 41.0, 37.0, 58.0, 52.0, 71.0, 66.0, 82.0])
+            .labels(["Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Today"])
+            .tooltips(true)
+            .size(400.0, 200.0),
+    );
+    let mut app = App::mount_with_size(view, 420, 300);
+    app.frame();
+    let marks = |app: &App| -> Vec<scene::Rect> {
+        let scene = app.scene();
+        scene
+            .preorder()
+            .filter(|id| {
+                scene.node(*id).is_some_and(|n| n.kind == WidgetKind::Stack)
+                    && scene
+                        .a11y(*id)
+                        .is_some_and(|a| Role::from_u16(a.role) == Role::Group && a.name.is_some())
+            })
+            .filter_map(|id| scene.layout(id).map(|l| l.rect))
+            .collect()
+    };
+    let wide = marks(&app);
+    assert_eq!(wide.len(), 8, "one hover box per point");
+    app.resize(250.0, 300.0);
+    app.frame();
+    assert_eq!(marks(&app), wide);
+}

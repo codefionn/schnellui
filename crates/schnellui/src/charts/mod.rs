@@ -507,6 +507,8 @@ fn add_mark(
         x: rect.x,
         y: rect.y,
     });
+    // The box marks a data point, so it stays on the point.
+    style.keep_in_view = false;
     ctx.layout.set_container(id, style);
     // One transparent rect: the node's ordinary paint, which anchors the tooltip
     // fragment appended after it and gives the repositioning pass an origin.
