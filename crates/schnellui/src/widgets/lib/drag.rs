@@ -158,6 +158,39 @@ pub fn dock_position(rect: Rect, point: Point) -> DockPosition {
     }
 }
 
+/// The band a pane's tab bar covers: the bar's rows across the full width of
+/// the dock `rect`. Dropping anywhere on it joins the pane, over a label or
+/// on the empty strip beside the labels, so the split zones are the pane's
+/// content edges below it. `None` when the pane shows no bar. A scroll's
+/// content is not searched: its bars belong to nested content.
+fn tab_bar_band(scene: &Scene, root: WidgetId, rect: Rect) -> Option<Rect> {
+    fn find(scene: &Scene, id: WidgetId) -> Option<WidgetId> {
+        let node = scene.node(id)?;
+        if node.kind == WidgetKind::TabBar {
+            return Some(id);
+        }
+        if node.kind == WidgetKind::Scroll {
+            return None;
+        }
+        node.children.iter().find_map(|child| find(scene, *child))
+    }
+    let bar = find(scene, root)?;
+    let mut band = scene.layout(bar)?.rect;
+    // A bar with a trailing action sits in a wrapper row as tall as the action.
+    if let Some(parent) = scene.node(bar).and_then(|node| node.parent) {
+        let wrapper = scene.node(parent).is_some_and(|node| {
+            node.kind == WidgetKind::Row
+                && scene.a11y(parent).map(|a| a.role) == Some(Role::Group.as_u16())
+        });
+        if wrapper && parent != root {
+            if let Some(layout) = scene.layout(parent) {
+                band = band.union(&layout.rect);
+            }
+        }
+    }
+    (!band.is_empty()).then(|| Rect::new(rect.x, band.y, rect.width, band.height))
+}
+
 fn dock_preview_rect(rect: Rect, position: DockPosition) -> Rect {
     match position {
         DockPosition::Center => Rect::new(
@@ -208,6 +241,7 @@ fn resolve_drop_hover(
                 target,
                 preview: target,
                 position: DockPosition::Center,
+                over_bar: false,
                 reorder: Some(TabReorderHover {
                     bar: source_item.bar,
                     from: source_item.index,
@@ -226,10 +260,19 @@ fn resolve_drop_hover(
             .get(target)
             .is_some_and(|handlers| handlers.dock.is_some())
     });
+    let mut over_bar = false;
     let position = if is_dock {
         scene
             .layout(target)
-            .map(|layout| dock_position(layout.rect, point))
+            .map(|layout| {
+                over_bar = tab_bar_band(scene, target, layout.rect)
+                    .is_some_and(|band| band.contains(point));
+                if over_bar {
+                    DockPosition::Center
+                } else {
+                    dock_position(layout.rect, point)
+                }
+            })
             .unwrap_or(DockPosition::Center)
     } else {
         DockPosition::Center
@@ -248,6 +291,7 @@ fn resolve_drop_hover(
             target
         },
         position,
+        over_bar,
         reorder: None,
         preview_prims: if is_dock {
             DOCK_PREVIEW_PRIMS
@@ -266,7 +310,14 @@ fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
         let Some(layout) = scene.layout(hover.target) else {
             return;
         };
-        dock_preview_rect(layout.rect, hover.position)
+        match hover
+            .over_bar
+            .then(|| tab_bar_band(scene, hover.target, layout.rect))
+            .flatten()
+        {
+            Some(band) => band,
+            None => dock_preview_rect(layout.rect, hover.position),
+        }
     } else {
         let Some(rect) = paint_bounds(runtime, scene, hover.target) else {
             return;

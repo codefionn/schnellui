@@ -251,6 +251,88 @@ mod tests {
         });
     }
 
+    /// The empty strip beside a pane's tab labels is part of its tab bar: a
+    /// tab dropped there joins the pane at the end, like a drop on a label,
+    /// and the preview is the bar, not a split of the pane.
+    #[test]
+    fn dropping_on_the_empty_tab_strip_joins_the_pane() {
+        use schnellui::scene::Primitive;
+        let runtime = WorkspaceRuntime::default();
+        let initial_layout = runtime.read(|state| state.layout.clone());
+        let mut app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
+        app.frame();
+
+        let from = point_in(&app, Role::Tab, "Pulse", 0.5, 0.5).unwrap();
+        let last = app.find_widget(Role::Tab, Some("Weather")).unwrap();
+        let rect = app.scene().layout(last).unwrap().rect;
+        let to = Point {
+            x: rect.right() + 30.0,
+            y: rect.y + rect.height * 0.5,
+        };
+        let dock = app.find_widget(Role::Group, Some("Dock Notes")).unwrap();
+        let pane = app.scene().layout(dock).unwrap().rect;
+        assert!(pane.contains(to));
+        assert!(app.begin_drag(from));
+        assert!(app.update_drag(to));
+        // The preview paints on the dock's last child.
+        let layer = *app.scene().node(dock).unwrap().children.last().unwrap();
+        let preview = app
+            .scene()
+            .paint(layer)
+            .unwrap()
+            .primitives
+            .iter()
+            .rev()
+            .find_map(|primitive| match primitive {
+                Primitive::SolidRect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a drop preview");
+        assert!(
+            preview.height < pane.height * 0.4 && preview.width >= pane.width * 0.9,
+            "the preview is the tab bar band, not a split: {preview:?} in {pane:?}"
+        );
+        assert!(matches!(
+            app.end_drag(to),
+            DragRelease::Drop { accepted: true }
+        ));
+        assert!(runtime.take_remount());
+        runtime.read(|state| {
+            assert_eq!(state.panes.len(), 2);
+            assert_eq!(state.layout, initial_layout);
+            assert_eq!(state.panes[0].tabs, vec![2]);
+            assert_eq!(state.panes[1].tabs, vec![3, 4, 1]);
+        });
+    }
+
+    /// Dropped on the empty strip of its own pane's bar, a tab moves to the end.
+    #[test]
+    fn dropping_on_the_own_empty_tab_strip_moves_the_tab_to_the_end() {
+        let runtime = WorkspaceRuntime::default();
+        let initial_layout = runtime.read(|state| state.layout.clone());
+        let mut app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
+        app.frame();
+
+        let from = point_in(&app, Role::Tab, "Pulse", 0.5, 0.5).unwrap();
+        let last = app.find_widget(Role::Tab, Some("Focus")).unwrap();
+        let rect = app.scene().layout(last).unwrap().rect;
+        let to = Point {
+            x: rect.right() + 30.0,
+            y: rect.y + rect.height * 0.5,
+        };
+        assert!(app.begin_drag(from));
+        assert!(app.update_drag(to));
+        assert!(matches!(
+            app.end_drag(to),
+            DragRelease::Drop { accepted: true }
+        ));
+        assert!(runtime.take_remount());
+        runtime.read(|state| {
+            assert_eq!(state.layout, initial_layout);
+            assert_eq!(state.panes[0].tabs, vec![2, 1]);
+        });
+    }
+
     #[test]
     fn center_dock_prunes_an_empty_source_pane_from_the_layout() {
         let runtime = WorkspaceRuntime::default();

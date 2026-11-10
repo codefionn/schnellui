@@ -344,6 +344,9 @@ struct DropHover {
     preview: WidgetId,
     position: DockPosition,
     reorder: Option<TabReorderHover>,
+    /// The pointer is over the dock target's tab bar, labels or the empty strip:
+    /// a join, previewed as the bar band instead of the whole pane.
+    over_bar: bool,
     /// Number of preview primitives appended to `target` and removed on leave.
     preview_prims: usize,
 }
