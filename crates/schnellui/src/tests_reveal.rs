@@ -161,6 +161,38 @@ fn nested_scrolls_are_revealed_innermost_first() {
 }
 
 #[test]
+fn an_inner_scroll_that_is_already_scrolled_is_revealed_where_it_now_shows_the_control() {
+    let inner = Scroll::new()
+        .label("inner")
+        .size(260.0, 100.0)
+        .child(buttons(12));
+    let outer = Scroll::new().label("outer").size(300.0, 90.0).child(
+        Column::new()
+            .child(Button::new("Before"))
+            .child(inner)
+            .child(buttons(10)),
+    );
+    let mut app = App::mount_with_size(outer, 400, 400);
+    app.frame();
+    let inner_id = app.find_widget(Role::ScrollView, Some("inner")).unwrap();
+    let outer_id = app.find_widget(Role::ScrollView, Some("outer")).unwrap();
+    // Down at the end of the inner list, with the outer scrolled to show it.
+    assert!(app.focus(Some(button(&app, 11))));
+    assert!(offset(&app, inner_id) > 0.0 && offset(&app, outer_id) > 0.0);
+    // Back up to a row near the start of the inner list: the inner scroll
+    // moves up to it, and the outer one has to follow to where the inner
+    // window now shows it, which is above what the outer window shows.
+    let target = button(&app, 6);
+    assert!(app.focus(Some(target)));
+    let drawn = app.scene().composited_rect(target);
+    let laid = app.scene().layout(target).unwrap().rect;
+    assert!(
+        (drawn.height - laid.height).abs() < 0.5,
+        "the control is drawn whole at {drawn:?}, laid out as {laid:?}"
+    );
+}
+
+#[test]
 fn arrowing_down_a_list_in_a_scroll_follows_the_focused_row() {
     let mut list = List::new();
     for i in 0..30 {

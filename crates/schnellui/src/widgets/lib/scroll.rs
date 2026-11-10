@@ -772,14 +772,14 @@ pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: R
                 moved |= dispatch_scroll(runtime, scene, viewport, delta);
             }
             // What the next viewport out sees is this rect where this viewport
-            // now shows it, cut to the part this viewport lets through.
-            let shift = scene
+            // now shows it (its content moved up by the whole offset, not just
+            // by this move), cut to the part this viewport lets through.
+            let shown_at = scene
                 .scroll_offset(viewport)
                 .y
-                .clamp(0.0, metrics.max_offset)
-                - metrics.offset;
-            top = (top - shift).clamp(metrics.viewport.y, metrics.viewport.bottom());
-            bottom = (bottom - shift).clamp(metrics.viewport.y, metrics.viewport.bottom());
+                .clamp(0.0, metrics.max_offset);
+            top = (top - shown_at).clamp(metrics.viewport.y, metrics.viewport.bottom());
+            bottom = (bottom - shown_at).clamp(metrics.viewport.y, metrics.viewport.bottom());
         }
         cur = enclosing_scroll(scene, viewport);
     }
