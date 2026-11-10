@@ -22,11 +22,31 @@ use schnellui::{App, Remount, ThemeMode, WindowUpdate};
 use crate::{HeadlessHost, HostKey};
 
 /// How a component is mounted.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Mount {
     pub theme: Theme,
     pub size: (u32, u32),
     pub scale: f32,
+    /// Whether animations run. Off, the app behaves as under the platform's
+    /// reduced-motion preference and every animation jumps to its end.
+    pub animate: bool,
+}
+
+impl std::fmt::Debug for Mount {
+    // A theme's derived Debug runs to hundreds of lines, which buries the
+    // failing input. Name it by its place in THEMES instead.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let theme = crate::THEMES.iter().position(|t| *t == self.theme);
+        f.debug_struct("Mount")
+            .field(
+                "theme",
+                &theme.map_or("other".to_string(), |i| format!("THEMES[{i}]")),
+            )
+            .field("size", &self.size)
+            .field("scale", &self.scale)
+            .field("animate", &self.animate)
+            .finish()
+    }
 }
 
 /// A widget family under test.
@@ -81,7 +101,7 @@ fn host<V: View + 'static>(view: impl FnMut() -> V + 'static, mount: &Mount) -> 
         mount.size.1,
         mount.scale,
     );
-    app.apply_reduced_motion(true);
+    app.apply_reduced_motion(!mount.animate);
     app.frame();
     HeadlessHost::new(app)
 }
@@ -240,32 +260,51 @@ pub const BUTTONS: Component = Component {
 // --- checkbox, switch, radio -----------------------------------------------
 
 fn toggles(mount: &Mount) -> HeadlessHost {
-    let row = |control: Box<dyn View>, label: &'static str| {
-        Row::new()
-            .gap(8.0)
-            .align(Align::Center)
-            .child(control)
-            .child(Text::new(label))
-    };
+    // Controlled, as an application keeps them, so a theme rebuild keeps
+    // what the person chose.
+    let email = create_signal(false);
+    let sync = create_signal(true);
+    let often = create_signal("Daily");
     host(
         move || {
+            let labelled = |control: Box<dyn View>, label: &'static str| {
+                Row::new()
+                    .gap(8.0)
+                    .align(Align::Center)
+                    .child(control)
+                    .child(Text::new(label))
+            };
+            let mut radios = Row::new().gap(8.0).align(Align::Center);
+            for label in ["Daily", "Weekly", "Monthly"] {
+                // One row of siblings is one exclusive radio group.
+                radios = radios
+                    .child(
+                        Radio::new(often.get() == label)
+                            .name(label)
+                            .on_select(move || often.set(label)),
+                    )
+                    .child(Text::new(label));
+            }
             Pad::all(20.0).child(
                 Column::new()
                     .gap(10.0)
-                    .child(row(Box::new(Checkbox::new(false).name("Email")), "Email"))
-                    .child(row(Box::new(Switch::new(true).name("Sync")), "Sync"))
-                    .child(
-                        // One row of siblings is one exclusive radio group.
-                        Row::new()
-                            .gap(8.0)
-                            .align(Align::Center)
-                            .child(Radio::new(true).name("Daily"))
-                            .child(Text::new("Daily"))
-                            .child(Radio::new(false).name("Weekly"))
-                            .child(Text::new("Weekly"))
-                            .child(Radio::new(false).name("Monthly"))
-                            .child(Text::new("Monthly")),
-                    ),
+                    .child(labelled(
+                        Box::new(
+                            Checkbox::new(email.get())
+                                .name("Email")
+                                .on_toggle(move |on| email.set(on)),
+                        ),
+                        "Email",
+                    ))
+                    .child(labelled(
+                        Box::new(
+                            Switch::new(sync.get())
+                                .name("Sync")
+                                .on_toggle(move |on| sync.set(on)),
+                        ),
+                        "Sync",
+                    ))
+                    .child(radios),
             )
         },
         mount,
@@ -298,14 +337,31 @@ pub const TOGGLES: Component = Component {
 // --- sliders ---------------------------------------------------------------
 
 fn sliders(mount: &Mount) -> HeadlessHost {
+    let volume = create_signal(40.0f32);
+    let balance = create_signal(0.3f32);
+    let offset = create_signal(7.0f32);
     host(
         move || {
             Pad::all(20.0).child(
                 Column::new()
                     .gap(14.0)
-                    .child(Slider::new(40.0, 0.0, 100.0).step(5.0).name("Volume"))
-                    .child(Slider::new(0.3, 0.0, 1.0).step(0.1).name("Balance"))
-                    .child(Slider::new(7.0, -10.0, 10.0).name("Offset")),
+                    .child(
+                        Slider::new(volume.get(), 0.0, 100.0)
+                            .step(5.0)
+                            .name("Volume")
+                            .on_change(move |v| volume.set(v)),
+                    )
+                    .child(
+                        Slider::new(balance.get(), 0.0, 1.0)
+                            .step(0.1)
+                            .name("Balance")
+                            .on_change(move |v| balance.set(v)),
+                    )
+                    .child(
+                        Slider::new(offset.get(), -10.0, 10.0)
+                            .name("Offset")
+                            .on_change(move |v| offset.set(v)),
+                    ),
             )
         },
         mount,
@@ -359,13 +415,13 @@ pub const SLIDERS: Component = Component {
 
 fn tabs(mount: &Mount) -> HeadlessHost {
     let chosen = create_signal("General");
-    let tab = move |label: &'static str| {
-        Tab::new(label)
-            .selected(label == "General")
-            .on_select(move || chosen.set(label))
-    };
     host(
         move || {
+            let tab = |label: &'static str| {
+                Tab::new(label)
+                    .selected(chosen.get() == label)
+                    .on_select(move || chosen.set(label))
+            };
             Pad::all(16.0).child(
                 Column::new()
                     .gap(10.0)
@@ -394,14 +450,16 @@ pub const TABS: Component = Component {
 // --- list ------------------------------------------------------------------
 
 fn list(mount: &Mount) -> HeadlessHost {
+    let chosen = create_signal("Inbox");
     host(
-        || {
+        move || {
             let mut list = List::new();
-            for (i, label) in ["Inbox", "Archive", "Drafts", "Spam"]
-                .into_iter()
-                .enumerate()
-            {
-                list = list.child(ListItem::new(label).selected(i == 0));
+            for label in ["Inbox", "Archive", "Drafts", "Spam"] {
+                list = list.child(
+                    ListItem::new(label)
+                        .selected(chosen.get() == label)
+                        .on_select(move || chosen.set(label)),
+                );
             }
             Column::new()
                 .fill()
@@ -423,6 +481,7 @@ pub const LIST: Component = Component {
 // --- table -----------------------------------------------------------------
 
 fn table(mount: &Mount) -> HeadlessHost {
+    let row = create_signal(0usize);
     host(
         move || {
             Pad::all(12.0).child(
@@ -431,7 +490,8 @@ fn table(mount: &Mount) -> HeadlessHost {
                     .row(["Ada Lovelace", "36"])
                     .row(["Grace Hopper", "85"])
                     .row(["Edsger Dijkstra", "72"])
-                    .selected_row(0),
+                    .selected_row(row.get())
+                    .on_select_row(move |i| row.set(i)),
             )
         },
         mount,
@@ -544,11 +604,16 @@ pub const TEXT_AREA: Component = Component {
 // --- scroll ----------------------------------------------------------------
 
 fn scroll(mount: &Mount) -> HeadlessHost {
+    let chosen = create_signal(0usize);
     host(
-        || {
+        move || {
             let mut rows = List::new();
             for i in 0..30 {
-                rows = rows.child(ListItem::new(format!("Row {i}")).selected(i == 0));
+                rows = rows.child(
+                    ListItem::new(format!("Row {i}"))
+                        .selected(chosen.get() == i)
+                        .on_select(move || chosen.set(i)),
+                );
             }
             Pad::all(12.0).child(Scroll::new().size(240.0, 180.0).child(rows))
         },
@@ -643,7 +708,7 @@ fn dropdown(mount: &Mount) -> HeadlessHost {
         let (state, dirty) = (state.clone(), dirty.clone());
         host(move || dropdown_view(state.clone(), dirty.clone()), mount)
     };
-    let scale = mount.scale;
+    let (scale, animate) = (mount.scale, mount.animate);
     host.set_remount(move |size: Size, theme: Theme| {
         if !dirty.replace(false) {
             return None;
@@ -656,7 +721,7 @@ fn dropdown(mount: &Mount) -> HeadlessHost {
             size.height as u32,
             scale,
         );
-        app.apply_reduced_motion(true);
+        app.apply_reduced_motion(!animate);
         Some(WindowUpdate::Remount(Remount::new(app, "dropdown")))
     });
     host
@@ -704,23 +769,26 @@ pub const DROPDOWN: Component = Component {
 
 fn context_menu(mount: &Mount) -> HeadlessHost {
     let said = create_signal("nothing");
+    let text = create_signal(String::from("right-click me"));
     host(
         move || {
             Pad::all(16.0).child(
                 Column::new()
                     .gap(10.0)
                     .child(
-                        TextInput::new("right-click me").context_menu(
-                            ContextMenu::new()
-                                .item(
-                                    ContextMenuItem::new("Shout")
-                                        .on_select(move || said.set("Shout")),
-                                )
-                                .item(
-                                    ContextMenuItem::new("Whisper")
-                                        .on_select(move || said.set("Whisper")),
-                                ),
-                        ),
+                        TextInput::new(text.get())
+                            .on_input(move |v: &str| text.set(v.to_owned()))
+                            .context_menu(
+                                ContextMenu::new()
+                                    .item(
+                                        ContextMenuItem::new("Shout")
+                                            .on_select(move || said.set("Shout")),
+                                    )
+                                    .item(
+                                        ContextMenuItem::new("Whisper")
+                                            .on_select(move || said.set("Whisper")),
+                                    ),
+                            ),
                     )
                     .child(Text::dynamic(move || format!("said {}", said.get()))),
             )
@@ -740,6 +808,7 @@ pub const CONTEXT_MENU: Component = Component {
 // --- dialogs ---------------------------------------------------------------
 
 fn dialogs(mount: &Mount) -> HeadlessHost {
+    let note = create_signal(String::from("note"));
     host(
         move || {
             Stack::new()
@@ -762,7 +831,10 @@ fn dialogs(mount: &Mount) -> HeadlessHost {
                                             .wrap(WrapMode::Word),
                                     )
                                     .child(Button::new("Resolve").tooltip("Resolve the note"))
-                                    .child(TextInput::new("note")),
+                                    .child(
+                                        TextInput::new(note.get())
+                                            .on_input(move |v: &str| note.set(v.to_owned())),
+                                    ),
                             )
                             .child(
                                 Dialog::new("Proof preview")
@@ -797,7 +869,7 @@ fn grouped_tabs(mount: &Mount) -> HeadlessHost {
     let last = create_signal(String::new());
     let tab = move |label: &'static str| {
         TabNode::new(label)
-            .selected(label == "Overview")
+            .selected(chosen.get() == label)
             .on_select(move || chosen.set(label))
             .action(
                 Button::new(format!("Archive {label}"))
@@ -899,7 +971,7 @@ fn todo(mount: &Mount) -> HeadlessHost {
         let (state, dirty) = (state.clone(), dirty.clone());
         host(move || todo_view(state.clone(), dirty.clone()), mount)
     };
-    let scale = mount.scale;
+    let (scale, animate) = (mount.scale, mount.animate);
     host.set_remount(move |size: Size, theme: Theme| {
         if !dirty.replace(false) {
             return None;
@@ -912,7 +984,7 @@ fn todo(mount: &Mount) -> HeadlessHost {
             size.height as u32,
             scale,
         );
-        app.apply_reduced_motion(true);
+        app.apply_reduced_motion(!animate);
         Some(WindowUpdate::Remount(Remount::new(app, "todo")))
     });
     host

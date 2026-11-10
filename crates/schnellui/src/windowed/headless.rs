@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton};
@@ -80,6 +81,13 @@ pub struct HeadlessHost {
     /// Which of left and right is held. A real pointer never presses a held
     /// button again or releases one that is up.
     held: [bool; 2],
+    /// Virtual time. The app's clock is pinned to it before every frame, so
+    /// animations and theme transitions advance only through
+    /// [`HeadlessHost::advance`].
+    now: Instant,
+    /// While set, input is delivered without a redraw after each event, as
+    /// events that arrive faster than the display refreshes are.
+    batching: bool,
 }
 
 impl HeadlessHost {
@@ -92,6 +100,8 @@ impl HeadlessHost {
         HeadlessHost {
             theme,
             held: [false; 2],
+            now: Instant::now(),
+            batching: false,
             host: WindowedApp {
                 app,
                 clipboard: HostClipboard::Memory(None),
@@ -163,9 +173,92 @@ impl HeadlessHost {
         self.host.cursor_inside.then(|| self.host.cursor_logical())
     }
 
+    /// Pins the app's clock to virtual time. A remount brings a new app
+    /// with an unpinned clock, so this runs before every poll and frame.
+    fn pin_clock(&mut self) {
+        let now = self.now;
+        self.host.app.set_clock(Some(now));
+    }
+
     fn settle(&mut self) {
+        self.pin_clock();
         self.host.poll_remount();
+        if !self.batching {
+            self.pin_clock();
+            self.host.on_redraw_requested();
+        }
+    }
+
+    /// With batching on, input events are handled without a redraw between
+    /// them, as a burst that arrives within one display frame is. Turning it
+    /// off, or calling [`HeadlessHost::frame`], draws the frame.
+    pub fn set_batching(&mut self, batching: bool) {
+        self.batching = batching;
+        if !batching {
+            self.frame();
+        }
+    }
+
+    /// Lets `duration` of virtual time pass, then draws a frame.
+    pub fn advance(&mut self, duration: Duration) {
+        self.now += duration;
+        self.pin_clock();
+        self.host.poll_remount();
+        self.pin_clock();
         self.host.on_redraw_requested();
+    }
+
+    /// Whether the app still wants animation frames: a theme transition, a
+    /// floating label, a spinner or edge auto-scroll is running.
+    pub fn animating(&self) -> bool {
+        self.host.app.wants_animation_frame()
+    }
+
+    /// Whether input is being batched with no frame drawn between events.
+    pub fn batching(&self) -> bool {
+        self.batching
+    }
+
+    /// Whether a pointer button is down.
+    pub fn held(&self) -> bool {
+        self.held.iter().any(|&down| down)
+    }
+
+    /// Whether an animated theme change is still in flight. Each of its
+    /// frames rebuilds the tree, so until it ends the app has not yet been
+    /// rebuilt under the theme it is heading for.
+    pub fn theme_fading(&self) -> bool {
+        self.host.app.theme_transition_active()
+    }
+
+    /// Advances virtual time one display frame (`step`) at a time until no
+    /// animation is running or `limit` has passed, calling `each` after every
+    /// frame. Returns the time it took.
+    pub fn run_animations(
+        &mut self,
+        step: Duration,
+        limit: Duration,
+        mut each: impl FnMut(&mut HeadlessHost),
+    ) -> Duration {
+        let mut spent = Duration::ZERO;
+        while self.animating() && spent < limit {
+            self.advance(step);
+            spent += step;
+            each(self);
+        }
+        spent
+    }
+
+    /// Starts an animated theme change over `duration` of virtual time.
+    pub fn transition_theme(&mut self, theme: Theme, duration: Duration) {
+        self.theme.set(theme);
+        self.pin_clock();
+        if self.host.app.transition_theme(theme, duration) {
+            // What the window host does after a platform theme change: an
+            // instant change has rebuilt the tree, a fade has only started.
+            self.host.sync_renderer_after_theme_rebuild();
+        }
+        self.settle();
     }
 
     /// Moves the pointer to a logical point. Points outside the window are
@@ -184,9 +277,6 @@ impl HeadlessHost {
 
     /// The pointer leaves the window.
     pub fn pointer_leave(&mut self) {
-        // A real host keeps the last position; park it off-window anyway so
-        // a stray wheel event after leaving lands nowhere.
-        self.host.cursor = PhysicalPosition::new(-1000.0, -1000.0);
         let _ = self.host.on_cursor_left();
         self.settle();
     }
@@ -228,7 +318,10 @@ impl HeadlessHost {
 
     /// One wheel notch at the pointer, positive scrolling down.
     pub fn wheel(&mut self, delta_y: f32) {
-        let p = self.host.cursor_logical();
+        // A window only gets wheel events while the pointer is over it.
+        let Some(p) = self.pointer() else {
+            return;
+        };
         self.host.app.dispatch_wheel_at(p, delta_y);
         self.settle();
     }
@@ -255,17 +348,18 @@ impl HeadlessHost {
     /// Switches the theme, then lets hover catch up with the resting pointer.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme.set(theme);
-        self.host.app.set_theme(theme);
-        self.host.app.frame();
-        if let Some(p) = self.pointer() {
-            self.host.app.update_pointer_proximity(p);
+        if self.host.app.set_theme(theme) {
+            self.host.sync_renderer_after_theme_rebuild();
         }
         self.settle();
     }
 
-    /// Runs a frame with no input.
+    /// Draws a frame with no input, even while batching.
     pub fn frame(&mut self) {
-        self.settle();
+        self.pin_clock();
+        self.host.poll_remount();
+        self.pin_clock();
+        self.host.on_redraw_requested();
     }
 }
 

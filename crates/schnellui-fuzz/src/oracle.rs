@@ -9,8 +9,8 @@ use schnellui::testing::fuzz::{invariants, strip_interactions};
 use schnellui::App;
 
 use crate::components::{Component, Mount};
-use crate::ops::{apply, quiesce, Op};
-use crate::HeadlessHost;
+use crate::ops::{aim_point, apply, quiesce, Op};
+use crate::{HeadlessHost, CLASSIC_THEMES, THEMES};
 
 /// One primitive with what a person sees of it: kind, place, size and
 /// colour. Atlas coordinates are left out, since they depend on the order in
@@ -180,7 +180,7 @@ pub fn diff(label_a: &str, a: &Snapshot, label_b: &str, b: &Snapshot) -> Option<
     None
 }
 
-fn semantics_diff(label_a: &str, a: &App, label_b: &str, b: &App) -> Option<String> {
+pub fn semantics_diff(label_a: &str, a: &App, label_b: &str, b: &App) -> Option<String> {
     fn flat(node: &schnellui::a11y::A11yNodeDump, depth: usize, out: &mut Vec<String>) {
         out.push(format!(
             "{:indent$}{} {:?} value {:?} {:?}",
@@ -228,6 +228,11 @@ pub fn guarded(body: impl FnOnce() -> Result<(), String>) -> Result<(), String> 
 }
 
 fn check(component: &Component, host: &mut HeadlessHost, when: &str) -> Result<(), String> {
+    // Mid-burst no frame has laid out what the input changed, so geometry
+    // still describes the last drawn frame. Check once the burst is drawn.
+    if host.batching() {
+        return Ok(());
+    }
     invariants(host.app_mut()).map_err(|e| format!("{when}: {e}"))?;
     (component.check)(host.app()).map_err(|e| format!("{when}: {e}"))
 }
@@ -242,11 +247,21 @@ pub fn twin(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), Strin
             theme: strip_interactions(mount.theme),
             ..mount
         });
+        let mut faded = false;
         for (step, op) in ops.iter().enumerate() {
             apply(&mut decorated, op, mount.size, false);
             apply(&mut plain, op, mount.size, true);
             let when = format!("after step {step} {op:?}");
             check(component, &mut decorated, &when)?;
+            // The two fade between different themes, and interpolation can
+            // round a frame of one onto the theme it already has, so one
+            // host may skip a rebuild the other makes. A rebuild resets what
+            // the app does not hold (an open context menu, a deferred
+            // remount), so after a fade only the end state counts.
+            faded |= matches!(op, Op::ThemeFade(..));
+            if faded || decorated.batching() {
+                continue;
+            }
             if let Some(d) = semantics_diff("decorated", decorated.app(), "plain", plain.app()) {
                 return Err(format!("{when}: {d}"));
             }
@@ -278,7 +293,7 @@ pub fn history(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), St
         let mut theme = mount.theme;
         for (step, op) in ops.iter().enumerate() {
             apply(&mut used, op, mount.size, false);
-            if let Op::Theme(i) = op {
+            if let Op::Theme(i) | Op::ThemeFade(i, _) = op {
                 theme = crate::THEMES[i % crate::THEMES.len()];
             }
             check(component, &mut used, &format!("after step {step} {op:?}"))?;
@@ -342,7 +357,7 @@ pub fn resize(
             for op in &grip.before {
                 apply(&mut host, op, mount.size, false);
                 apply(&mut plain, op, mount.size, true);
-                if let Op::Theme(i) = op {
+                if let Op::Theme(i) | Op::ThemeFade(i, _) = op {
                     theme = crate::THEMES[i % crate::THEMES.len()];
                 }
             }
@@ -394,5 +409,187 @@ pub fn resize(
             )),
             None => Ok(()),
         }
+    })
+}
+
+/// Same input to an animated host and a host under reduced motion.
+/// Animation is presentation only: the accessibility trees match after
+/// every step, the retained-state checks hold on every animation frame, and
+/// once every animation has ended both paint the same.
+pub fn animation(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), String> {
+    // Brutal and candy change shape and density, so a fade into them moves
+    // every pointer target mid-flight and the two hosts stop seeing the same
+    // clicks. Fade only between themes that share the classic shape.
+    let classic = |i: usize| i % CLASSIC_THEMES;
+    let mount = Mount {
+        theme: if THEMES[..CLASSIC_THEMES].contains(&mount.theme) {
+            mount.theme
+        } else {
+            THEMES[0]
+        },
+        ..mount
+    };
+    let ops: Vec<Op> = ops
+        .iter()
+        .map(|op| match *op {
+            Op::Theme(i) => Op::Theme(classic(i)),
+            Op::ThemeFade(i, ms) => Op::ThemeFade(classic(i), ms),
+            ref other => other.clone(),
+        })
+        .collect();
+    let ops = &ops[..];
+    guarded(|| {
+        let mut moving = (component.mount)(&Mount {
+            animate: true,
+            ..mount
+        });
+        let mut still = (component.mount)(&Mount {
+            animate: false,
+            ..mount
+        });
+        let mut themed = false;
+        for (step, op) in ops.iter().enumerate() {
+            // One pointer for both hosts. A host rebuilt under batching has
+            // no layout to aim at until its next frame, while the screen
+            // still shows the last one, so aim at whatever either host has
+            // laid out and send both the same point.
+            let op = match *op {
+                Op::Aim { n, corner } => [&moving, &still]
+                    .into_iter()
+                    .find_map(|host| {
+                        let p = aim_point(host.app(), n, corner)?;
+                        let size = host.app().size();
+                        Some(Op::Wander(p.x / size.width, p.y / size.height))
+                    })
+                    .unwrap_or_else(|| op.clone()),
+                // The still host rebuilds at once, the animated one frame by
+                // frame, so a press across a theme change would see the tree
+                // rebuilt under it in one host only, and a rebuild drops
+                // what a press under way was doing (a double-click's word
+                // drag, a deferred remount). Keep presses and theme changes
+                // apart here; `twin` covers presses during a fade, where
+                // both hosts rebuild on the same frames.
+                Op::Press(_) if moving.theme_fading() => continue,
+                Op::Theme(_) | Op::ThemeFade(..) if still.held() => continue,
+                ref other => other.clone(),
+            };
+            apply(&mut moving, &op, mount.size, false);
+            apply(&mut still, &op, mount.size, false);
+            let when = format!("after step {step} {op:?}");
+            check(component, &mut moving, &when)?;
+            // A theme change rebuilds the still host at once and the
+            // animated one frame by frame, and a rebuild resets what the
+            // app does not hold (an open context menu, a press under way, a
+            // remount deferred under a held button). After the first theme
+            // change the two may differ until both are quiet, so from there
+            // on only the per-frame checks and the end state count. Mid-burst
+            // neither has drawn what the input did.
+            themed |= matches!(op, Op::Theme(_) | Op::ThemeFade(..));
+            if themed || still.batching() {
+                continue;
+            }
+            if let Some(d) = semantics_diff("animated", moving.app(), "still", still.app()) {
+                return Err(format!("{when}: {d}"));
+            }
+        }
+        let mut fault = None;
+        moving.set_batching(false);
+        moving.run_animations(
+            std::time::Duration::from_millis(16),
+            std::time::Duration::from_secs(10),
+            |host| {
+                if fault.is_none() {
+                    fault = invariants(host.app_mut()).err();
+                }
+            },
+        );
+        if let Some(f) = fault {
+            return Err(format!("mid-animation: {f}"));
+        }
+        if moving.animating() {
+            return Err("an animation is still running after ten seconds".into());
+        }
+        quiesce(&mut moving);
+        quiesce(&mut still);
+        if let Some(d) = semantics_diff("animated", moving.app(), "still", still.app()) {
+            return Err(format!("after the animations ended: {d}"));
+        }
+        match diff(
+            "animated",
+            &snapshot(moving.app()),
+            "still",
+            &snapshot(still.app()),
+        ) {
+            Some(d) => Err(format!("the animations ended somewhere else: {d}")),
+            None => Ok(()),
+        }
+    })
+}
+
+/// How fast input arrives.
+#[derive(Clone, Copy, Debug)]
+pub enum Pace {
+    /// Every event within one display frame, drawn once at the end.
+    Burst,
+    /// A frame and 400 ms of virtual time after every event.
+    Slow,
+    /// Per event, from the seed: inside a burst, one frame later, or after
+    /// a wait of up to a second.
+    Random(u64),
+}
+
+fn paced(component: &Component, mount: Mount, ops: &[Op], pace: Pace) -> HeadlessHost {
+    let mut host = (component.mount)(&mount);
+    let mut seed = match pace {
+        Pace::Random(seed) => seed | 1,
+        _ => 0,
+    };
+    if matches!(pace, Pace::Burst) {
+        host.set_batching(true);
+    }
+    for op in ops {
+        apply(&mut host, op, mount.size, false);
+        match pace {
+            Pace::Burst => {}
+            Pace::Slow => host.advance(std::time::Duration::from_millis(400)),
+            Pace::Random(_) => {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                match seed % 4 {
+                    0 => host.set_batching(true),
+                    1 => host.set_batching(false),
+                    2 => host.advance(std::time::Duration::from_millis(16)),
+                    _ => host.advance(std::time::Duration::from_millis(seed % 1000)),
+                }
+            }
+        }
+    }
+    quiesce(&mut host);
+    host
+}
+
+/// The same keyboard and pointer input at three paces: a single burst, one
+/// event every 400 ms, and a random mix. Where the input lands cannot depend
+/// on how fast it came, so all three end painting and reading the same.
+pub fn pace(component: &Component, mount: Mount, ops: &[Op], seed: u64) -> Result<(), String> {
+    guarded(|| {
+        let slow = paced(component, mount, ops, Pace::Slow);
+        for pace in [Pace::Burst, Pace::Random(seed)] {
+            let other = paced(component, mount, ops, pace);
+            let label = format!("{pace:?}");
+            if let Some(d) = semantics_diff(&label, other.app(), "Slow", slow.app()) {
+                return Err(d);
+            }
+            if let Some(d) = diff(
+                &label,
+                &snapshot(other.app()),
+                "Slow",
+                &snapshot(slow.app()),
+            ) {
+                return Err(format!("the pace of input changed the outcome: {d}"));
+            }
+        }
+        Ok(())
     })
 }

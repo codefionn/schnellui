@@ -1,6 +1,8 @@
 //! Input a person can produce, as proptest strategies, and how a host
 //! replays it.
 
+use std::time::Duration;
+
 use proptest::prelude::*;
 use schnellui::scene::{Point, WidgetId};
 use schnellui::App;
@@ -29,6 +31,15 @@ pub enum Op {
     Resize(f32, f32),
     Blur,
     Theme(usize),
+    /// Let this many milliseconds of virtual time pass, then draw a frame.
+    Wait(u32),
+    /// Start (`true`) or end a burst: events inside one are handled without
+    /// a frame between them, as input faster than the display is.
+    Burst(bool),
+    /// Draw a frame now, even inside a burst.
+    Frame,
+    /// Fade to a theme over this many milliseconds.
+    ThemeFade(usize, u32),
 }
 
 fn key() -> impl Strategy<Value = HostKey> {
@@ -72,6 +83,38 @@ pub fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
+/// Any op, or one that changes the pace: waits short and long, bursts of
+/// input with no frame between events, forced frames and theme fades.
+pub fn timed_op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        6 => op(),
+        1 => prop_oneof![0u32..20, 20u32..250, 250u32..1500].prop_map(Op::Wait),
+        1 => any::<bool>().prop_map(Op::Burst),
+        1 => Just(Op::Frame),
+        1 => (0..THEMES.len(), prop_oneof![Just(0u32), 50u32..600]).prop_map(|(i, ms)| Op::ThemeFade(i, ms)),
+    ]
+}
+
+/// A sequence of up to `max` timed ops.
+pub fn timed_ops(max: usize) -> impl Strategy<Value = Vec<Op>> {
+    proptest::collection::vec(timed_op(), 1..max)
+}
+
+/// Keyboard and pointer input whose target does not depend on layout that
+/// the input itself changes: keys, typing, and pointing at fixed points of
+/// the window. Pace properties replay it at different speeds.
+pub fn pace_op() -> impl Strategy<Value = Op> {
+    let button = prop_oneof![4 => Just(PointerButton::Left), 1 => Just(PointerButton::Right)];
+    prop_oneof![
+        3 => (0.0f32..1.0, 0.0f32..1.0).prop_map(|(x, y)| Op::Wander(x, y)),
+        2 => button.clone().prop_map(Op::Press),
+        2 => button.prop_map(Op::Release),
+        1 => Just(Op::Leave),
+        6 => (key(), proptest::bool::weighted(0.2)).prop_map(|(k, shift)| Op::Key(k, shift)),
+        1 => Just(Op::Blur),
+    ]
+}
+
 /// A sequence of up to `max` ops.
 pub fn ops(max: usize) -> impl Strategy<Value = Vec<Op>> {
     proptest::collection::vec(op(), 1..max)
@@ -100,30 +143,36 @@ pub fn actionable(app: &App) -> Vec<WidgetId> {
     out
 }
 
+/// Where `Aim { n, corner }` points in `app`: the centre (or a point just
+/// inside the top-left corner) of the `n`th actionable widget, wrapping.
+/// `None` when nothing is laid out to aim at.
+pub fn aim_point(app: &App, n: u8, corner: bool) -> Option<Point> {
+    let targets = actionable(app);
+    if targets.is_empty() {
+        return None;
+    }
+    let id = targets[n as usize % targets.len()];
+    let r = app.scene().layout(id)?.rect;
+    Some(if corner {
+        Point {
+            x: r.x + 2.0,
+            y: r.y + 2.0,
+        }
+    } else {
+        Point {
+            x: r.x + r.width / 2.0,
+            y: r.y + r.height / 2.0,
+        }
+    })
+}
+
 /// Replays one op. `plain` hosts get the undecorated version of a theme.
 pub fn apply(host: &mut HeadlessHost, op: &Op, mounted: (u32, u32), plain: bool) {
     match op {
         Op::Aim { n, corner } => {
-            let targets = actionable(host.app());
-            if targets.is_empty() {
-                return;
+            if let Some(p) = aim_point(host.app(), *n, *corner) {
+                host.pointer_move(p);
             }
-            let id = targets[*n as usize % targets.len()];
-            let Some(r) = host.app().scene().layout(id).map(|l| l.rect) else {
-                return;
-            };
-            let p = if *corner {
-                Point {
-                    x: r.x + 2.0,
-                    y: r.y + 2.0,
-                }
-            } else {
-                Point {
-                    x: r.x + r.width / 2.0,
-                    y: r.y + r.height / 2.0,
-                }
-            };
-            host.pointer_move(p);
         }
         Op::Wander(fx, fy) => {
             let size = host.app().size();
@@ -150,16 +199,36 @@ pub fn apply(host: &mut HeadlessHost, op: &Op, mounted: (u32, u32), plain: bool)
                 theme
             });
         }
+        Op::Wait(ms) => host.advance(Duration::from_millis(u64::from(*ms))),
+        Op::Burst(on) => host.set_batching(*on),
+        Op::Frame => host.frame(),
+        Op::ThemeFade(i, ms) => {
+            let theme = THEMES[i % THEMES.len()];
+            let theme = if plain {
+                schnellui::testing::fuzz::strip_interactions(theme)
+            } else {
+                theme
+            };
+            host.transition_theme(theme, Duration::from_millis(u64::from(*ms)));
+        }
     }
 }
 
 /// Takes the pointer away, lets go of both buttons, closes menus and
 /// clears focus, so no hover, press or focus decoration should remain.
 pub fn quiesce(host: &mut HeadlessHost) {
+    host.set_batching(false);
     host.release(PointerButton::Left);
     host.release(PointerButton::Right);
     host.pointer_leave();
     host.key(&HostKey::Escape, false, false);
     host.app_mut().dismiss_context_menu();
     host.blur();
+    finish_animations(host);
+}
+
+/// Advances virtual time a display frame at a time until every animation
+/// has ended (at most ten seconds).
+pub fn finish_animations(host: &mut HeadlessHost) {
+    host.run_animations(Duration::from_millis(16), Duration::from_secs(10), |_| {});
 }

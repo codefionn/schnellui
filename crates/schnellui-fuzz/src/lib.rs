@@ -6,7 +6,7 @@
 //! window. proptest generates the input and shrinks a failure to the shortest
 //! sequence that still fails.
 //!
-//! Three oracles judge a run:
+//! These oracles judge a run:
 //!
 //! - Fresh mount. A window resized to its final size, by one jump or by a
 //!   gradual drag, paints and reads (a11y) like an app mounted at that size.
@@ -16,6 +16,13 @@
 //!   press and focus decoration removed and receives the same input. Their
 //!   accessibility trees match after every step, and once the pointer is gone
 //!   and focus is cleared their paint matches too.
+//! - Still twin. An animated host and a reduced-motion host get the same
+//!   input, with waits, bursts of events without a frame between them, and
+//!   theme fades mixed in. Their trees match step by step until the first
+//!   theme change; every animation frame passes the retained-state checks;
+//!   no animation runs past ten seconds; both end painting the same.
+//! - Pace. One input sequence delivered as a single burst, one event every
+//!   400 ms, and a seeded mix of the two ends in the same state.
 //! - Retained-state checks from `schnellui::testing::fuzz::invariants`, run
 //!   after every step: decoration records match their paint, no decoration is
 //!   sized for paint that moved, and tooltips and floating layers stay inside
@@ -113,6 +120,9 @@ pub const THEMES: [Theme; 6] = [
     schnellui::theme::CANDY,
 ];
 
+/// How many of [`THEMES`] share the classic shape, from the front.
+pub const CLASSIC_THEMES: usize = 4;
+
 /// Scale factors a host may run at.
 pub const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 
@@ -126,6 +136,7 @@ pub fn mount(
         theme: THEMES[theme],
         size,
         scale: SCALES[scale],
+        animate: false,
     })
 }
 
