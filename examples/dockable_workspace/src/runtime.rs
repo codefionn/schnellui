@@ -82,7 +82,9 @@ pub(crate) fn workspace_view(
                 )),
         );
 
-    Column::new().fill().child(
+    // The workspace keeps a minimum size, so a window shorter than it scrolls
+    // the page and every pane action and tab can be shown.
+    Scroll::new().fill().scrollbar(true).child(
         Pad::all(metrics.outer_padding).child(
             Row::new()
                 .gap(metrics.column_gap)

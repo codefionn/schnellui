@@ -9,6 +9,30 @@ mod tests {
     use schnellui::accesskit_reexport::TreeId;
     use schnellui::widgets::DockPosition;
 
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        use crate::runtime::{scenario_app, Scenario};
+        use strum::IntoEnumIterator;
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(1210, 720), (1210, 240), (1210, 120)] {
+                // The other scenarios are reached by dragging a tab with the
+                // pointer, which needs the tab on screen; the short windows
+                // only cover the page the drags start from.
+                if scenario != Scenario::Starter && h < 720 {
+                    continue;
+                }
+                let runtime = WorkspaceRuntime::default();
+                let mut app = scenario_app(&runtime, scenario, w, h, 1.0).expect("scenario");
+                stops += schnellui::testing::fuzz::tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{scenario:?} at {w}x{h}: {e}"));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
+
     fn initial_layout() -> LayoutNode {
         WorkspaceState::default().layout
     }
