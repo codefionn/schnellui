@@ -259,3 +259,29 @@ mod wheel_closing_a_context_menu {
         assert_eq!(schnellui_fuzz::oracle::twin(&c, m, &ops), Ok(()));
     }
 }
+
+/// A text area inside a scroll emits only the rows near the viewport, and
+/// keeps its band while it still covers the view. A fade that rebuilds the
+/// page after End has scrolled it re-emits the band around the new offset,
+/// while a jump keeps the old one. Both show the same rows, so the two end
+/// painting the same.
+#[test]
+fn a_text_area_band_off_screen_is_not_a_paint_difference() {
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::ops::Op;
+    use schnellui_fuzz::{oracle, serial, HostKey, THEMES};
+    let _serial = serial();
+    let component = components::named("scroll_area");
+    let mount = Mount {
+        theme: THEMES[1],
+        size: component.size,
+        scale: 1.0,
+        animate: false,
+    };
+    let ops = [
+        Op::ThemeFade(0, 50),
+        Op::Resize(1.09, 0.2),
+        Op::Key(HostKey::End, false),
+    ];
+    assert_eq!(oracle::animation(&component, mount, &ops), Ok(()));
+}

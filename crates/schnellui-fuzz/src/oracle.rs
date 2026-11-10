@@ -4,7 +4,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use schnellui::a11y::A11yTreeDump;
-use schnellui::scene::{Primitive, WidgetId};
+use schnellui::scene::{Primitive, WidgetId, WidgetKind};
 use schnellui::testing::fuzz::{invariants, strip_interactions};
 use schnellui::App;
 
@@ -114,12 +114,22 @@ pub fn snapshot(app: &App) -> Snapshot {
         }
         let Some(node) = scene.node(id) else { continue };
         stack.extend(node.children.iter().rev().copied());
+        // A text area inside a scroll emits the rows its viewport shows plus
+        // an overscan, and keeps that band while it still covers the view, so
+        // which rows lie off screen depends on the path the scroll took.
+        let shown = (node.kind == WidgetKind::TextArea).then(|| shown_window(scene, id));
         let inks: Vec<Ink> = scene
             .paint(id)
             .map(|p| {
                 p.primitives
                     .iter()
                     .filter(|p| !transparent(p))
+                    .filter(|p| {
+                        shown.flatten().is_none_or(|(top, bottom)| {
+                            let (lo, hi) = y_span(p);
+                            hi >= top && lo <= bottom
+                        })
+                    })
                     .map(ink)
                     .collect()
             })
@@ -131,6 +141,34 @@ pub fn snapshot(app: &App) -> Snapshot {
         out.push((format!("{:?} {name:?}", node.kind), inks));
     }
     out
+}
+
+/// The rows of layout space (top, bottom) that every Scroll ancestor of `id`
+/// shows. `None` without one.
+fn shown_window(scene: &schnellui::scene::Scene, id: WidgetId) -> Option<(f32, f32)> {
+    let mut window: Option<(f32, f32)> = None;
+    let mut cur = scene.node(id)?.parent;
+    while let Some(p) = cur {
+        let node = scene.node(p)?;
+        if node.kind == WidgetKind::Scroll {
+            let rect = scene.layout(p)?.rect;
+            let top = rect.y + scene.scroll_offset(p).y;
+            let (lo, hi) = window.unwrap_or((f32::MIN, f32::MAX));
+            window = Some((lo.max(top), hi.min(top + rect.height)));
+        }
+        cur = node.parent;
+    }
+    window
+}
+
+fn y_span(p: &Primitive) -> (f32, f32) {
+    match *p {
+        Primitive::SolidRect { rect, .. }
+        | Primitive::StrokeRect { rect, .. }
+        | Primitive::GlyphQuad { rect, .. }
+        | Primitive::ImageQuad { rect, .. } => (rect.y, rect.y + rect.height),
+        Primitive::Line { from, to, .. } => (from.y.min(to.y), from.y.max(to.y)),
+    }
 }
 
 fn transparent(p: &Primitive) -> bool {
