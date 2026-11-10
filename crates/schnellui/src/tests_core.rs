@@ -555,6 +555,50 @@ fn application_shortcuts_dispatch_by_normalized_chord() {
     assert!(!app.dispatch_shortcut(Shortcut::command(',')));
 }
 
+/// Sequence (calculator): type 1 + 2, press Enter. The display stayed at 2
+/// although the app bound Enter to equals with a '\r' shortcut: Enter is a
+/// named key, and only typed characters reached shortcuts. After clicking
+/// the 7 key, Enter pressed 7 again instead.
+#[test]
+fn an_enter_shortcut_runs_before_the_focused_button_but_not_in_a_text_field() {
+    use schnellui::widgets::{Button, Column, TextArea};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let pressed = Rc::new(Cell::new(0));
+    let p = pressed.clone();
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("7").on_click(move || p.set(p.get() + 1)))
+            .child(TextArea::new("")),
+        300,
+        200,
+    );
+    app.frame();
+    let equals = Rc::new(Cell::new(0));
+    let e = equals.clone();
+    app.register_shortcut(Shortcut::new('\r', false, false, false), move || {
+        e.set(e.get() + 1)
+    });
+
+    assert!(app.dispatch_key(UiKey::Enter), "nothing focused");
+    assert_eq!(equals.get(), 1);
+
+    let seven = app.find_widget(Role::Button, Some("7")).unwrap();
+    assert!(app.dispatch_click(seven));
+    assert_eq!(pressed.get(), 1);
+    assert!(app.focus(Some(seven)));
+    assert!(app.dispatch_key(UiKey::Enter), "a focused button");
+    assert_eq!(equals.get(), 2);
+    assert_eq!(pressed.get(), 1, "Enter did not press 7 again");
+
+    let area = app.find_widget(Role::MultilineTextInput, None).unwrap();
+    assert!(app.focus(Some(area)));
+    assert!(app.dispatch_key(UiKey::Enter));
+    assert_eq!(equals.get(), 2, "Enter in a text area stays a newline");
+    assert_eq!(app.scene().a11y(area).unwrap().value.as_deref(), Some("\n"));
+}
+
 #[test]
 fn navigation_reaches_the_registered_handler() {
     use std::cell::RefCell;
