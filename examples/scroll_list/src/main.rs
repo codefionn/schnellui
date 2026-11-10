@@ -124,7 +124,10 @@ fn scroll_list_view() -> impl View {
     for i in 0..ROWS {
         col = col.child(Text::new(format!("Row {i}")));
     }
-    Scroll::new().size(VIEWPORT_W, VIEWPORT_H).child(col)
+    Scroll::new()
+        .label("Rows")
+        .size(VIEWPORT_W, VIEWPORT_H)
+        .child(col)
 }
 
 /// Builds the app for a scenario in its target state (SOUL §7.5). `Top` is
@@ -184,8 +187,9 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     let sv = app
         .find_widget(Role::ScrollView, None)
         .ok_or_else(|| "missing scroll view".to_string())?;
-    find_by_role_name(&tree, "scroll_view", None)
-        .ok_or_else(|| "scroll view not in a11y dump".to_string())?;
+    // Named, so a screen reader announces more than "scroll view".
+    find_by_role_name(&tree, "scroll_view", Some("Rows"))
+        .ok_or_else(|| "no scroll view named \"Rows\" in the a11y dump".to_string())?;
     let offset = app.scene().scroll_offset(sv).y;
     match scenario {
         Scenario::Top => {
