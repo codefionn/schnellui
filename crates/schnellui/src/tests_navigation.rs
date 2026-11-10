@@ -1542,11 +1542,18 @@ fn a_tab_shows_its_tooltip_on_hover() {
     use schnellui::scene::{Point, Primitive};
     use schnellui::widgets::{Column, Panel, Tab, TabBar};
     let mut app = App::mount_with_size(
-        Column::new().child(Panel::new().width(10.0).height(60.0)).child(
-            TabBar::new()
-                .child(Tab::new("Security").display("").tooltip("Security").selected(true))
-                .child(Tab::new("Audio").display("").tooltip("Audio")),
-        ),
+        Column::new()
+            .child(Panel::new().width(10.0).height(60.0))
+            .child(
+                TabBar::new()
+                    .child(
+                        Tab::new("Security")
+                            .display("")
+                            .tooltip("Security")
+                            .selected(true),
+                    )
+                    .child(Tab::new("Audio").display("").tooltip("Audio")),
+            ),
         320,
         200,
     );
@@ -1559,8 +1566,10 @@ fn a_tab_shows_its_tooltip_on_hover() {
             .unwrap()
             .primitives
             .iter()
-            .filter(|p| matches!(p, Primitive::SolidRect { rect, color, .. }
-                if color.a > 0 && rect.bottom() <= r.y))
+            .filter(|p| {
+                matches!(p, Primitive::SolidRect { rect, color, .. }
+                if color.a > 0 && rect.bottom() <= r.y)
+            })
             .count()
     };
     let before = above(&app);
@@ -1570,4 +1579,61 @@ fn a_tab_shows_its_tooltip_on_hover() {
     });
     app.frame();
     assert!(above(&app) > before, "hovering the tab paints its tooltip");
+}
+
+/// A tab bar at the top of the window has no room above it, so the tooltip
+/// opens below the tab, over the content that follows the bar. The tab paints
+/// as an overlay, so the content laid out after it does not cover the tooltip.
+#[test]
+fn a_tab_tooltip_below_the_tab_stays_above_the_content_after_it() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Column, Panel, Tab, TabBar};
+    let (width, height) = (320_u32, 200_u32);
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(
+                TabBar::new().child(
+                    Tab::new("Security")
+                        .display("S")
+                        .tooltip("Security settings")
+                        .selected(true),
+                ),
+            )
+            .child(Panel::new().width(320.0).height(180.0)),
+        width,
+        height,
+    );
+    app.frame();
+    let id = app.find_widget(Role::Tab, Some("Security")).unwrap();
+    let r = app.scene().layout(id).unwrap().rect;
+    app.update_pointer_proximity(Point {
+        x: r.x + r.width * 0.5,
+        y: r.y + r.height * 0.5,
+    });
+    app.frame();
+    let tip = app
+        .scene()
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::SolidRect { rect, color, .. } if color.a > 0 && rect.y >= r.bottom() => {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .last()
+        .expect("the tooltip opens below the tab");
+    let pixels = app.render_rgba8().unwrap();
+    let at = |x: f32, y: f32| {
+        let i = ((y as usize) * width as usize + x as usize) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let panel = at(width as f32 - 10.0, height as f32 - 10.0);
+    assert_ne!(
+        at(tip.x + tip.width * 0.5, tip.y + tip.height * 0.5),
+        panel,
+        "the panel after the tab bar covers the tooltip"
+    );
 }
