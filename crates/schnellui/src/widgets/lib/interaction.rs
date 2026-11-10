@@ -153,6 +153,26 @@ fn decoration_geometry(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option
     bounds.zip(owner)
 }
 
+/// What a decoration on `id` is sized from, to tell when it needs laying
+/// again: its subtree's paint bounds, and for a scroll view also its own
+/// viewport, which its ring outlines whatever the content paints. The two
+/// are kept apart because content taller than the viewport would hide a
+/// viewport change inside their union.
+fn decoration_extent(
+    runtime: &Runtime,
+    scene: &Scene,
+    id: WidgetId,
+) -> Option<(Rect, Option<Rect>)> {
+    let (geometry, _) = decoration_geometry(runtime, scene, id)?;
+    Some((geometry, scroll_viewport(scene, id)))
+}
+
+fn scroll_viewport(scene: &Scene, id: WidgetId) -> Option<Rect> {
+    (scene.node(id).map(|node| node.kind) == Some(WidgetKind::Scroll))
+        .then(|| scene.layout(id).map(|layout| layout.rect))
+        .flatten()
+}
+
 /// Appends one [`Primitive::StrokeRect`] band of `width` just inside `rect`
 /// grown by `-inset` (a negative inset puts the ring outside `rect`). `radius`
 /// is the corner radius of the shape being outlined; an outset ring adds the
@@ -353,15 +373,15 @@ pub(crate) fn reapply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: Widge
 pub(crate) fn relay_moved_decorations(runtime: &Runtime, scene: &mut Scene) {
     let targets = runtime.with(|rt| {
         let rt = rt.borrow();
-        [&rt.hover, &rt.active, &rt.ring].map(|d| d.as_ref().map(|d| (d.target, d.bounds)))
+        [&rt.hover, &rt.active, &rt.ring]
+            .map(|d| d.as_ref().map(|d| (d.target, (d.bounds, d.viewport))))
     });
     let mut relaid: [Option<WidgetId>; 3] = [None; 3];
-    for (slot, (target, bounds)) in targets.into_iter().flatten().enumerate() {
+    for (slot, (target, extent)) in targets.into_iter().flatten().enumerate() {
         if relaid.contains(&Some(target)) {
             continue;
         }
-        let moved =
-            decoration_geometry(runtime, scene, target).is_some_and(|(now, _)| now != bounds);
+        let moved = decoration_extent(runtime, scene, target).is_some_and(|now| now != extent);
         if moved {
             reapply_focus_ring(runtime, scene, target);
             relaid[slot] = Some(target);
@@ -905,6 +925,7 @@ fn apply_interaction_style(
         foreground,
         background,
         bounds: geometry,
+        viewport: scroll_viewport(scene, id),
     })
 }
 

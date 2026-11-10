@@ -1231,6 +1231,9 @@ struct AppliedInteraction {
     /// The paint bounds of `target`'s subtree the decoration was sized from.
     /// A layout pass that changes them lays the decoration again.
     bounds: Rect,
+    /// A scroll view target's viewport, which its border outlines. Content
+    /// that overflows it keeps `bounds` still while the viewport resizes.
+    viewport: Option<Rect>,
 }
 
 /// The retained widget-interaction data owned by one [`Runtime`].

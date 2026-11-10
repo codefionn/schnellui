@@ -298,3 +298,94 @@ fn hover_and_a_drop_preview_come_off_in_any_order() {
         );
     }
 }
+
+/// Hover a scroll view of rich text, then resize the window a step at a
+/// time. The hover border outlines the viewport and must follow it, even
+/// when the text inside does not rewrap or already overflows the viewport.
+#[test]
+fn a_hovered_scroll_view_border_follows_a_resized_window() {
+    use schnellui::widgets::{Button, Column, Pad, RichDoc, RichSpan, RichText, Scroll};
+    let view = || {
+        let doc = RichDoc::new()
+            .heading(2, ["Release notes"])
+            .paragraph([
+                RichSpan::plain("This build has "),
+                RichSpan::bold("bold"),
+                RichSpan::plain(" words, inline "),
+                RichSpan::code("code"),
+                RichSpan::plain(" and a "),
+                RichSpan::link("link"),
+                RichSpan::plain(" in a paragraph long enough to wrap in a narrow window."),
+            ])
+            .bullet([RichSpan::plain("first point")])
+            .bullet([RichSpan::plain(
+                "second point, which also runs long enough to wrap",
+            )])
+            .quote([RichSpan::plain("A quoted line.")])
+            .code_block("rust", [vec![RichSpan::code("fn main() {}")]])
+            // Enough lines that the text overflows the viewport.
+            .bullet([RichSpan::plain("third point")])
+            .bullet([RichSpan::plain("fourth point")])
+            .bullet([RichSpan::plain("fifth point")])
+            .bullet([RichSpan::plain("sixth point")]);
+        Column::new()
+            .fill()
+            .child(
+                Scroll::new()
+                    .fill()
+                    .child(Pad::all(12.0).child(RichText::new(doc))),
+            )
+            .child(Pad::all(8.0).child(Button::new("Done")))
+    };
+    // Scroll views take the raw-surface style; give it every channel.
+    let mut theme = layered_theme();
+    let surface = InteractionStyle {
+        background: Some(Color::rgba(200, 40, 90, 0x50)),
+        foreground: Some(Color::rgb(200, 10, 200)),
+        border: Some(Color::rgb(200, 120, 30)),
+    };
+    theme.component_interactions.raw_surface = Some(InteractionStates {
+        hover: surface,
+        focus: surface,
+        active: surface,
+    });
+    let mut app = App::mount_with_theme_size_scaled(theme, view(), 420, 300, 1.0);
+    app.apply_reduced_motion(true);
+    app.frame();
+    let scroll = app.find_widget(Role::ScrollView, None).unwrap();
+    app.update_pointer_proximity(centre(&app, scroll));
+    app.frame();
+    let border = |app: &App| -> Vec<scene::Rect> {
+        app.scene()
+            .preorder()
+            .filter_map(|id| app.scene().paint(id))
+            .flat_map(|paint| paint.primitives.iter().copied())
+            .filter_map(|p| match p {
+                Primitive::StrokeRect { rect, color, .. } if color == Color::rgb(200, 120, 30) => {
+                    Some(rect)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    for (w, h) in [
+        (420.0, 301.0),
+        (418.0, 298.0),
+        (418.0, 289.0),
+        (417.0, 279.0),
+        (417.0, 290.0),
+    ] {
+        app.resize(w, h);
+        app.frame();
+        let shown = border(&app);
+        app.update_pointer_proximity(AWAY);
+        app.frame();
+        app.update_pointer_proximity(centre(&app, scroll));
+        app.frame();
+        assert_eq!(
+            shown,
+            border(&app),
+            "at {w}x{h} the border is sized as a fresh hover"
+        );
+    }
+}
