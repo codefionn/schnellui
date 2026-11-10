@@ -580,6 +580,16 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     {
         return;
     }
+    // A text area re-emits its paint into its final box after layout
+    // (`reemit_moved_areas`), so the paint is already anchored. A slide by the
+    // min-origin would also drag a frame pinned to a scrolled viewport back
+    // to the area's top.
+    if scene
+        .node(id)
+        .is_some_and(|node| node.kind == WidgetKind::TextArea)
+    {
+        return;
+    }
     // Content-sized panels derive their paint from their final child-driven box.
     if panel::reposition(runtime, scene, id) {
         return;

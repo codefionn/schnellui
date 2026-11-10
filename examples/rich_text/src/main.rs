@@ -741,4 +741,58 @@ mod tests {
             }
         }
     }
+
+    /// The editor and the markup source keep their top border on the viewport
+    /// while the text scrolls: the frame is the field's, not part of the text.
+    #[test]
+    fn the_top_border_stays_while_the_text_scrolls() {
+        use schnellui::UiKey;
+        for scenario in [Scenario::Editor, Scenario::Preview] {
+            for scale in [1.0_f32, 2.0] {
+                let (w, h) = (880u32, 640u32);
+                let mut app = scenario_app(scenario, w, h, scale);
+                app.frame();
+                let id = app
+                    .find_widget(Role::MultilineTextInput, None)
+                    .expect("the text area");
+                let scroll = app
+                    .scene()
+                    .node(id)
+                    .and_then(|n| n.parent)
+                    .expect("the area sits in a scroll viewport");
+                let view = app.scene().layout(scroll).expect("laid out").rect;
+                // the row of the border that is on the viewport's top edge
+                let (px, py) = (
+                    ((view.x + view.width / 2.0) * scale) as usize,
+                    (view.y * scale) as usize + 1,
+                );
+                let stride = (w as f32 * scale) as usize;
+                let pixel = |app: &mut App| {
+                    let rgba = app.render_rgba8().expect("a headless renderer");
+                    let at = (py * stride + px) * 4;
+                    [rgba[at], rgba[at + 1], rgba[at + 2]]
+                };
+                app.focus(Some(id));
+                let before = pixel(&mut app);
+                assert_ne!(before, [255; 3], "{scenario:?}: no border to start with");
+                app.dispatch_key(UiKey::End {
+                    shift: false,
+                    ctrl: true,
+                });
+                for _ in 0..40 {
+                    app.dispatch_key(UiKey::Enter);
+                }
+                app.frame();
+                assert!(
+                    app.scene().scroll_offset(scroll).y > 100.0,
+                    "{scenario:?}: the text did not scroll"
+                );
+                assert_eq!(
+                    pixel(&mut app),
+                    before,
+                    "{scenario:?} at scale {scale}: the top border scrolled away"
+                );
+            }
+        }
+    }
 }

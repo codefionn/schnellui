@@ -85,6 +85,16 @@ pub fn paint_bounds(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<Re
     // A hover or pressed wash is a decoration, not the widget: a toggle's
     // halo reaches past the control and must not widen the focus ring.
     let washes = decoration_washes(runtime, id);
+    // A text area's ring outlines its frame, the surface painted first. Its
+    // lines and carets may reach past the frame (rows above a scrolled
+    // viewport, a caret at the edge) and must not stretch the ring.
+    let primitive_end = if scene.node(id).map(|node| node.kind) == Some(WidgetKind::TextArea)
+        && matches!(pd.primitives.first(), Some(Primitive::SolidRect { .. }))
+    {
+        1
+    } else {
+        primitive_end
+    };
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -210,6 +220,13 @@ fn surface_radius(runtime: &Runtime, scene: &Scene, owner: WidgetId) -> f32 {
     let Some(paint) = scene.paint(owner) else {
         return 0.0;
     };
+    // A text area's frame is its first primitive. A frame pinned to a scrolled
+    // viewport can be smaller than a wash or caret drawn inside it.
+    if scene.node(owner).map(|node| node.kind) == Some(WidgetKind::TextArea) {
+        if let Some(Primitive::SolidRect { corner_radius, .. }) = paint.primitives.first() {
+            return *corner_radius;
+        }
+    }
     let end = ordinary_primitive_end(runtime, owner, paint);
     let washes = decoration_washes(runtime, owner);
     let mut best = (0.0_f32, 0.0_f32);

@@ -674,6 +674,44 @@ fn surface(rect: Rect, focused: bool, invalid: bool, th: &crate::widgets::Theme)
     ]
 }
 
+/// Where the surface's top edge goes. A field in a Scroll keeps its frame on
+/// the viewport while the text moves under it, as a browser textarea's border
+/// does: once the viewport has scrolled past the area's top, the top edge
+/// follows the viewport's. The sides and the bottom stay where they are.
+fn pinned_top(scene: &Scene, id: WidgetId, rect: Rect) -> f32 {
+    let mut cur = scene.node(id).and_then(|n| n.parent);
+    while let Some(p) = cur {
+        let Some(node) = scene.node(p) else { break };
+        if node.kind == WidgetKind::Scroll {
+            let Some(view) = scene.layout(p).map(|l| l.rect).filter(|r| !r.is_empty()) else {
+                break;
+            };
+            let top = view.y + scene.scroll_offset(p).y;
+            return if top.is_finite() {
+                // never past the bottom edge, so the box keeps some height
+                top.clamp(
+                    rect.y,
+                    (rect.y + rect.height - 2.0 * INPUT_BORDER_W).max(rect.y),
+                )
+            } else {
+                rect.y
+            };
+        }
+        cur = node.parent;
+    }
+    rect.y
+}
+
+/// `rect` with its top edge moved down to `top`.
+fn framed(rect: Rect, top: f32) -> Rect {
+    Rect::new(
+        rect.x,
+        top,
+        rect.width,
+        (rect.y + rect.height - top).max(0.0),
+    )
+}
+
 /// Whether the paint still has the layout `ranges` describes.
 fn ranges_valid(prims: &[Primitive], r: &PrimRanges) -> bool {
     prims.len() >= r.caret_end
@@ -961,7 +999,10 @@ fn emit_area(
         text: th.text,
         band,
     };
-    let head = surface(rect, focused, invalid, &th);
+    let frame_top = pinned_top(scene, id, rect);
+    let frame_moved = cache.frame_top != frame_top;
+    cache.frame_top = frame_top;
+    let head = surface(framed(rect, frame_top), focused, invalid, &th);
     let selections = selection_list(st.caret, st.anchor, &st.secondary);
     let value = st.value.as_str();
 
@@ -1165,7 +1206,7 @@ fn emit_area(
             cache.line_out,
             union_bounds(overflows(&rect, &washes), overflows(&rect, &carets)),
         );
-        let restyle = if rect_moved || shifted || out != cache.painted_out {
+        let restyle = if rect_moved || frame_moved || shifted || out != cache.painted_out {
             Restyle::Moved
         } else {
             Restyle::None
@@ -1333,6 +1374,39 @@ pub(crate) fn reemit_moved_areas(
     return_area_ids(runtime, ids);
 }
 
+/// Moves the painted border and fill to the viewport's top edge after a
+/// scroll: two rects rewritten in place, nothing else touched.
+fn repin_surface(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: WidgetId) {
+    let Some(rect) = runtime.with(|rt| rt.borrow().areas.get(id).and_then(|st| st.last_rect))
+    else {
+        return;
+    };
+    let top = pinned_top(scene, id, rect);
+    let (focused, invalid) = scene.a11y(id).map_or((false, false), |a| {
+        let state = StateFlags(a.state);
+        (
+            state.contains(StateFlags::FOCUSED),
+            state.contains(StateFlags::INVALID),
+        )
+    });
+    let th = crate::widgets::theme_for(runtime, id);
+    let head = surface(framed(rect, top), focused, invalid, &th);
+    let prims = &mut scene.paint_mut(id).primitives;
+    // the surface is always the first two primitives (see `ranges_valid`)
+    if prims.len() >= 2 {
+        prims[0] = head[0];
+        prims[1] = head[1];
+    }
+    runtime.with(|rt| {
+        if let Some(st) = rt.borrow_mut().areas.get_mut(id) {
+            st.cache.frame_top = top;
+        }
+    });
+    // a ring or hover stroke was sized from the old frame
+    crate::widgets::reapply_focus_ring(runtime, scene, id);
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+}
+
 /// The per-frame pass for text areas inside a Scroll: scrolling changes only the
 /// scroll offset (no relayout), so an area whose emitted row band no longer
 /// covers what its viewport shows is re-emitted for the new window. An area
@@ -1348,28 +1422,34 @@ pub(crate) fn reemit_scrolled_areas(
         if scene.node(id).is_none() {
             continue;
         }
-        let stale = runtime.with(|rt| {
+        let (stale, repin) = runtime.with(|rt| {
             let rt = rt.borrow();
             let Some(st) = rt.areas.get(id) else {
-                return false;
+                return (false, false);
             };
             let (Some(rect), Some((_, line_h))) = (st.last_rect, st.cache.line_h) else {
-                return false;
+                return (false, false);
             };
+            // the frame follows the viewport even when no row needs emitting
+            let repin = pinned_top(scene, id, rect) != st.cache.frame_top;
             // the placeholder paints no lines and has no band
             if st.value.is_empty() {
-                return false;
+                return (false, repin);
             }
             let visible = scroll_visible_rows(scene, id, rect.y + AREA_PAD, line_h);
-            match (visible, st.cache.band) {
+            let stale = match (visible, st.cache.band) {
                 (None, None) => false,
                 (Some((lo, hi)), Some(b)) => lo < b.0 || hi > b.1,
                 _ => true,
-            }
+            };
+            (stale, repin)
         });
         if stale {
+            // the emission lays the frame at the viewport too
             emit_text_area_paint(runtime, scene, shaper, atlas, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
+        } else if repin {
+            repin_surface(runtime, scene, id);
         }
     }
     return_area_ids(runtime, ids);

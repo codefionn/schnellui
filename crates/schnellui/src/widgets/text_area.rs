@@ -257,6 +257,9 @@ pub(crate) struct AreaCache {
     /// ancestor clips the area: the viewport plus an overscan each side. Lines
     /// outside own no primitives. `None`: every line is emitted.
     band: Option<(usize, usize)>,
+    /// Where the surface's top edge was last painted: the area's own top, or
+    /// the top of a Scroll viewport that has scrolled past it.
+    frame_top: f32,
     /// Visual row at which each line starts (+1 entry); only kept when wrapping.
     rows: Vec<u32>,
     /// Primitives each gutter label owns (no-wrap gutters grow/shrink at the tail).
@@ -3460,6 +3463,65 @@ mod tests {
         let (_, _, n3) = glyph_rows(&scene, id, rect, line_h);
         assert!(n3 <= all * 2);
         assert_eq!(area_value(&runtime, id).lines().count(), lines);
+    }
+
+    /// The frame of an area inside a Scroll stays on the viewport's top edge
+    /// while the text scrolls under it, as a browser textarea's border does.
+    #[test]
+    fn scrolled_area_keeps_its_top_border_on_the_viewport() {
+        let runtime = crate::widgets::Runtime::new();
+        let lines = 200;
+        let (mut scene, _l, mut text, mut atlas, sv) = build_area(
+            &runtime,
+            crate::widgets::Scroll::new()
+                .size(300.0, 200.0)
+                .child(TextArea::new(numbered_source(lines))),
+        );
+        let id = runtime.with(|rt| rt.borrow().areas.keys().next().unwrap());
+        let view = Rect::new(0.0, 0.0, 300.0, 200.0);
+        scene.set_layout(
+            sv,
+            LayoutBox {
+                rect: view,
+                content: view,
+            },
+        );
+        emit_text_area_paint(&runtime, &mut scene, &mut text, &mut atlas, id);
+        let line_h = runtime.with(|rt| rt.borrow().areas.get(id).unwrap().cache.line_h.unwrap().1);
+        let rect = Rect::new(0.0, 0.0, 300.0, lines as f32 * line_h + 2.0 * AREA_PAD);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        emit_text_area_paint(&runtime, &mut scene, &mut text, &mut atlas, id);
+        let frame = |scene: &Scene| match scene.paint(id).unwrap().primitives[..2] {
+            [Primitive::SolidRect { rect: border, .. }, Primitive::SolidRect { rect: fill, .. }] => {
+                (border, fill)
+            }
+            _ => panic!("the paint starts with the border and the fill"),
+        };
+        let (border, _) = frame(&scene);
+        assert_eq!(border.y, 0.0, "unscrolled, the frame is the area's box");
+        assert_eq!(border.height, rect.height);
+
+        for y in [3.0, 50.0 * line_h, 120.0 * line_h + 7.0] {
+            scene.set_scroll_offset(sv, Point { x: 0.0, y });
+            reemit_scrolled_areas(&runtime, &mut scene, &mut text, &mut atlas);
+            let (border, fill) = frame(&scene);
+            assert_eq!(border.y, y, "border top at offset {y}");
+            assert_eq!(fill.y, y + INPUT_BORDER_W);
+            assert_eq!(border.y + border.height, rect.height, "bottom stays put");
+        }
+        scene.set_scroll_offset(sv, Point { x: 0.0, y: 0.0 });
+        reemit_scrolled_areas(&runtime, &mut scene, &mut text, &mut atlas);
+        assert_eq!(
+            frame(&scene).0,
+            rect,
+            "back at the top the frame is the box"
+        );
     }
 
     /// Gutter labels must follow the rows when an edit moves rows between
