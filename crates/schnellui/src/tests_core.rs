@@ -2086,7 +2086,11 @@ fn escape_in_a_docked_region_returns_focus_to_where_it_came_from() {
     .unwrap();
     app.frame();
     let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
-    assert!(app.focus(Some(inside)));
+    assert_eq!(
+        app.focused_widget(),
+        Some(inside),
+        "focus stays in the region"
+    );
     assert_eq!(app.dispatch_escape(), Some(true));
     assert_eq!(app.focused_widget(), Some(outside));
 

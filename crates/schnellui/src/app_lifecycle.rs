@@ -164,6 +164,20 @@ impl App {
             }
             return;
         }
+        // A region rebuilt under the keyboard keeps it: focus that fell out goes to the
+        // region's first control.
+        let root = self.scene.resolve_ref(target).filter(|_| before.inside);
+        if let Some(root) = root {
+            let kept = self
+                .focused_widget()
+                .is_some_and(|id| schnellui::widgets::is_in_subtree(&self.scene, id, root));
+            if !kept {
+                if let Some(first) = self.first_focusable_in(root) {
+                    let ring = self.focus_ring_shown();
+                    let _ = self.focus_after_replacement(first, ring);
+                }
+            }
+        }
         if let Some((opener, ring_visible)) = before.outside {
             self.region_returns.retain(|entry| entry.region != target);
             self.region_returns.push(RegionReturn {
