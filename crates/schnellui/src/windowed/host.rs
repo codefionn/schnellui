@@ -616,8 +616,13 @@ impl WindowedApp {
             if replacement.focus_after.is_some() {
                 focus_after = replacement.focus_after;
             }
+            let region = self.app.region_focus_before(target);
+            let escape_return = replacement.escape_return;
             match self.app.replace_subtree_boxed(target, replacement.view) {
-                Ok(root) => applied.push((target.id(), root, reason)),
+                Ok(root) => {
+                    self.app.note_region_return(target, escape_return, region);
+                    applied.push((target.id(), root, reason));
+                }
                 Err(error) => self.trace_with("subtree_replacement_rejected", |this| {
                     json!({
                         "severity": "warning",
@@ -1221,32 +1226,22 @@ impl WindowedApp {
                     x: point.x,
                     y: point.y,
                 };
-                let Some(target) = schnellui::widgets::hit_test(
+                if schnellui::widgets::hit_test(
                     &self.app.widgets.clone(),
                     self.app.scene(),
                     logical,
-                ) else {
+                )
+                .is_none()
+                {
                     return DebugReply::error(404, "no widget at pointer coordinates");
                 };
-                // A pointer press moves focus first, as a real mouse press
-                // does: text typed next lands in a clicked field, and a
-                // clicked row or button takes focus from the field.
-                // A press in a window activates it first, as the event
-                // handler does, and its plain body keeps the activation focus.
-                let activated = self.app.activate_window_at(Some(target));
-                if !activated || self.app.pointer_focus_target(Some(target)).is_some() {
-                    self.app.pointer_focus(Some(target));
-                }
-                let request = DebugAction {
-                    action: "click".into(),
-                    target: DebugTarget {
-                        id: Some(schnellui::a11y::to_access_id(target).0),
-                        role: None,
-                        name: None,
-                    },
-                    value: None,
-                };
-                self.handle_debug_action(request)
+                // A real click: the press and the release go through the
+                // window's own handlers, so a text field places its caret,
+                // a button clicks once and focus moves as for a mouse.
+                self.debug_mouse_button(winit::event::ElementState::Pressed, DebugButton::Left);
+                self.debug_mouse_button(winit::event::ElementState::Released, DebugButton::Left);
+                self.settle_debug_command();
+                self.debug_pointer_reply()
             }
             DebugCommand::Key(request) => self.handle_debug_key(request),
             DebugCommand::Quit => {

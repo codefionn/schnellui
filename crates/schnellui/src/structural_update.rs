@@ -16,6 +16,7 @@ pub struct SubtreeReplacement {
     pub(crate) view: Box<dyn View>,
     pub(crate) reason: Cow<'static, str>,
     pub(crate) focus_after: Option<ComponentRef>,
+    pub(crate) escape_return: bool,
 }
 
 impl SubtreeReplacement {
@@ -29,6 +30,7 @@ impl SubtreeReplacement {
             view: Box::new(view),
             reason: reason.into(),
             focus_after: None,
+            escape_return: false,
         }
     }
 
@@ -36,6 +38,16 @@ impl SubtreeReplacement {
     /// transient control (for example, an autocomplete choice).
     pub fn with_focus_after(mut self, target: ComponentRef) -> Self {
         self.focus_after = Some(target);
+        self
+    }
+
+    /// Marks the replaced branch as a docked region: a panel beside the content that is no
+    /// dialog and takes no focus trap. The control that had focus when the region appeared is
+    /// remembered, and Escape with focus inside the region moves focus back to it. A later
+    /// replacement of the same target without this mark forgets the control, as when the region
+    /// closes.
+    pub fn with_escape_return(mut self) -> Self {
+        self.escape_return = true;
         self
     }
 }

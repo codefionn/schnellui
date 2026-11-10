@@ -2040,6 +2040,65 @@ fn focus_after_a_replacement_reaches_into_a_wrapper_node() {
     assert_eq!(app.focused_widget(), field);
 }
 
+/// A docked region is no dialog: Escape with focus inside it moves focus back to the control
+/// that had focus when the region appeared, and a region that closed forgets that control.
+#[test]
+fn escape_in_a_docked_region_returns_focus_to_where_it_came_from() {
+    use schnellui::scene::ComponentRef;
+    use widgets::{Button, Column, Row, View};
+
+    let dock = ComponentRef::new();
+    let content = |open: bool| {
+        let mut column = Column::new();
+        if open {
+            column = column.child(Button::new("Inside"));
+        }
+        column
+    };
+    let mut app = App::mount_with_size(
+        Row::new()
+            .child(Button::new("Outside"))
+            .child(content(false).with_ref(dock)),
+        240,
+        160,
+    );
+    app.frame();
+    let outside = app.find_widget(Role::Button, Some("Outside")).unwrap();
+    assert!(app.focus(Some(outside)));
+
+    app.apply_subtree_replacement(
+        SubtreeReplacement::new(dock, content(true), "open").with_escape_return(),
+    )
+    .unwrap();
+    app.frame();
+    let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
+    assert!(app.focus(Some(inside)));
+    // Nothing traps the keyboard: Tab leaves the region and Escape outside it does nothing.
+    assert_eq!(app.dispatch_escape(), Some(true));
+    assert_eq!(app.focused_widget(), Some(outside));
+    assert_eq!(app.dispatch_escape(), None);
+
+    // A rebuild with focus inside keeps the opener.
+    assert!(app.focus(Some(inside)));
+    app.apply_subtree_replacement(
+        SubtreeReplacement::new(dock, content(true), "again").with_escape_return(),
+    )
+    .unwrap();
+    app.frame();
+    let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
+    assert!(app.focus(Some(inside)));
+    assert_eq!(app.dispatch_escape(), Some(true));
+    assert_eq!(app.focused_widget(), Some(outside));
+
+    // A closed region returns nothing.
+    app.apply_subtree_replacement(SubtreeReplacement::new(dock, content(true), "closed"))
+        .unwrap();
+    app.frame();
+    let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
+    assert!(app.focus(Some(inside)));
+    assert_eq!(app.dispatch_escape(), None);
+}
+
 /// A dropdown popup inside a modal dialog takes the pointer over the dialog
 /// content it covers, which comes later in tree order.
 #[test]

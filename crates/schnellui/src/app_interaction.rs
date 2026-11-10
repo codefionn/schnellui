@@ -873,7 +873,14 @@ impl App {
         if schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, None) {
             return Some(true);
         }
-        schnellui::widgets::dispatch_dialog_escape(&self.widgets, &mut self.scene)
+        if let Some(result) =
+            schnellui::widgets::dispatch_dialog_escape(&self.widgets, &mut self.scene)
+        {
+            return Some(result);
+        }
+        // A docked region is no dialog. Escape inside it hands focus back.
+        let (opener, ring) = self.region_escape_target()?;
+        Some(self.focus_after_replacement(opener, ring))
     }
 
     /// Records `opener` as the control a keyboard-opened menu returns focus

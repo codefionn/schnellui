@@ -535,6 +535,9 @@ pub struct App {
     /// focus when it opened. Closing a modal returns focus there. Widget ids
     /// are remapped through the counterpart map on every remount.
     modal_openers: Vec<ModalOpener>,
+    /// The docked regions that returned focus on Escape, each with the control that had focus
+    /// when the region appeared.
+    region_returns: Vec<RegionReturn>,
     /// The dialog panel the last left press landed in, `None` when it landed
     /// outside every dialog. A press on a window's body takes focus off every
     /// control, so this is what tells a closing window that focus was nowhere
@@ -597,6 +600,15 @@ struct ModalOpener {
     panel: WidgetId,
     opener: WidgetId,
     /// Whether the opener wore the keyboard ring when the modal opened.
+    ring_visible: bool,
+}
+
+/// A docked region (see [`SubtreeReplacement::with_escape_return`]) and the control that had
+/// focus when it appeared.
+#[derive(Clone, Copy, Debug)]
+struct RegionReturn {
+    region: scene::ComponentRef,
+    opener: WidgetId,
     ring_visible: bool,
 }
 

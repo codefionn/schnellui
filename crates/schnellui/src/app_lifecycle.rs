@@ -114,7 +114,9 @@ impl App {
     ) -> Result<scene::WidgetId, MissingSubtreeTarget> {
         let focus_after = replacement.focus_after;
         let ring = self.focus_ring_shown();
+        let region = self.region_focus_before(replacement.target);
         let root = self.replace_subtree_boxed(replacement.target, replacement.view)?;
+        self.note_region_return(replacement.target, replacement.escape_return, region);
         if let Some(target) = focus_after {
             if let Some(widget) = self.scene.resolve_ref(target) {
                 let widget = self.first_focusable_in(widget).unwrap_or(widget);
@@ -122,6 +124,51 @@ impl App {
             }
         }
         Ok(root)
+    }
+
+    /// The control focused now, unless it lies inside the branch of `target`: what a docked
+    /// region returns focus to.
+    pub(crate) fn region_focus_before(
+        &self,
+        target: scene::ComponentRef,
+    ) -> Option<(scene::WidgetId, bool)> {
+        let focused = self.focused_widget()?;
+        let root = self.scene.resolve_ref(target)?;
+        (!schnellui::widgets::is_in_subtree(&self.scene, focused, root))
+            .then(|| (focused, self.focus_ring_shown()))
+    }
+
+    /// Records or forgets what a docked region returns focus to after a replacement.
+    pub(crate) fn note_region_return(
+        &mut self,
+        target: scene::ComponentRef,
+        escape_return: bool,
+        opener: Option<(scene::WidgetId, bool)>,
+    ) {
+        if !escape_return {
+            self.region_returns.retain(|entry| entry.region != target);
+            return;
+        }
+        if let Some((opener, ring_visible)) = opener {
+            self.region_returns.retain(|entry| entry.region != target);
+            self.region_returns.push(RegionReturn {
+                region: target,
+                opener,
+                ring_visible,
+            });
+        }
+    }
+
+    /// The control Escape moves focus to, when focus lies in a docked region.
+    pub(crate) fn region_escape_target(&self) -> Option<(scene::WidgetId, bool)> {
+        let focused = self.focused_widget()?;
+        self.region_returns.iter().rev().find_map(|entry| {
+            let root = self.scene.resolve_ref(entry.region)?;
+            (schnellui::widgets::is_in_subtree(&self.scene, focused, root)
+                && entry.opener != focused
+                && app_inherit::takes_focus(&self.scene, entry.opener))
+            .then_some((entry.opener, entry.ring_visible))
+        })
     }
 
     /// `id` when it takes focus, otherwise its first focusable descendant in
