@@ -357,6 +357,19 @@ pub(crate) fn widget_body(tab: &WorkspaceTab, width: f32, height: f32, compact: 
         .child(body)
 }
 
+/// The pane's "+" button.
+const ADD_BUTTON_W: f32 = 36.0;
+/// The "more tabs" button: a down triangle and a count.
+const MORE_BUTTON_W: f32 = 44.0;
+
+/// A tab's width from its label: about 7.5px a character at the tab text size,
+/// plus the tab's padding and the bar's gap. An estimate on the safe side.
+fn estimated_tabs_width(state: &WorkspaceState, tabs: &[u64]) -> f32 {
+    tabs.iter()
+        .map(|id| tab_by_id(state, *id).title.chars().count() as f32 * 7.5 + 28.0)
+        .sum()
+}
+
 pub(crate) fn pane_view(
     runtime: WorkspaceRuntime,
     state: &WorkspaceState,
@@ -371,7 +384,20 @@ pub(crate) fn pane_view(
             reorder_runtime.request_remount();
         }
     });
-    for tab_id in &pane.tabs {
+    // A pane too narrow for every tab shows only its active tab, and the rest
+    // move into a "more" menu, so tabs never spill over the next pane, where a
+    // click would land on the wrong one.
+    let padding = if state.compact { 10.0 } else { 18.0 };
+    let room = width - padding * 2.0 - ADD_BUTTON_W - 8.0;
+    let all_fit = estimated_tabs_width(state, &pane.tabs) <= room;
+    let shown: Vec<_> = if all_fit {
+        pane.tabs.clone()
+    } else if estimated_tabs_width(state, &[pane.active]) <= room - MORE_BUTTON_W {
+        vec![pane.active]
+    } else {
+        Vec::new()
+    };
+    for tab_id in &shown {
         let tab = tab_by_id(state, *tab_id);
         let (id, pane_id, before_id) = (tab.id, pane.id, tab.id);
         let label = tab.title.clone();
@@ -418,20 +444,56 @@ pub(crate) fn pane_view(
             add_widget_to_pane(&add_runtime, widget, Some(pane_id));
         }));
     }
-    tabs = tabs.trailing(
+    let hidden: Vec<_> = pane
+        .tabs
+        .iter()
+        .copied()
+        .filter(|id| !shown.contains(id))
+        .collect();
+    let mut actions = Row::new().gap(2.0).align(Align::Center);
+    if !hidden.is_empty() {
+        let mut more_menu = ContextMenu::new();
+        for tab_id in &hidden {
+            let tab = tab_by_id(state, *tab_id);
+            let (id, pane_id, select_runtime) = (tab.id, pane.id, runtime.clone());
+            more_menu =
+                more_menu.item(ContextMenuItem::new(tab.title.clone()).on_select(move || {
+                    select_runtime.update(|store| {
+                        if let Some(pane) = store.panes.iter_mut().find(|pane| pane.id == pane_id) {
+                            pane.active = id;
+                        }
+                    });
+                    select_runtime.request_remount();
+                }));
+        }
+        actions = actions.child(
+            Button::new(format!(
+                "{} more tabs in the {} pane",
+                hidden.len(),
+                active.title
+            ))
+            .appearance(ButtonAppearance::Ghost)
+            .display(format!("\u{25be}{}", hidden.len()))
+            .width(MORE_BUTTON_W)
+            .height(36.0)
+            .tooltip("Show the other tabs")
+            .menu(more_menu),
+        );
+    }
+    actions = actions.child(
         Button::new(format!("Add a widget to the {} pane", active.title))
             .appearance(ButtonAppearance::Ghost)
             .display("+")
             .text_size(20.0)
-            .width(36.0)
+            .width(ADD_BUTTON_W)
             .height(36.0)
             .tooltip("Add a widget to this pane")
             .menu(add_menu),
     );
+    tabs = tabs.trailing(actions);
 
     let compact = state.compact;
     let show_tab_bar = !state.hide_single_tab_bars || pane.tabs.len() != 1;
-    let padding = if compact { 10.0 } else { 18.0 };
     let inner_width = width - padding * 2.0;
     let tab_row = Row::new()
         .width(inner_width)
