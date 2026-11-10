@@ -18,7 +18,9 @@ pub(crate) const PANEL_ALT: Color = Color::rgb(0xe5, 0xdf, 0xd3);
 pub(crate) const ORANGE: Color = Color::rgb(0xe6, 0x63, 0x2e);
 pub(crate) const CYAN: Color = Color::rgb(0x13, 0x91, 0x9d);
 pub(crate) const LIME: Color = Color::rgb(0x8d, 0xa8, 0x29);
-pub(crate) const MUTED: Color = Color::rgb(0x6c, 0x69, 0x62);
+pub(crate) const MUTED: Color = Color::rgb(0x57, 0x54, 0x4d);
+/// Keyboard focus ring: 4.6:1 on the page, 5.2:1 on panels.
+pub(crate) const FOCUS: Color = Color::rgb(0xb8, 0x46, 0x1c);
 
 pub(crate) const WORKSPACE_THEME: Theme = Theme {
     text: INK,
@@ -27,19 +29,32 @@ pub(crate) const WORKSPACE_THEME: Theme = Theme {
     surface_muted: PANEL_ALT,
     separator: Color::rgb(0xc9, 0xc0, 0xb2),
     outline: Color::rgb(0x78, 0x73, 0x69),
-    accent: INK,
+    // Switch tracks and tab underlines: on reads as orange, never as a
+    // filled black square beside an off switch.
+    accent: FOCUS,
     on_accent: PAPER,
     selection: Color::rgb(0xff, 0xd7, 0xbd),
     interactions: schnellui::widgets::InteractionStates {
-        hover: schnellui::widgets::InteractionStyle::all(
-            Color::rgba(0x13, 0x91, 0x9d, 0x1c),
-            INK,
-            CYAN,
-        ),
-        focus: schnellui::widgets::InteractionStyle::border(CYAN),
-        active: schnellui::widgets::InteractionStyle::background(Color::rgb(0xff, 0xd7, 0xbd)),
+        hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x18, 0x1b, 0x1f, 0x14,
+        )),
+        focus: schnellui::widgets::InteractionStyle::border(FOCUS),
+        active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x18, 0x1b, 0x1f, 0x28,
+        )),
     },
-    component_interactions: schnellui::widgets::ComponentInteractions::NONE,
+    component_interactions: schnellui::widgets::ComponentInteractions {
+        button: Some(schnellui::widgets::InteractionStates {
+            hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x18, 0x1b, 0x1f, 0x22,
+            )),
+            focus: schnellui::widgets::InteractionStyle::border(FOCUS),
+            active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x18, 0x1b, 0x1f, 0x40,
+            )),
+        }),
+        ..schnellui::widgets::ComponentInteractions::NONE
+    },
     text_selection: Color::rgb(0xff, 0xb8, 0x8f),
     disabled: Color::rgb(0x9e, 0x98, 0x8e),
     positive: LIME,
@@ -52,6 +67,12 @@ pub(crate) const WORKSPACE_THEME: Theme = Theme {
         frame: 1.0,
         shadow: 2.0,
     },
+};
+
+/// Secondary text: captions, units and metadata (5.5:1 on the sidebar).
+pub(crate) const MUTED_THEME: Theme = Theme {
+    text: MUTED,
+    ..WORKSPACE_THEME
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,17 +94,6 @@ impl WidgetType {
             Self::Weather => "Weather",
             Self::Agent => "Agent",
             Self::Terminal => "Terminal",
-        }
-    }
-
-    pub(crate) fn marker(self) -> &'static str {
-        match self {
-            Self::Pulse => "01",
-            Self::Focus => "02",
-            Self::Notes => "03",
-            Self::Weather => "04",
-            Self::Agent => "AG",
-            Self::Terminal => "TR",
         }
     }
 }

@@ -11,7 +11,7 @@ use clap::{Parser, ValueEnum};
 use schnellui::a11y::{self, A11yNodeDump, A11yTreeDump};
 use schnellui::charts::{BarChart, LineChart, Sparkline, SERIES};
 use schnellui::testing::SnapshotConfig;
-use schnellui::widgets::{Column, Pad, Stack, Text, View};
+use schnellui::widgets::{Align, Column, Justify, Pad, Row, Stack, Text, View};
 use schnellui::App;
 use strum::IntoEnumIterator;
 
@@ -29,7 +29,7 @@ fn stage(content: impl View) -> impl View {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, strum::EnumIter)]
 #[clap(rename_all = "snake_case")]
 enum Scenario {
-    /// a basic bar chart over `[3,7,2,9,4]` (SOUL §8.1).
+    /// a bar chart card with a value axis, month labels and hover tooltips (SOUL §8.1).
     BarBasic,
     /// a line chart over a dozen points, with per-point markers.
     LineBasic,
@@ -61,56 +61,177 @@ impl Scenario {
 const TREND: [f32; 12] = [
     4.0, 6.0, 5.0, 8.0, 7.0, 9.0, 6.0, 10.0, 8.0, 11.0, 9.0, 12.0,
 ];
+const MONTHS: [&str; 6] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+const WEEKS: [&str; 12] = [
+    "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10", "W11", "W12",
+];
+const REVENUE: [f32; 6] = [3.0, 7.0, 2.0, 9.0, 4.0, 6.0];
+const LOAD: [f32; 8] = [2.0, 4.0, 3.0, 6.0, 5.0, 7.0, 4.0, 8.0];
+const NET: [f32; 7] = [5.0, -3.0, 8.0, -6.0, 2.0, -1.0, 4.0];
 
-fn bar_basic_view() -> impl View {
-    Column::new()
-        .child(Text::new("Bar chart").size(18.0))
-        .child(BarChart::new([3.0, 7.0, 2.0, 9.0, 4.0]).title("Bar chart"))
-        .gap(8.0)
+/// Width of the value-label gutter every axis chart shares, so all plots start at the
+/// same x and end at the same x.
+const GUTTER: f32 = 36.0;
+/// Dashboard chart height: tall enough for four ticks, short enough for three cards.
+const CHART_H: f32 = 120.0;
+/// A chart shown on its own grows with the window, within these bounds.
+const CHART_H_MIN: f32 = 120.0;
+const CHART_H_MAX: f32 = 520.0;
+/// Room the card header (title, subtitle) and its gap take above the chart.
+const CARD_HEADER_H: f32 = 56.0;
+const SPARK_H: f32 = 44.0;
+/// Vertical rhythm: 8px inside a card, 24px between cards.
+const CARD_GAP: f32 = 8.0;
+const SECTION_GAP: f32 = 24.0;
+
+/// The headline for a card: the latest value with its prefix and unit, such as `$6k`.
+fn headline(value: f32, prefix: &str, unit: &str) -> String {
+    let sign = if value < 0.0 { "\u{2212}" } else { "" };
+    format!("{sign}{prefix}{}{unit}", value.abs())
 }
 
-fn line_basic_view() -> impl View {
+/// A chart card: the title and units on the left; on the right the headline value
+/// and what it is (`Jun`, `Week 12`, `Now`); then the chart.
+fn card(
+    title: &'static str,
+    units: &'static str,
+    value: String,
+    what: &'static str,
+    chart: impl View,
+) -> impl View {
     Column::new()
-        .child(Text::new("Line chart").size(18.0))
-        .child(LineChart::new(TREND).title("Line chart").markers(true))
-        .gap(8.0)
-}
-
-fn sparkline_view() -> impl View {
-    Column::new()
-        .child(Text::new("Sparkline").size(18.0))
-        .child(Sparkline::new([1.0, 3.0, 2.0, 5.0, 4.0, 6.0, 3.0, 7.0]))
-        .gap(8.0)
-}
-
-fn negatives_view() -> impl View {
-    Column::new()
-        .child(Text::new("Net change").size(18.0))
-        .child(BarChart::new([5.0, -3.0, 8.0, -6.0, 2.0, -1.0, 4.0]).title("Net change"))
-        .gap(8.0)
-}
-
-/// A dashboard composing three charts, each entity keeping its fixed `SERIES` slot
-/// (SOUL §6.1 — assign color by entity in fixed order, never cycled).
-fn dashboard_view() -> impl View {
-    Column::new()
-        .child(Text::new("Dashboard").size(20.0))
-        .child(Text::new("Revenue"))
+        .gap(CARD_GAP)
+        .align(Align::Stretch)
         .child(
-            BarChart::new([3.0, 7.0, 2.0, 9.0, 4.0, 6.0])
-                .title("Revenue")
-                .color(SERIES[0]),
+            Row::new()
+                .justify(Justify::SpaceBetween)
+                .align(Align::Center)
+                .child(
+                    Column::new()
+                        .child(Text::new(title).size(16.0).bold())
+                        .child(Text::new(units).size(12.0)),
+                )
+                .child(
+                    Column::new()
+                        .align(Align::End)
+                        .child(Text::new(value).size(20.0).bold())
+                        .child(Text::new(what).size(12.0)),
+                ),
         )
-        .child(Text::new("Trend"))
-        .child(
-            LineChart::new(TREND)
-                .title("Trend")
-                .color(SERIES[1])
-                .markers(true),
-        )
-        .child(Text::new("Load"))
-        .child(Sparkline::new([2.0, 4.0, 3.0, 6.0, 5.0, 7.0, 4.0, 8.0]).color(SERIES[2]))
-        .gap(6.0)
+        .child(chart)
+}
+
+fn bar_chart(values: &[f32], w: f32, h: f32, title: &'static str) -> BarChart {
+    BarChart::new(values.to_vec())
+        .title(title)
+        .size(w, h)
+        .axes(true)
+        .gutter(GUTTER)
+        .tooltips(true)
+}
+
+fn line_chart(values: &[f32], w: f32, h: f32, title: &'static str) -> LineChart {
+    LineChart::new(values.to_vec())
+        .title(title)
+        .size(w, h)
+        .axes(true)
+        .gutter(GUTTER)
+        .markers(true)
+        .tooltips(true)
+}
+
+fn revenue_card(w: f32, h: f32) -> impl View {
+    card(
+        "Revenue",
+        "Monthly, $ thousands",
+        headline(REVENUE[5], "$", "k"),
+        "in Jun",
+        bar_chart(&REVENUE, w, h, "Revenue")
+            .color(SERIES[0])
+            .labels(MONTHS)
+            .prefix("$")
+            .unit("k"),
+    )
+}
+
+fn users_card(w: f32, h: f32) -> impl View {
+    card(
+        "Active users",
+        "Weekly, thousands",
+        headline(TREND[11], "", "k"),
+        "in W12",
+        line_chart(&TREND, w, h, "Active users")
+            .color(SERIES[1])
+            .labels(WEEKS)
+            .unit("k users"),
+    )
+}
+
+fn bar_basic_view(w: f32, h: f32) -> impl View {
+    revenue_card(w, h)
+}
+
+fn line_basic_view(w: f32, h: f32) -> impl View {
+    users_card(w, h)
+}
+
+fn sparkline_view(w: f32) -> impl View {
+    sparkline_card(w)
+}
+
+/// The sparkline card. A sparkline has no axis, so the low and high of the window sit
+/// under the line; together with the baseline they give the trend a scale.
+fn sparkline_card(w: f32) -> impl View {
+    let low = LOAD.iter().copied().fold(f32::INFINITY, f32::min);
+    let high = LOAD.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    card(
+        "Load",
+        "CPU, last 8 samples",
+        headline(LOAD[7], "", "%"),
+        "now",
+        Column::new()
+            .gap(4.0)
+            .align(Align::Stretch)
+            .child(
+                Sparkline::new(LOAD)
+                    .size(w, SPARK_H)
+                    .color(SERIES[2])
+                    .baseline(true)
+                    .end_dot(true),
+            )
+            .child(
+                Row::new()
+                    .justify(Justify::SpaceBetween)
+                    .child(Text::new(format!("Low {low}%")).size(12.0))
+                    .child(Text::new(format!("High {high}%")).size(12.0)),
+            ),
+    )
+}
+
+fn negatives_view(w: f32, h: f32) -> impl View {
+    let total: f32 = NET.iter().sum();
+    card(
+        "Net change",
+        "Per region, $ thousands",
+        headline(total, "$", "k"),
+        "all regions",
+        bar_chart(&NET, w, h, "Net change")
+            .labels(["N", "NE", "E", "SE", "S", "SW", "W"])
+            .prefix("$")
+            .unit("k"),
+    )
+}
+
+/// A dashboard composing three chart cards, each entity keeping its fixed `SERIES`
+/// slot (SOUL §6.1 — assign color by entity in fixed order, never cycled).
+fn dashboard_view(w: f32) -> impl View {
+    Column::new()
+        .gap(SECTION_GAP)
+        .align(Align::Stretch)
+        .child(Text::new("Dashboard").size(22.0).bold())
+        .child(revenue_card(w, CHART_H))
+        .child(users_card(w, CHART_H))
+        .child(sparkline_card(w))
 }
 
 /// The screenshotter CLI contract (SOUL §7.1).
@@ -128,8 +249,8 @@ struct Cli {
     out: Option<String>,
     #[arg(long, default_value_t = 420)]
     width: u32,
-    // Tall enough for the three-chart dashboard plus the shared outer gutter.
-    #[arg(long, default_value_t = 480)]
+    // Tall enough for the three-card dashboard plus the shared outer gutter.
+    #[arg(long, default_value_t = 600)]
     height: u32,
     /// logical→physical scale (SOUL §7.1): shaping + painting run at `size*scale` and
     /// the PNG is `width*scale × height*scale` physical pixels.
@@ -172,21 +293,35 @@ struct Cli {
 /// arm mounts its own concrete `impl View` (the `View` trait is object-consuming, so a
 /// `Box<dyn View>` is not itself a `View` — mount the concrete type per arm).
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App {
+    // Charts fill the content column: the window minus the padding on both sides.
+    let content_w = (width as f32 - 2.0 * WINDOW_PADDING).max(GUTTER + 40.0);
+    // A chart on its own fills the height the card header leaves.
+    let chart_h =
+        (height as f32 - 2.0 * WINDOW_PADDING - CARD_HEADER_H).clamp(CHART_H_MIN, CHART_H_MAX);
     match scenario {
-        Scenario::BarBasic => {
-            App::mount_with_size_scaled(stage(bar_basic_view()), width, height, scale)
-        }
-        Scenario::LineBasic => {
-            App::mount_with_size_scaled(stage(line_basic_view()), width, height, scale)
-        }
+        Scenario::BarBasic => App::mount_with_size_scaled(
+            stage(bar_basic_view(content_w, chart_h)),
+            width,
+            height,
+            scale,
+        ),
+        Scenario::LineBasic => App::mount_with_size_scaled(
+            stage(line_basic_view(content_w, chart_h)),
+            width,
+            height,
+            scale,
+        ),
         Scenario::Sparkline => {
-            App::mount_with_size_scaled(stage(sparkline_view()), width, height, scale)
+            App::mount_with_size_scaled(stage(sparkline_view(content_w)), width, height, scale)
         }
-        Scenario::Negatives => {
-            App::mount_with_size_scaled(stage(negatives_view()), width, height, scale)
-        }
+        Scenario::Negatives => App::mount_with_size_scaled(
+            stage(negatives_view(content_w, chart_h)),
+            width,
+            height,
+            scale,
+        ),
         Scenario::Dashboard => {
-            App::mount_with_size_scaled(stage(dashboard_view()), width, height, scale)
+            App::mount_with_size_scaled(stage(dashboard_view(content_w)), width, height, scale)
         }
     }
 }
@@ -230,9 +365,9 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     let tree = a11y::dump_tree(app.scene());
     let charts = charts_in(&tree);
     match scenario {
-        Scenario::BarBasic => assert_chart_value(&charts, 0, "n=5 min=2 max=9 last=4"),
+        Scenario::BarBasic => assert_chart_value(&charts, 0, "n=6 min=2 max=9 last=6"),
         Scenario::LineBasic => assert_chart_value(&charts, 0, "n=12 min=4 max=12 last=12"),
-        Scenario::Sparkline => assert_chart_value(&charts, 0, "n=8 min=1 max=7 last=7"),
+        Scenario::Sparkline => assert_chart_value(&charts, 0, "n=8 min=2 max=8 last=8"),
         Scenario::Negatives => assert_chart_value(&charts, 0, "n=7 min=-6 max=8 last=4"),
         Scenario::Dashboard => {
             if charts.len() != 3 {
@@ -320,7 +455,8 @@ fn main() -> ExitCode {
     // Opt-in windowed mode (SOUL §8): mount the chosen scenario and run the event loop
     // instead of writing a PNG. Headless PNG output stays the default.
     if cli.windowed || cli.headless_windowed {
-        let app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         return match app.run_windowed("charts") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

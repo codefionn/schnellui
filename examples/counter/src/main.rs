@@ -251,7 +251,8 @@ fn main() -> ExitCode {
     // Opt-in windowed mode (SOUL §8): mount the chosen scenario and run the event
     // loop instead of writing a PNG. The increment button works with real clicks.
     if cli.windowed || cli.headless_windowed {
-        let app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         return match app.run_windowed("counter") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

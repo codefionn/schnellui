@@ -45,14 +45,9 @@ pub(crate) fn workspace_view(
         metrics.canvas_height,
     );
 
-    let status = if let Some(tab_id) = state.dragging {
-        format!(
-            "DRAGGING {}",
-            tab_by_id(&state, tab_id).title.to_uppercase()
-        )
-    } else {
-        "CANVAS READY".to_string()
-    };
+    let dragging = state
+        .dragging
+        .map(|tab_id| format!("Moving {}", tab_by_id(&state, tab_id).title));
 
     let main = Column::new()
         .width(metrics.canvas_width)
@@ -65,24 +60,26 @@ pub(crate) fn workspace_view(
                 .child(
                     Column::new()
                         .gap(2.0)
-                        .child(Text::new("MY DAY, MY WAY").size(34.0))
-                        .child(Text::new("A modular home screen that moves with you.").size(13.0)),
+                        .child(Text::new("My day").size(30.0).bold())
+                        .child(caption(
+                            format!("{} widgets in {} panes", state.tabs.len(), state.panes.len()),
+                            13.0,
+                        )),
                 )
-                .child(Badge::new(status)),
+                .child(match dragging {
+                    Some(status) => Box::new(Badge::new(status)) as Box<dyn View>,
+                    None => Box::new(Spacer::new()),
+                }),
         )
         .child(panes)
         .child(
             Row::new()
                 .width(metrics.canvas_width)
                 .justify(Justify::SpaceBetween)
-                .child(
-                    Text::new("PANE EDGE TO SPLIT  ·  CENTER TO JOIN  ·  GUTTER TO INSERT")
-                        .size(10.0),
-                )
-                .child(
-                    Text::new(format!("{} PANES  /  EDGE DOCKING ON", state.panes.len()))
-                        .size(10.0),
-                ),
+                .child(caption(
+                    "Drag a tab onto a pane edge to split it, onto its centre to join, or between panes to insert.",
+                    12.0,
+                )),
         );
 
     Column::new().fill().child(
@@ -208,7 +205,7 @@ pub(crate) fn scenario_app(
         Scenario::RightPreview => {
             drag(
                 &mut app,
-                "02 Focus",
+                "Focus",
                 Role::Group,
                 "Dock Notes",
                 0.94,
@@ -219,7 +216,7 @@ pub(crate) fn scenario_app(
         Scenario::BottomPreview => {
             drag(
                 &mut app,
-                "02 Focus",
+                "Focus",
                 Role::Group,
                 "Dock Notes",
                 0.5,
@@ -228,7 +225,7 @@ pub(crate) fn scenario_app(
             )?;
         }
         Scenario::TabMoved => {
-            drag(&mut app, "01 Pulse", Role::Tab, "03 Notes", 0.5, 0.5, true)?;
+            drag(&mut app, "Pulse", Role::Tab, "Notes", 0.5, 0.5, true)?;
             if runtime.take_remount() {
                 app = mount_workspace(runtime.clone(), width, height, scale);
                 app.frame();
@@ -240,7 +237,7 @@ pub(crate) fn scenario_app(
             } else {
                 (0.5, 0.94)
             };
-            drag(&mut app, "02 Focus", Role::Group, "Dock Notes", x, y, true)?;
+            drag(&mut app, "Focus", Role::Group, "Dock Notes", x, y, true)?;
             if runtime.take_remount() {
                 app = mount_workspace(runtime.clone(), width, height, scale);
                 app.frame();
@@ -255,7 +252,7 @@ pub(crate) fn run_assertions(
     scenario: Scenario,
     app: &App,
 ) -> Result<(), String> {
-    for tab in ["01 Pulse", "02 Focus", "03 Notes", "04 Weather"] {
+    for tab in ["Pulse", "Focus", "Notes", "Weather"] {
         if app.find_widget(Role::Tab, Some(tab)).is_none() {
             return Err(format!("missing accessible tab {tab:?}"));
         }
@@ -424,7 +421,8 @@ pub fn main() -> ExitCode {
     if cli.windowed || cli.headless_windowed {
         let runtime = WorkspaceRuntime::default();
         let (width, height, scale) = (cli.width, cli.height, cli.scale);
-        let app = mount_workspace(runtime.clone(), width, height, scale);
+        let mut app = mount_workspace(runtime.clone(), width, height, scale);
+        app.set_escape_exits(true);
         let mut mounted_size = (width, height);
         let remount_runtime = runtime.clone();
         return match app.run_windowed_with_viewport(

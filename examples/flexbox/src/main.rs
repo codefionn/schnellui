@@ -406,7 +406,8 @@ fn main() -> ExitCode {
     };
     // Opt-in windowed mode (SOUL §8): resize the window to watch the layout adapt.
     if cli.windowed || cli.headless_windowed {
-        let app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         return match app.run_windowed("flexbox") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

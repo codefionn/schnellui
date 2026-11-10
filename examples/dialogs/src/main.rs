@@ -13,13 +13,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use schnellui::a11y;
-use schnellui::layout::Justify;
 use schnellui::scene::{Color, Scene, WidgetId, WidgetKind};
 use schnellui::testing::find_by_role_name;
 use schnellui::view;
 use schnellui::widgets::{
-    Align, Badge, Button, Column, Dialog, DialogPosition, Divider, Image, Pad, Row, Shape, Spacer,
-    Stack, Text, Theme, View, WrapMode,
+    Align, Badge, Button, ButtonAppearance, Column, Dialog, DialogPosition, Divider, List,
+    ListItem, Pad, Panel, Row, Shape, Spacer, Stack, Text, Theme, View, WrapMode,
 };
 use schnellui::{App, Context, State};
 use strum::IntoEnumIterator;
@@ -36,17 +35,33 @@ const EDITORIAL_THEME: Theme = Theme {
     on_accent: Color::rgb(0xff, 0xfc, 0xf2),
     selection: Color::rgb(0xf1, 0xd8, 0xc9),
     interactions: schnellui::widgets::InteractionStates {
-        hover: schnellui::widgets::InteractionStyle::all(
-            Color::rgba(0xc6, 0x49, 0x31, 0x1c),
-            Color::rgb(0x18, 0x22, 0x1c),
-            Color::rgb(0xc6, 0x49, 0x31),
-        ),
-        focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0xc6, 0x49, 0x31)),
-        active: schnellui::widgets::InteractionStyle::background(Color::rgb(0xf1, 0xd8, 0xc9)),
+        // Hover lays a faint ink wash and press a stronger one; neither
+        // recolours a label, so hover never reads as pressed.
+        hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x18, 0x22, 0x1c, 0x16,
+        )),
+        // An ink ring stands out from the vermilion buttons it circles.
+        focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0x18, 0x22, 0x1c)),
+        active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x18, 0x22, 0x1c, 0x2c,
+        )),
     },
-    component_interactions: schnellui::widgets::ComponentInteractions::NONE,
+    component_interactions: schnellui::widgets::ComponentInteractions {
+        // A filled button needs a deeper wash before its change reads.
+        button: Some(schnellui::widgets::InteractionStates {
+            hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x18, 0x22, 0x1c, 0x30,
+            )),
+            focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0x18, 0x22, 0x1c)),
+            active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x18, 0x22, 0x1c, 0x55,
+            )),
+        }),
+        ..schnellui::widgets::ComponentInteractions::NONE
+    },
     text_selection: Color::rgb(0xed, 0xb8, 0x9e),
-    disabled: Color::rgb(0x8e, 0x99, 0x91),
+    // Light enough that a disabled label in the muted ink stays legible.
+    disabled: Color::rgb(0xd5, 0xdb, 0xd1),
     positive: Color::rgb(0x2d, 0x74, 0x4e),
     attention: Color::rgb(0xd7, 0x9a, 0x2d),
     media: Color::rgb(0xb8, 0xc2, 0xba),
@@ -276,12 +291,12 @@ fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
                         Stack::new()
                             .size(canvas_width, canvas_height)
                 .child(
-                    Image::new("editorial workspace")
-                        .alt("muted workspace canvas")
-                        .size(canvas_width, canvas_height),
-                )
-                .child(
-                    Pad::all(24.0).child(
+                    Panel::new()
+                        .width(canvas_width)
+                        .height(canvas_height)
+                        .padding(24.0)
+                        .surface(EDITORIAL_THEME.surface_muted)
+                        .child(
                         Column::new()
                             .gap(16.0)
                             .child(
@@ -291,7 +306,10 @@ fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
                                     .child(Text::new("Edition 04").size(28.0))
                                     .child(Badge::new("IN REVIEW"))
                                     .child(Spacer::new())
-                                    .child(Button::new("Share proof")),
+                                    .child(
+                                        Button::new("Share proof")
+                                            .appearance(ButtonAppearance::Outline),
+                                    ),
                             )
                             .child(Divider::new())
                             .child(
@@ -338,20 +356,22 @@ fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
 
 fn decorated_modal(width: u32, height: u32) -> impl View {
     workspace(
-        view! {
-            dialog(title = "Publish edition", width = 440.0, gap = 14.0) {
-                badge { "REVIEW REQUIRED" }
-                text(wrap = word) {
-                    "Three margin notes remain unresolved. Publish this edition anyway?"
-                }
-                divider
-                row(gap = 10.0) {
-                    spacer
-                    button { "Keep editing" }
-                    button { "Publish changes" }
-                }
-            }
-        },
+        Dialog::new("Publish edition")
+            .width(440.0)
+            .gap(14.0)
+            .child(Badge::new("REVIEW REQUIRED"))
+            .child(
+                Text::new("Three margin notes remain unresolved. Publish this edition anyway?")
+                    .wrap(WrapMode::Word),
+            )
+            .child(Divider::new())
+            .child(
+                Row::new()
+                    .gap(10.0)
+                    .child(Spacer::new())
+                    .child(Button::new("Keep editing").appearance(ButtonAppearance::Outline))
+                    .child(Button::new("Publish changes")),
+            ),
         width,
         height,
     )
@@ -359,26 +379,33 @@ fn decorated_modal(width: u32, height: u32) -> impl View {
 
 fn undecorated_modal(width: u32, height: u32) -> impl View {
     workspace(
-        view! {
-            dialog(
-                title = "Quick command",
-                undecorated,
-                position = top,
-                width = 500.0,
-                padding = 18.0,
-                gap = 10.0
-            ) {
-                text(size = 20.0) { "Jump to a publishing task" }
-                divider
-                button { "Review unresolved notes" }
-                button { "Export press-ready PDF" }
-                button { "Invite another editor" }
-            }
-        },
+        Dialog::new("Quick command")
+            .undecorated()
+            .width(500.0)
+            .padding(18.0)
+            .gap(12.0)
+            .child(Text::new("Jump to a publishing task").size(20.0).bold())
+            .child(Divider::new())
+            .child(
+                Column::new()
+                    .width(COMMAND_ROW_WIDTH)
+                    .align(Align::Stretch)
+                    .child(
+                        List::new()
+                            .gap(2.0)
+                            .child(ListItem::new("Review unresolved notes").selected(true))
+                            .child(ListItem::new("Export press-ready PDF"))
+                            .child(ListItem::new("Invite another editor")),
+                    ),
+            )
+            .child(Text::new("↑ ↓ to move · Enter to run · Esc to close").size(12.0)),
         width,
         height,
     )
 }
+
+/// The palette's 500px width less its 18px padding on each side.
+const COMMAND_ROW_WIDTH: f32 = 464.0;
 
 fn modeless_inspector(width: u32, height: u32) -> impl View {
     workspace(
@@ -397,7 +424,10 @@ fn modeless_inspector(width: u32, height: u32) -> impl View {
                 text { "Bleed: 3 mm" }
                 text { "Profile: FOGRA39" }
                 divider
-                button { "Open preflight" }
+                row {
+                    flex(grow = 1.0)
+                    button { "Open preflight" }
+                }
             }
         },
         width,
@@ -419,7 +449,10 @@ fn scoped_non_fixed(width: u32, height: u32) -> impl View {
                 text(wrap = word) {
                     "This scrim ends at the workspace edge; the page header stays outside it."
                 }
-                button { "Acknowledge" }
+                row {
+                    flex(grow = 1.0)
+                    button { "Acknowledge" }
+                }
             }
         },
         width,
@@ -429,25 +462,27 @@ fn scoped_non_fixed(width: u32, height: u32) -> impl View {
 
 fn persistent_alert(width: u32, height: u32) -> impl View {
     workspace(
-        view! {
-            dialog(
-                title = "Unsaved proof",
-                alert,
-                persistent,
-                position = center,
-                width = 430.0
-            ) {
-                badge { "ACTION NEEDED" }
-                text(wrap = word) {
-                    "The press profile changed after your last export. Choose how to continue."
-                }
-                divider
-                row(gap = 10.0) {
-                    button { "Discard export" }
-                    button { "Rebuild proof" }
-                }
-            }
-        },
+        Dialog::new("Unsaved proof")
+            .alert()
+            .persistent()
+            .width(430.0)
+            .child(Badge::new("ACTION NEEDED"))
+            .child(
+                Text::new(
+                    "The press profile changed after your last export. Choose how to continue.",
+                )
+                .wrap(WrapMode::Word),
+            )
+            .child(Divider::new())
+            .child(
+                Row::new()
+                    .gap(10.0)
+                    .child(Spacer::new())
+                    // Primary on the right, as in every dialog here; the
+                    // destructive choice is the quieter outline.
+                    .child(Button::new("Discard export").appearance(ButtonAppearance::Outline))
+                    .child(Button::new("Rebuild proof")),
+            ),
         width,
         height,
     )
@@ -479,6 +514,7 @@ fn stacked_dialogs(runtime: DialogRuntime, width: u32, height: u32, modal_open: 
                         .child(Spacer::new())
                         .child(
                             Button::new("Return")
+                                .appearance(ButtonAppearance::Outline)
                                 .on_click(move || close_stacked_modal(&return_runtime)),
                         )
                         .child(
@@ -498,19 +534,25 @@ fn stacked_dialogs(runtime: DialogRuntime, width: u32, height: u32, modal_open: 
             .width(280.0)
             .padding(18.0)
             .child(Badge::new("MODELESS PEER"))
-            .child(Text::new(
-                "This inspector can coexist beside the workspace.",
-            ))
+            .child(
+                Text::new("This inspector can coexist beside the workspace.").wrap(WrapMode::Word),
+            )
             .child(Button::new("Reopen approval").on_click(move || open_stacked_modal(&runtime))),
     );
 
     workspace(dialogs, width, height)
 }
 
+/// A header button that opens one desktop window. It rests disabled while
+/// that window is open, so the header also shows which windows are up.
+fn launcher(label: &'static str, open: bool, on_click: impl FnMut() + 'static) -> Button {
+    Button::new(label)
+        .appearance(ButtonAppearance::Outline)
+        .disabled(open)
+        .on_click(on_click)
+}
+
 fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
-    let open_issues_runtime = runtime.clone();
-    let open_proof_runtime = runtime.clone();
-    let open_log_runtime = runtime.clone();
     let desktop = Pad::all(24.0).child(
         Column::new()
             // The desktop derives both axes from the live viewport. Unlike a
@@ -524,7 +566,28 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                     .child(Badge::new("LINDEN DESK / 04"))
                     .child(Text::new("Edition control room").size(22.0))
                     .child(Spacer::new())
-                    .child(Badge::new("PRESS LINK: ONLINE")),
+                    // The launchers live in the header, clear of the windows.
+                    // A launcher rests disabled while its window is open.
+                    .child(launcher(
+                        "Open issue board",
+                        windows & DESKTOP_ISSUES != 0,
+                        {
+                            let runtime = runtime.clone();
+                            move || open_issues(&runtime)
+                        },
+                    ))
+                    .child(launcher(
+                        "Open proof preview",
+                        windows & DESKTOP_PROOF != 0,
+                        {
+                            let runtime = runtime.clone();
+                            move || open_proof(&runtime)
+                        },
+                    ))
+                    .child(launcher("Open press log", windows & DESKTOP_LOG != 0, {
+                        let runtime = runtime.clone();
+                        move || open_log(&runtime)
+                    })),
             )
             .child(
                 Pad::all(18.0).child(
@@ -536,7 +599,7 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                                 .gap(6.0)
                                 .child(Badge::new("18 / 24"))
                                 .child(Text::new("Pages ready").size(17.0))
-                                .child(Text::new("Final signatures pending").size(12.0)),
+                                .child(Text::new("Final signatures pending").size(13.0)),
                         )
                         .child(
                             Column::new()
@@ -544,33 +607,15 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                                 .gap(6.0)
                                 .child(Badge::new("3 NOTES"))
                                 .child(Text::new("Open issues").size(17.0))
-                                .child(Text::new("Two assigned to proofing").size(12.0)),
+                                .child(Text::new("Two assigned to proofing").size(13.0)),
                         ),
                 ),
             )
-            .child(Spacer::new())
-            .child(
-                Row::new()
-                    .justify(Justify::Center)
-                    .align(Align::Center)
-                    .gap(8.0)
-                    .child(
-                        Button::new("Open issue board")
-                            .on_click(move || open_issues(&open_issues_runtime)),
-                    )
-                    .child(
-                        Button::new("Open proof preview")
-                            .on_click(move || open_proof(&open_proof_runtime)),
-                    )
-                    .child(
-                        Button::new("Open press log").on_click(move || open_log(&open_log_runtime)),
-                    ),
-            ),
+            .child(Spacer::new()),
     );
 
     let mut dialogs = Column::new();
     if windows & DESKTOP_ISSUES != 0 {
-        let button_runtime = runtime.clone();
         let dismiss_runtime = runtime.clone();
         dialogs = dialogs.child(
             Dialog::new("Issue board")
@@ -578,8 +623,8 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                 .non_fixed()
                 .movable()
                 .resizable()
-                .at(28.0, 92.0)
-                .size(310.0, 210.0)
+                .at(0.0, 150.0)
+                .size(320.0, 214.0)
                 .padding(18.0)
                 .gap(9.0)
                 .child(Badge::new("3 OPEN / 1 BLOCKING"))
@@ -589,16 +634,15 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                 )
                 .child(Divider::new())
                 .child(
-                    Row::new().gap(8.0).child(Button::new("Assign")).child(
-                        Button::new("Close issue board")
-                            .on_click(move || close_issues(&button_runtime)),
-                    ),
+                    Row::new()
+                        .gap(8.0)
+                        .child(Spacer::new())
+                        .child(Button::new("Assign")),
                 )
                 .on_dismiss(move || close_issues(&dismiss_runtime)),
         );
     }
     if windows & DESKTOP_PROOF != 0 {
-        let button_runtime = runtime.clone();
         let dismiss_runtime = runtime.clone();
         dialogs = dialogs.child(
             Dialog::new("Proof preview")
@@ -606,8 +650,8 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                 .non_fixed()
                 .movable()
                 .resizable()
-                .at(430.0, 58.0)
-                .size(370.0, 235.0)
+                .at(470.0, 110.0)
+                .size(370.0, 258.0)
                 .padding(18.0)
                 .gap(9.0)
                 .child(Badge::new("PAGE 18 / V7"))
@@ -618,16 +662,15 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                 )
                 .child(Divider::new())
                 .child(
-                    Row::new().gap(8.0).child(Button::new("Zoom 100%")).child(
-                        Button::new("Close proof preview")
-                            .on_click(move || close_proof(&button_runtime)),
-                    ),
+                    Row::new()
+                        .gap(8.0)
+                        .child(Spacer::new())
+                        .child(Button::new("Zoom 100%")),
                 )
                 .on_dismiss(move || close_proof(&dismiss_runtime)),
         );
     }
     if windows & DESKTOP_LOG != 0 {
-        let button_runtime = runtime.clone();
         let dismiss_runtime = runtime.clone();
         dialogs = dialogs.child(
             Dialog::new("Press log")
@@ -635,10 +678,10 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                 .non_fixed()
                 .movable()
                 .resizable()
-                .at(245.0, 330.0)
-                .size(430.0, 170.0)
+                .at(230.0, 380.0)
+                .size(430.0, 164.0)
                 .padding(18.0)
-                .gap(8.0)
+                .gap(10.0)
                 .child(
                     Row::new()
                         .align(Align::Center)
@@ -647,9 +690,6 @@ fn desktop_workspace(runtime: DialogRuntime, windows: u8) -> impl View {
                         .child(Text::new("16:40 · profile validation complete")),
                 )
                 .child(Text::new("16:42 · waiting for two editorial signatures"))
-                .child(Row::new().gap(8.0).child(Spacer::new()).child(
-                    Button::new("Close press log").on_click(move || close_log(&button_runtime)),
-                ))
                 .on_dismiss(move || close_log(&dismiss_runtime)),
         );
     }
@@ -1032,7 +1072,7 @@ mod tests {
 
         let mut desktop = scenario_app(&runtime, Scenario::DesktopWorkspace, 900, 620, 1.0);
         desktop.frame();
-        assert!(click(&mut desktop, "Close issue board"));
+        assert!(click(&mut desktop, "Close Issue board"));
         assert!(runtime.take_remount());
 
         let mut without_issues = scenario_app(&runtime, Scenario::DesktopWorkspace, 900, 620, 1.0);

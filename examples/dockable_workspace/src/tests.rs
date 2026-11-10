@@ -61,22 +61,32 @@ mod tests {
         assert!(large_rect.height > small_rect.height + 250.0);
     }
 
+    /// Opens a pane's "+" menu and picks one of its rows.
+    fn choose_new_tab(app: &mut App, button: &str, item: &str) {
+        let add = app
+            .find_widget(Role::Button, Some(button))
+            .expect("new tab menu button");
+        assert!(app.dispatch_action(&ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: to_access_id(add),
+            data: None,
+        }));
+        app.frame();
+        let row = app
+            .find_widget(Role::MenuItem, Some(item))
+            .expect("new tab menu row");
+        assert!(app.activate_context_menu_item(row).is_some());
+    }
+
     #[test]
     fn trailing_commands_add_agent_and_terminal_tabs_to_their_pane() {
         let runtime = WorkspaceRuntime::default();
         let mut app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         app.frame();
-        assert!(app.find_widget(Role::Tab, Some("AG Agent")).is_none());
+        assert!(app.find_widget(Role::Tab, Some("Agent")).is_none());
 
-        let add_agent = app
-            .find_widget(Role::Button, Some("+ AGENT"))
-            .expect("agent tab command");
-        assert!(app.dispatch_action(&ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: to_access_id(add_agent),
-            data: None,
-        }));
+        choose_new_tab(&mut app, "Add a widget to the Pulse pane", "Agent");
         assert!(runtime.take_remount());
         runtime.read(|state| {
             let agent = state
@@ -90,16 +100,8 @@ mod tests {
 
         app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         app.frame();
-        assert!(app.find_widget(Role::Tab, Some("AG Agent")).is_some());
-        let add_terminal = app
-            .find_widget(Role::Button, Some("+ TERMINAL"))
-            .expect("terminal tab command");
-        assert!(app.dispatch_action(&ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: to_access_id(add_terminal),
-            data: None,
-        }));
+        assert!(app.find_widget(Role::Tab, Some("Agent")).is_some());
+        choose_new_tab(&mut app, "Add a widget to the Agent pane", "Terminal");
         assert!(runtime.take_remount());
         runtime.read(|state| {
             let terminal = state
@@ -113,9 +115,7 @@ mod tests {
 
         let mut remounted = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         remounted.frame();
-        assert!(remounted
-            .find_widget(Role::Tab, Some("TR Terminal"))
-            .is_some());
+        assert!(remounted.find_widget(Role::Tab, Some("Terminal")).is_some());
     }
 
     #[test]
@@ -125,7 +125,7 @@ mod tests {
         let mut app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         app.frame();
 
-        drag(&mut app, "01 Pulse", Role::Tab, "02 Focus", 0.75, 0.5, true).unwrap();
+        drag(&mut app, "Pulse", Role::Tab, "Focus", 0.75, 0.5, true).unwrap();
 
         assert!(runtime.take_remount());
         runtime.read(|state| {
@@ -176,7 +176,7 @@ mod tests {
         let hide_switch = visible
             .find_widget(Role::Switch, Some("Hide single tab bars"))
             .expect("hide-single-tab-bars switch");
-        assert!(visible.find_widget(Role::Tab, Some("01 Pulse")).is_some());
+        assert!(visible.find_widget(Role::Tab, Some("Pulse")).is_some());
 
         assert!(visible.dispatch_action(&ActionRequest {
             action: Action::Click,
@@ -189,8 +189,8 @@ mod tests {
 
         let mut hidden = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         hidden.frame();
-        assert!(hidden.find_widget(Role::Tab, Some("01 Pulse")).is_none());
-        assert!(hidden.find_widget(Role::Tab, Some("02 Focus")).is_some());
+        assert!(hidden.find_widget(Role::Tab, Some("Pulse")).is_none());
+        assert!(hidden.find_widget(Role::Tab, Some("Focus")).is_some());
         assert!(hidden
             .find_widget(Role::Group, Some("Dock Pulse"))
             .is_some());
@@ -297,7 +297,7 @@ mod tests {
         app.frame();
         drag(
             &mut app,
-            "02 Focus",
+            "Focus",
             Role::Group,
             "Dock between panes 1, 2",
             0.5,
@@ -313,7 +313,7 @@ mod tests {
         assert_equal_pane_widths(&app, &["Dock Pulse", "Dock Focus", "Dock Notes"]);
         drag(
             &mut app,
-            "04 Weather",
+            "Weather",
             Role::Group,
             "Dock between panes 3, 2",
             0.5,
@@ -326,7 +326,7 @@ mod tests {
         app = mount_workspace(runtime.clone(), 1210, 720, 1.0);
         app.frame();
         assert_eq!(runtime.read(|state| state.panes.len()), 4);
-        assert!(app.find_widget(Role::Tab, Some("04 Weather")).is_some());
+        assert!(app.find_widget(Role::Tab, Some("Weather")).is_some());
         assert_equal_pane_widths(
             &app,
             &["Dock Pulse", "Dock Weather", "Dock Focus", "Dock Notes"],

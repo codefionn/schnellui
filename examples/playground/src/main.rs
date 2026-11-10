@@ -93,7 +93,7 @@ impl ThemeChoice {
 enum Scenario {
     /// every component on one screen — reached by **construction** (SOUL §7.5).
     Gallery,
-    /// the button's reactive loop: three driven `Click`s, a `Status` shows "clicks: 3".
+    /// the button's reactive loop: three driven `Click`s, a `Status` shows "Clicked 3 times".
     CounterClicked,
     /// the tab bar's exclusivity: the "Privacy" tab driven selected by Role+name.
     TabsSecondSelected,
@@ -200,22 +200,25 @@ struct Cli {
 /// name. The Density dropdown opens and picks in windowed mode (`live`) by
 /// parking a remount, like the Fruit dropdown; headless it stays closed.
 fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> impl View {
-    use schnellui::widgets::{BadgeTone, Column, Dropdown, DropdownOption, Row, Text};
+    use schnellui::layout::{Align, EdgeInsets};
+    use schnellui::widgets::{
+        BadgeTone, Column, Dropdown, DropdownOption, Image, LoadingSpinner, Pad, ProgressBar, Row,
+        Slider, Text, TextInput,
+    };
     let clicks = create_signal(0i32);
     let project = runtime.project();
     let project_runtime = runtime.clone();
-    let inner = view! {
+    let head = view! {
         column(gap = 12.0) {
             text(size = 22.0, bold) { "schnellui playground" }
             // actions: button (live + disabled), link, badge, and the live
             // click counter the button drives (SOUL §3.3)
             row(gap = 10.0, align = center) {
-                button(on:click = move || clicks.update(|v| *v += 1)) { "increment" }
-                button(disabled = true) { "disabled" }
-                link(on:click = move || {}) { "docs" }
+                button(on:click = move || clicks.update(|v| *v += 1)) { "Increment" }
+                button(disabled = true) { "Disabled" }
+                link(on:click = move || {}) { "Docs" }
                 badge(tone = BadgeTone::Accent) { "NEW" }
-                flex(basis = 6.0)
-                text(role = Role::Status) { (format!("clicks: {}", clicks.get())) }
+                text(role = Role::Status) { (click_count(clicks.get())) }
             }
             // toggles, each with its own label, centered on the control
             row(gap = 8.0, align = center) {
@@ -233,33 +236,56 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
                 radio(name = "Weekly")
                 text { "Weekly" }
             }
-            // ranges: stepped input, determinate status, indeterminate status
-            row(gap = 16.0, align = center) {
-                slider(
-                    value = 40.0,
-                    min = 0.0,
-                    max = 100.0,
-                    step = 5.0,
-                    name = "Volume"
-                )
-                progress(
-                    value = 60.0,
-                    min = 0.0,
-                    max = 100.0,
-                    name = "Upload"
-                )
-                spinner(size = 20.0, name = "Syncing")
-            }
-            // text entry + an image that has no pixels yet
-            row(gap = 8.0, align = center) {
-                text_input(
-                    value = project,
-                    label = "Project name",
-                    on:input = move |value: &str| project_runtime.set_project(value)
-                )
-                text_input(value = "Ada", label = "Owner")
-                image(src = "photo", alt = "Project photo")
-            }
+        }
+    };
+    // ranges: a stepped input with its value, a determinate status on a thicker
+    // bar (so it does not read as a slider without a thumb), and an
+    // indeterminate status
+    let volume = create_signal(40.0f32);
+    let ranges = Row::new()
+        .gap(10.0)
+        .align(Align::Center)
+        .child(Text::new("Volume"))
+        .child(
+            Slider::new(volume.get(), 0.0, 100.0)
+                .step(5.0)
+                .name("Volume")
+                .on_change(move |v| volume.set(v)),
+        )
+        .child(Text::dynamic(move || format!("{:.0}", volume.get())).size(14.0))
+        .child(
+            Pad::insets(EdgeInsets {
+                left: 14.0,
+                ..EdgeInsets::default()
+            })
+            .child(Text::new("Upload 60%")),
+        )
+        .child(
+            ProgressBar::new(60.0, 0.0, 100.0)
+                .name("Upload")
+                .size(140.0, 10.0),
+        )
+        .child(
+            Pad::insets(EdgeInsets {
+                left: 14.0,
+                ..EdgeInsets::default()
+            })
+            .child(LoadingSpinner::new().size(20.0).name("Syncing")),
+        )
+        .child(Text::new("Syncing"));
+    // text entry + an image that has no pixels yet, as tall as the fields
+    let entry = Row::new()
+        .gap(8.0)
+        .align(Align::Center)
+        .child(
+            TextInput::new(project)
+                .label("Project name")
+                .on_input(move |value: &str| project_runtime.set_project(value)),
+        )
+        .child(TextInput::new("Ada").label("Owner"))
+        .child(Image::new("photo").alt("Project photo").size(52.0, 52.0));
+    let selection = view! {
+        column(gap = 12.0) {
             divider
             // selection: tabs + list beside the table (header + two data
             // rows, first row pre-selected)
@@ -278,13 +304,19 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
                     }
                 }
                 table(selected_row = 0) {
-                    table_row(header) { "Name" "Age" }
-                    table_row { "Ada Lovelace" "36" }
-                    table_row { "Grace Hopper" "85" }
+                    table_row(header) { "Name" "Age" "City" }
+                    table_row { "Ada Lovelace" "36" "London" }
+                    table_row { "Grace Hopper" "85" "Arlington" }
                 }
             }
         }
     };
+    let inner = Column::new()
+        .gap(12.0)
+        .child(head)
+        .child(ranges)
+        .child(entry)
+        .child(selection);
     // the Density dropdown, labelled, live in windowed mode
     let density = runtime.density();
     let mut dropdown = Dropdown::new("Density").open(density.open);
@@ -329,47 +361,87 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
     )
 }
 
-/// A button and the `Status` it drives — the smallest reactive loop.
+/// The click counter's status line, in words.
+fn click_count(clicks: i32) -> String {
+    match clicks {
+        0 => "Not clicked yet".to_string(),
+        1 => "Clicked once".to_string(),
+        n => format!("Clicked {n} times"),
+    }
+}
+
+/// A button and the `Status` it drives — the smallest reactive loop — above the
+/// other button looks, so the page doubles as a reference for each state.
 fn counter_view() -> impl View {
     let clicks = create_signal(0i32);
     view! {
-        column(gap = 10.0) {
+        column(gap = 14.0, width = 460.0) {
             text(size = 22.0, bold) { "Button" }
-            button(on:click = move || clicks.update(|v| *v += 1)) { "increment" }
-            text(role = Role::Status) { (format!("clicks: {}", clicks.get())) }
+            row(gap = 12.0, align = center) {
+                button(on:click = move || clicks.update(|v| *v += 1)) { "Increment" }
+                text(role = Role::Status) { (click_count(clicks.get())) }
+            }
+            divider
+            text(size = 13.0) { "Appearances" }
+            row(gap = 10.0, align = center) {
+                button(on:click = move || {}) { "Save" }
+                button(appearance = schnellui::widgets::ButtonAppearance::Outline, on:click = move || {}) { "Preview" }
+                button(appearance = schnellui::widgets::ButtonAppearance::Ghost, on:click = move || {}) { "Cancel" }
+                button(disabled = true) { "Publish" }
+            }
+            text(size = 13.0, wrap = word) {
+                "Solid for the main action, Outline for a second choice, Ghost for a quiet one. A disabled button keeps its place but takes no clicks or focus."
+            }
         }
     }
 }
 
+/// What each tab of the tabs page shows.
+fn tab_body(name: &str) -> &'static str {
+    match name {
+        "Privacy" => "Choose who sees your profile and what we keep in the activity log.",
+        "About" => "schnellui playground, built from the same widgets as the gallery.",
+        _ => "Your name, language and the theme the app opens with.",
+    }
+}
+
 /// A tab bar whose `on:select` handlers write the chosen tab's name into a signal
-/// the `Status` slot reads (SOUL §3.3, §6.3).
+/// the `Status` slot reads (SOUL §3.3, §6.3), with a panel for the chosen tab.
 fn tabs_view() -> impl View {
     let chosen = create_signal(String::from("General"));
     view! {
-        column(gap = 10.0) {
+        column(gap = 10.0, width = 460.0) {
             text(size = 22.0, bold) { "Tabs" }
             tabs(gap = 2.0) {
                 tab(selected = true, on:select = move || chosen.set("General".to_string())) { "General" }
                 tab(on:select = move || chosen.set("Privacy".to_string())) { "Privacy" }
                 tab(on:select = move || chosen.set("About".to_string())) { "About" }
             }
-            text(role = Role::Status) { (format!("tab: {}", chosen.get())) }
+            text(role = Role::Status) { (format!("Showing {}", chosen.get())) }
+            divider
+            text(size = 15.0, wrap = word) { (tab_body(&chosen.get()).to_string()) }
         }
     }
 }
 
-/// A single-selection list mirroring the tabs scenario (SOUL §6.3).
+/// A single-selection list mirroring the tabs scenario (SOUL §6.3). The rows
+/// stretch to the column, so the selection fill is the same width on every row
+/// and matches the gallery's list.
 fn list_view() -> impl View {
     let chosen = create_signal(String::from("Inbox"));
     view! {
         column(gap = 10.0) {
             text(size = 22.0, bold) { "List" }
-            list {
-                list_item(selected = true, on:select = move || chosen.set("Inbox".to_string())) { "Inbox" }
-                list_item(on:select = move || chosen.set("Archive".to_string())) { "Archive" }
-                list_item(on:select = move || chosen.set("Trash".to_string())) { "Trash" }
+            column(width = 240.0, align = stretch) {
+                list {
+                    list_item(selected = true, on:select = move || chosen.set("Inbox".to_string())) { "Inbox" }
+                    list_item(on:select = move || chosen.set("Starred".to_string())) { "Starred" }
+                    list_item(on:select = move || chosen.set("Sent".to_string())) { "Sent" }
+                    list_item(on:select = move || chosen.set("Archive".to_string())) { "Archive" }
+                    list_item(on:select = move || chosen.set("Trash".to_string())) { "Trash" }
+                }
             }
-            text(role = Role::Status) { (format!("item: {}", chosen.get())) }
+            text(role = Role::Status) { (format!("Opened {}", chosen.get())) }
         }
     }
 }
@@ -395,7 +467,7 @@ struct FruitState {
 /// the driven shot stays deterministic (SOUL §7.3). Built with the builder
 /// chain — the dropdown has no literal form in `view!` yet.
 fn dropdown_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> impl View {
-    use schnellui::widgets::{Column, Dropdown, DropdownOption, Text};
+    use schnellui::widgets::{Column, Dropdown, DropdownOption, Row, Text};
     let fruit = runtime.fruit();
     let chosen = create_signal(String::from(fruit.chosen));
     let opt = |label: &'static str| {
@@ -435,12 +507,24 @@ fn dropdown_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> 
             });
         });
     }
+    // The readout sits beside the trigger, so the open list never covers it.
     Column::new()
         .gap(10.0)
         .child(Text::new("Dropdown").size(22.0).bold())
-        .child(dropdown)
-        .child(Text::dynamic(move || format!("fruit: {}", chosen.get())).role(Role::Status))
+        .child(
+            Row::new()
+                .gap(16.0)
+                .align(schnellui::layout::Align::Center)
+                .child(dropdown)
+                .child(
+                    Text::dynamic(move || format!("You picked {}", chosen.get()))
+                        .role(Role::Status),
+                ),
+        )
 }
+
+/// The table page's people, in data-row order.
+const PEOPLE: [&str; 3] = ["Ada Lovelace", "Grace Hopper", "Alan Turing"];
 
 /// The table with row selection: `on:select_row` receives the **data-row index**
 /// (header rows don't count) and feeds the `Status` slot (SOUL §8.1, §6.3).
@@ -455,7 +539,7 @@ fn table_view() -> impl View {
                 table_row { "Grace Hopper" "85" "Arlington" }
                 table_row { "Alan Turing" "41" "London" }
             }
-            text(role = Role::Status) { (format!("selected row: {}", selected.get())) }
+            text(role = Role::Status) { (format!("Selected: {}", PEOPLE[selected.get()])) }
         }
     }
 }
@@ -482,7 +566,7 @@ fn text_view() -> impl View {
 /// draw as real `ImageQuad`s. Built with the builder API: pixel data has no literal
 /// form in `view!` (the `svg` tag exists there; see the macro tests).
 fn images_view() -> impl View {
-    use schnellui::widgets::{Column, Image, Row, Svg, Text};
+    use schnellui::widgets::{Column, Image, Row, Svg, Text, View, WrapMode};
     // a 64×64 gradient under an 8px checker — recognizable, deterministic
     let mut px = Vec::with_capacity(64 * 64 * 4);
     for y in 0..64u32 {
@@ -523,22 +607,42 @@ fn images_view() -> impl View {
         <line x1="2" y1="21" x2="62" y2="21" stroke="gray"/>
         <polyline points="2,18 14,10 26,13 38,5 50,9 62,3" fill="none" stroke="#cc3333" stroke-width="1.5"/>
         <path fill-rule="evenodd" fill="#3366cc" d="M8 3 h10 v10 h-10 Z M11 6 h4 v4 h-4 Z"/>
-        <text x="62" y="18" font-size="7" text-anchor="end" fill="black">42k</text>
+        <text x="62" y="17" font-size="9" text-anchor="end" fill="black">42k</text>
     </svg>"##;
+    let figure = |image: Box<dyn View>, caption: &'static str| {
+        Column::new()
+            .gap(6.0)
+            .width(136.0)
+            .child(image)
+            .child(Text::new(caption).size(13.0).wrap(WrapMode::Word))
+    };
     Column::new()
-        .gap(10.0)
+        .gap(14.0)
         .child(Text::new("Images").size(22.0).bold())
         .child(
-            Row::new()
-                .gap(12.0)
-                .child(Image::from_rgba(64, 64, px).alt("gradient checker"))
-                .child(Svg::new(LOGO).alt("schnellui logo").size(64.0, 64.0))
-                .child(Svg::new(HEART).alt("heart").size(64.0, 64.0)),
+            Text::new("One bitmap and three vector drawings, all drawn from the same atlas.")
+                .wrap(WrapMode::Word),
         )
-        .child(Svg::new(SPARK).alt("sparkline").size(128.0, 48.0))
         .child(
-            Text::new("raster bitmap - gradients, curves, transforms, strokes, svg text")
-                .size(12.0),
+            Row::new()
+                .gap(16.0)
+                .align(schnellui::layout::Align::Start)
+                .child(figure(
+                    Box::new(Image::from_rgba(64, 64, px).alt("gradient checker")),
+                    "Bitmap generated in code",
+                ))
+                .child(figure(
+                    Box::new(Svg::new(LOGO).alt("schnellui logo").size(64.0, 64.0)),
+                    "Radial gradient and stroke",
+                ))
+                .child(figure(
+                    Box::new(Svg::new(HEART).alt("heart").size(64.0, 64.0)),
+                    "Curves, arcs and a rotation",
+                ))
+                .child(figure(
+                    Box::new(Svg::new(SPARK).alt("sparkline").size(128.0, 48.0)),
+                    "Polyline, even-odd fill and SVG text",
+                )),
         )
 }
 
@@ -548,8 +652,7 @@ fn images_view() -> impl View {
 /// modal, positioned, and persistent behavior at full size.
 fn dialogs_view() -> impl View {
     use schnellui::widgets::{
-        Badge, BadgeTone, Button, ButtonAppearance, Column, Dialog, Image, Row, Stack, Text,
-        WrapMode,
+        Button, ButtonAppearance, Column, Dialog, Image, Row, Stack, Text, WrapMode,
     };
 
     let decorated = Stack::new()
@@ -567,7 +670,6 @@ fn dialogs_view() -> impl View {
                 .viewport_inset(12.0)
                 .padding(14.0)
                 .gap(9.0)
-                .child(Badge::new("DECORATED").tone(BadgeTone::Neutral))
                 .child(
                     Text::new("You have 3 unsaved edits in the design file. Review them before you share it.").wrap(WrapMode::Word),
                 )
@@ -624,19 +726,25 @@ fn dialogs_view() -> impl View {
             Row::new()
                 .width(600.0)
                 .gap(12.0)
-                .child(decorated)
-                .child(undecorated),
+                .child(
+                    Column::new()
+                        .gap(6.0)
+                        .child(decorated)
+                        .child(Text::new("Decorated: title bar, frame and shadow").size(13.0)),
+                )
+                .child(
+                    Column::new().gap(6.0).child(undecorated).child(
+                        Text::new("Undecorated: the content draws its own header").size(13.0),
+                    ),
+                ),
         )
         .child(
-            Row::new()
-                .width(600.0)
-                .gap(6.0)
-                .wrap()
-                .child(Badge::new("FIXED").tone(BadgeTone::Neutral))
-                .child(Badge::new("SCOPED").tone(BadgeTone::Neutral))
-                .child(Badge::new("MODAL").tone(BadgeTone::Neutral))
-                .child(Badge::new("MODELESS").tone(BadgeTone::Neutral))
-                .child(Badge::new("PERSISTENT").tone(BadgeTone::Neutral)),
+            Text::new(
+                "Dialogs can also be modal, fixed to the viewport, or persistent. \
+                 The dialogs example shows each at full size.",
+            )
+            .size(13.0)
+            .wrap(WrapMode::Word),
         )
 }
 
@@ -944,7 +1052,7 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
     match scenario {
         Scenario::CounterClicked => {
             for _ in 0..3 {
-                click(&mut app, Role::Button, Some("increment"));
+                click(&mut app, Role::Button, Some("Increment"));
             }
         }
         Scenario::TabsSecondSelected => click(&mut app, Role::Tab, Some("Privacy")),
@@ -1056,14 +1164,14 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
                 }
             }
             // the disabled button announces its state (SOUL §6.1)
-            let d = find_by_role_name(&tree, "button", Some("disabled"))
+            let d = find_by_role_name(&tree, "button", Some("Disabled"))
                 .ok_or("missing the disabled button")?;
             if !has_state(d, "disabled") {
                 return Err("the disabled button does not announce disabled".into());
             }
             // two Status live regions: the badge ("NEW") and the click counter
             let statuses = all_with_role(&tree, "status");
-            for needle in ["NEW", "clicks: 0"] {
+            for needle in ["NEW", "Not clicked yet"] {
                 if !statuses
                     .iter()
                     .any(|s| s.value.as_deref().is_some_and(|v| v.contains(needle)))
@@ -1074,16 +1182,16 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
             // the gallery table announces derived counts (SOUL §6.1)
             let t = all_with_role(&tree, "table");
             let table = t.first().ok_or("missing table")?;
-            if table.row_count != Some(3) || table.column_count != Some(2) {
+            if table.row_count != Some(3) || table.column_count != Some(3) {
                 return Err(format!(
-                    "table counts: rows={:?} cols={:?}, want 3×2",
+                    "table counts: rows={:?} cols={:?}, want 3×3",
                     table.row_count, table.column_count
                 ));
             }
             Ok(())
         }
         // Three driven clicks → the memo'd status shows exactly 3 (SOUL §7.5).
-        Scenario::CounterClicked => assert_value_contains(&tree, "status", None, "clicks: 3"),
+        Scenario::CounterClicked => assert_value_contains(&tree, "status", None, "Clicked 3 times"),
         // Exclusivity: "Privacy" gained SELECTED, "General" lost it, and the
         // on:select handler drove the status text (SOUL §6.3).
         Scenario::TabsSecondSelected => {
@@ -1097,7 +1205,7 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
             if has_state(general, "selected") {
                 return Err("General tab is still selected (exclusivity broken)".into());
             }
-            assert_value_contains(&tree, "status", None, "tab: Privacy")
+            assert_value_contains(&tree, "status", None, "Showing Privacy")
         }
         Scenario::ListSecondSelected => {
             let archive = find_by_role_name(&tree, "list_item", Some("Archive"))
@@ -1110,7 +1218,7 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
             if has_state(inbox, "selected") {
                 return Err("Inbox item is still selected (exclusivity broken)".into());
             }
-            assert_value_contains(&tree, "status", None, "item: Archive")
+            assert_value_contains(&tree, "status", None, "Opened Archive")
         }
         // Exclusivity + the trigger's mirrored value: "Banana" gained SELECTED,
         // "Apple" lost it, the trigger stayed EXPANDED announcing "Banana", and
@@ -1137,7 +1245,7 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
                     trigger.value
                 ));
             }
-            assert_value_contains(&tree, "status", None, "fruit: Banana")
+            assert_value_contains(&tree, "status", None, "You picked Banana")
         }
         // The row containing the "Grace Hopper" cell is selected, carries the
         // derived row index 2 (header = 0), the previously-selected row cleared,
@@ -1160,7 +1268,7 @@ fn run_assertions(scenario: Scenario, theme: ThemeChoice, app: &App) -> Result<(
             if has_state(ada, "selected") {
                 return Err("Ada's row is still selected (exclusivity broken)".into());
             }
-            assert_value_contains(&tree, "status", None, "selected row: 1")
+            assert_value_contains(&tree, "status", None, "Selected: Grace Hopper")
         }
         // Truncation is visual only: the ellipsized text's accessible name stays
         // the full string (SOUL §6.1).
@@ -1286,7 +1394,7 @@ fn main() -> ExitCode {
     // process relaunch, no window close/reopen).
     if cli.windowed || cli.headless_windowed {
         let runtime = PlaygroundRuntime::default();
-        let app = scenario_app(
+        let mut app = scenario_app(
             &runtime,
             MountState {
                 scenario,
@@ -1295,6 +1403,7 @@ fn main() -> ExitCode {
             },
             &cli,
         );
+        app.set_escape_exits(true);
         let remount_runtime = runtime.clone();
         let result = app.run_windowed_with("playground", move || {
             remount_runtime

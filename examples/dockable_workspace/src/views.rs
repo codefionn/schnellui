@@ -48,11 +48,22 @@ impl View for Surface {
     }
 }
 
-pub(crate) fn framed(width: f32, height: f32, fill: Color, content: impl View) -> impl View {
+pub(crate) fn framed(
+    width: f32,
+    height: f32,
+    fill: Color,
+    padding: f32,
+    content: impl View,
+) -> impl View {
     Stack::new()
         .size(width, height)
         .child(Surface::new(width, height, fill))
-        .child(Pad::all(18.0).child(content))
+        .child(Pad::all(padding).child(content))
+}
+
+/// Secondary text in the muted ink: captions, units and metadata.
+pub(crate) fn caption(text: impl Into<std::borrow::Cow<'static, str>>, size: f32) -> impl View {
+    ThemeProvider::new(MUTED_THEME, Text::new(text).size(size))
 }
 
 pub(crate) fn library_button(
@@ -62,7 +73,9 @@ pub(crate) fn library_button(
     width: f32,
 ) -> Button {
     Button::new(label)
+        .appearance(ButtonAppearance::Outline)
         .width(width)
+        .height(40.0)
         .on_click(move || add_widget(&runtime, kind))
 }
 
@@ -116,47 +129,44 @@ pub(crate) fn sidebar(
         width,
         height,
         PANEL_ALT,
+        18.0,
         Column::new()
             .width(inner_width)
             .gap(13.0)
-            .child(Text::new("WIDGET LIBRARY").size(12.0))
+            .child(caption("WIDGET LIBRARY", 12.0))
+            .child(Text::new("Add a widget").size(22.0).bold())
             .child(
-                Text::new("Build your own rhythm.")
-                    .size(24.0)
-                    .wrap(WrapMode::Word),
-            )
-            .child(
-                Text::new("Add, arrange, and dock every view where it works for you.")
+                Text::new("It opens as a tab in the first pane. Drag its tab to dock it anywhere.")
                     .size(13.0)
                     .wrap(WrapMode::Word),
             )
             .child(Divider::new())
             .child(library_button(
                 runtime.clone(),
-                "+  PULSE",
+                "Add Pulse",
                 WidgetType::Pulse,
                 inner_width - 4.0,
             ))
             .child(library_button(
                 runtime.clone(),
-                "+  FOCUS TIMER",
+                "Add Focus timer",
                 WidgetType::Focus,
                 inner_width - 4.0,
             ))
             .child(library_button(
                 runtime.clone(),
-                "+  NOTES",
+                "Add Notes",
                 WidgetType::Notes,
                 inner_width - 4.0,
             ))
             .child(library_button(
                 runtime.clone(),
-                "+  WEATHER",
+                "Add Weather",
                 WidgetType::Weather,
                 inner_width - 4.0,
             ))
             .child(Divider::new())
-            .child(Text::new("CANVAS").size(11.0))
+            .child(caption("LAYOUT", 12.0))
             .child(canvas_setting("Compact panes", compact, inner_width, {
                 let runtime = runtime.clone();
                 move |value| {
@@ -177,146 +187,171 @@ pub(crate) fn sidebar(
                 },
             ))
             .child(Spacer::new())
-            .child(Badge::new(format!("{} LIVE WIDGETS", state.tabs.len())))
-            .child(Text::new("TIP  Grab any tab to move it.").size(11.0)),
+            .child(caption("Tip: drag any tab to move it.", 12.0)),
     )
 }
 
-pub(crate) fn widget_body(tab: &WorkspaceTab, width: f32, compact: bool) -> Column {
-    let chart_width = width - 54.0;
-    let content_height = if compact { 108.0 } else { 144.0 };
-    let narrow = width < 320.0;
-    let mut header = Row::new()
-        .width(width - 36.0)
-        .justify(Justify::SpaceBetween)
-        .align(Align::Center)
-        .child(
-            Column::new()
-                .gap(2.0)
-                .child(Text::new(format!("{}  {}", tab.widget.marker(), tab.title)).size(22.0))
-                .child(Text::new("LIVE / PERSONAL VIEW").size(10.0)),
-        );
-    if !narrow {
-        header = header.child(Badge::new("SYNCED"));
+/// The heading and the one-line status shown at the top of a widget. The tab
+/// already names the widget, so the heading says what the pane is showing.
+fn widget_heading(widget: WidgetType) -> (&'static str, &'static str) {
+    match widget {
+        WidgetType::Pulse => ("Energy this week", "Updated 5 min ago"),
+        WidgetType::Focus => ("Strategy sprint", "Notifications paused until 11:00"),
+        WidgetType::Notes => ("Today's thread", "5 notes · edited 8 min ago"),
+        WidgetType::Weather => ("Berlin", "Clear, soft wind"),
+        WidgetType::Agent => ("Workspace agent", "Ready · no task running"),
+        WidgetType::Terminal => ("Shell", "~/workspace · zsh"),
     }
+}
+
+/// One line of the focus timer's agenda: a muted time and what happens then.
+fn agenda_row(time: &'static str, what: &'static str, width: f32) -> Row {
+    Row::new()
+        .width(width)
+        .gap(14.0)
+        .align(Align::Center)
+        .child(caption(time, 14.0))
+        .child(Text::new(what).size(14.0))
+}
+
+/// The body of one widget, laid out for a pane `width` wide whose scroll area
+/// is `height` tall. Charts grow to use the height they are given.
+pub(crate) fn widget_body(tab: &WorkspaceTab, width: f32, height: f32, compact: bool) -> Column {
+    let gap = if compact { 8.0 } else { 14.0 };
+    let narrow = width < 320.0;
+    let (title, status) = widget_heading(tab.widget);
+    let header = Column::new()
+        .gap(2.0)
+        .child(
+            Text::new(title)
+                .size(if compact { 16.0 } else { 19.0 })
+                .bold(),
+        )
+        .child(caption(status, 12.0));
+    let header_height = if compact { 40.0 } else { 46.0 };
+    let chart_height =
+        |above: f32| (height - header_height - above - gap * 3.0 - 8.0).clamp(80.0, 440.0);
+    let figure = if compact { 28.0 } else { 34.0 };
 
     let body = match tab.widget {
         WidgetType::Pulse => Column::new()
-            .gap(10.0)
+            .gap(gap)
             .child(
                 Row::new()
-                    .gap(22.0)
+                    .gap(28.0)
                     .wrap()
                     .child(
                         Column::new()
-                            .child(Text::new("72").size(34.0))
-                            .child(Text::new("ENERGY").size(10.0)),
+                            .child(Text::new("72").size(figure))
+                            .child(caption("Energy score", 12.0)),
                     )
                     .child(
                         Column::new()
-                            .child(Text::new("6.4h").size(34.0))
-                            .child(Text::new("DEEP WORK").size(10.0)),
+                            .child(Text::new("6.4h").size(figure))
+                            .child(caption("Deep work", 12.0)),
                     ),
             )
             .child(
                 LineChart::new([28.0, 41.0, 37.0, 58.0, 52.0, 71.0, 66.0, 82.0])
-                    .title("Weekly energy")
-                    .size(chart_width, content_height)
+                    .title("Energy score over the last eight days")
+                    .axes(true)
+                    .labels(["Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Today"])
+                    .tooltips(true)
+                    .size(width, chart_height(figure + 16.0 + gap))
                     .color(ORANGE)
                     .stroke_width(3.0)
                     .markers(true),
             ),
         WidgetType::Focus => Column::new()
-            .gap(13.0)
-            .child(Text::new("42:18").size(48.0))
+            .gap(gap)
+            .child(Text::new("42:18").size(if compact { 38.0 } else { 52.0 }))
             .child(
-                Text::new("Strategy sprint · no notifications")
-                    .size(13.0)
-                    .wrap(WrapMode::Word),
+                ProgressBar::new(68.0, 0.0, 100.0)
+                    .name("Sprint progress")
+                    .size(width, 8.0),
             )
-            .child(ProgressBar::new(68.0, 0.0, 100.0))
-            .child(
-                Row::new()
-                    .gap(8.0)
-                    .child(Badge::new("68%"))
-                    .child(Text::new("18 minutes left").size(12.0)),
-            ),
-        WidgetType::Notes => Column::new()
-            .gap(12.0)
-            .child(Text::new("TODAY'S THREAD").size(11.0))
-            .child(
-                Text::new("→ Prototype the docking flow")
-                    .size(if narrow { 13.0 } else { 16.0 })
-                    .wrap(WrapMode::Word),
-            )
-            .child(
-                Text::new("→ Keep the canvas calm")
-                    .size(if narrow { 13.0 } else { 16.0 })
-                    .wrap(WrapMode::Word),
-            )
-            .child(
-                Text::new("→ Send the Friday field note")
-                    .size(if narrow { 13.0 } else { 16.0 })
-                    .wrap(WrapMode::Word),
-            )
+            .child(caption("68% done · 18 minutes left", 13.0))
             .child(Divider::new())
-            .child(Text::new("3 notes · edited 8m ago").size(12.0)),
+            .child(caption("UP NEXT", 12.0))
+            .child(agenda_row("11:00", "Design review with Mara", width))
+            .child(agenda_row("13:30", "Lunch walk", width))
+            .child(agenda_row("15:00", "Write the docking notes", width)),
+        WidgetType::Notes => {
+            let size = if narrow || compact { 14.0 } else { 16.0 };
+            Column::new()
+                .gap(gap)
+                .child(
+                    Text::new("→  Prototype the docking flow")
+                        .size(size)
+                        .wrap(WrapMode::Word),
+                )
+                .child(
+                    Text::new("→  Keep the canvas calm")
+                        .size(size)
+                        .wrap(WrapMode::Word),
+                )
+                .child(
+                    Text::new("→  Send the Friday field note")
+                        .size(size)
+                        .wrap(WrapMode::Word),
+                )
+                .child(
+                    Text::new("→  Book the train for Thursday")
+                        .size(size)
+                        .wrap(WrapMode::Word),
+                )
+                .child(Divider::new())
+                .child(caption("Pinned", 12.0))
+                .child(
+                    Text::new(
+                        "Docking should feel like moving paper on a desk: no surprises, no modes.",
+                    )
+                    .size(size)
+                    .wrap(WrapMode::Word),
+                )
+        }
         WidgetType::Weather => Column::new()
-            .gap(12.0)
+            .gap(gap)
             .child(
                 Row::new()
                     .gap(18.0)
                     .align(Align::Center)
-                    .child(Text::new("18°").size(52.0))
-                    .child(
-                        Column::new()
-                            .gap(2.0)
-                            .child(Text::new("BERLIN").size(12.0))
-                            .child(Text::new("Clear, soft wind").size(15.0)),
-                    ),
+                    .child(Text::new("18°").size(if compact { 40.0 } else { 52.0 }))
+                    .child(caption("High 18° · Low 12°", 13.0)),
             )
             .child(
                 BarChart::new([12.0, 14.0, 17.0, 18.0, 16.0, 13.0])
-                    .title("Today's temperature")
-                    .size(chart_width, content_height)
+                    .title("Temperature through the day")
+                    .axes(true)
+                    .labels(["6h", "9h", "12h", "15h", "18h", "21h"])
+                    .unit("°C")
+                    .tooltips(true)
+                    .size(width, chart_height(if compact { 48.0 } else { 62.0 }))
                     .color(CYAN)
                     .baseline(false),
             ),
         WidgetType::Agent => Column::new()
-            .gap(12.0)
-            .child(
-                Row::new()
-                    .gap(8.0)
-                    .align(Align::Center)
-                    .child(Badge::new("READY"))
-                    .child(Text::new("LOCAL WORKSPACE AGENT").size(11.0)),
-            )
+            .gap(gap)
             .child(
                 Text::new("What should we build next?")
-                    .size(if narrow { 22.0 } else { 30.0 })
+                    .size(if narrow || compact { 20.0 } else { 26.0 })
                     .wrap(WrapMode::Word),
             )
-            .child(
-                Text::new(
-                    "Describe a change, ask for a codebase tour, or hand off a failing test.",
-                )
-                .size(13.0)
-                .wrap(WrapMode::Word),
-            )
-            .child(Divider::new())
-            .child(Text::new("No task running · context is ready").size(12.0)),
+            .child(caption(
+                "Describe a change, ask for a codebase tour, or hand off a failing test.",
+                13.0,
+            )),
         WidgetType::Terminal => Column::new()
-            .gap(10.0)
-            .child(Text::new("$ cargo test --workspace").size(15.0))
-            .child(Text::new("   Finished test profile").size(13.0))
-            .child(Text::new("   195 passed · 0 failed").size(13.0))
-            .child(Divider::new())
-            .child(Text::new("$ _").size(15.0)),
+            .gap(if compact { 4.0 } else { 8.0 })
+            .child(Text::new("$ cargo test --workspace").size(14.0))
+            .child(caption("   Finished test profile", 13.0))
+            .child(caption("   195 passed · 0 failed", 13.0))
+            .child(Text::new("$ _").size(14.0)),
     };
 
     Column::new()
-        .width(width - 36.0)
-        .gap(15.0)
+        .width(width)
+        .gap(gap)
         .child(header)
         .child(Divider::new())
         .child(body)
@@ -339,7 +374,7 @@ pub(crate) fn pane_view(
     for tab_id in &pane.tabs {
         let tab = tab_by_id(state, *tab_id);
         let (id, pane_id, before_id) = (tab.id, pane.id, tab.id);
-        let label = format!("{} {}", tab.widget.marker(), tab.title);
+        let label = tab.title.clone();
         let select_runtime = runtime.clone();
         let drag_start_runtime = runtime.clone();
         let drag_end_runtime = runtime.clone();
@@ -368,61 +403,64 @@ pub(crate) fn pane_view(
                 }),
         );
     }
-    let agent_pane = pane.id;
-    let terminal_pane = pane.id;
-    let agent_runtime = runtime.clone();
-    let terminal_runtime = runtime.clone();
-    tabs = tabs.trailing(
-        Row::new()
-            .gap(2.0)
-            .align(Align::Center)
-            .child(
-                Button::new("+ AGENT")
-                    .appearance(ButtonAppearance::Ghost)
-                    .on_click(move || {
-                        add_widget_to_pane(&agent_runtime, WidgetType::Agent, Some(agent_pane));
-                    }),
-            )
-            .child(
-                Button::new("+ TERMINAL")
-                    .appearance(ButtonAppearance::Ghost)
-                    .on_click(move || {
-                        add_widget_to_pane(
-                            &terminal_runtime,
-                            WidgetType::Terminal,
-                            Some(terminal_pane),
-                        );
-                    }),
-            ),
-    );
-    if width < 360.0 {
-        tabs = tabs.wrap();
-    }
-
     let active = tab_by_id(state, pane.active);
-    let compact = state.compact || height < 390.0;
+    let mut add_menu = ContextMenu::new();
+    for widget in [
+        WidgetType::Pulse,
+        WidgetType::Focus,
+        WidgetType::Notes,
+        WidgetType::Weather,
+        WidgetType::Agent,
+        WidgetType::Terminal,
+    ] {
+        let (add_runtime, pane_id) = (runtime.clone(), pane.id);
+        add_menu = add_menu.item(ContextMenuItem::new(widget.title()).on_select(move || {
+            add_widget_to_pane(&add_runtime, widget, Some(pane_id));
+        }));
+    }
+    tabs = tabs.trailing(
+        Button::new(format!("Add a widget to the {} pane", active.title))
+            .appearance(ButtonAppearance::Ghost)
+            .display("+")
+            .text_size(20.0)
+            .width(36.0)
+            .height(36.0)
+            .tooltip("Add a widget to this pane")
+            .menu(add_menu),
+    );
+
+    let compact = state.compact;
     let show_tab_bar = !state.hide_single_tab_bars || pane.tabs.len() != 1;
+    let padding = if compact { 10.0 } else { 18.0 };
+    let inner_width = width - padding * 2.0;
     let tab_row = Row::new()
-        .width(width - 36.0)
+        .width(inner_width)
         .gap(8.0)
         .align(Align::Center)
         .child(tabs);
-    let mut pane_content = Column::new().width(width - 36.0).gap(14.0);
+    let gap = if compact { 6.0 } else { 14.0 };
+    let mut pane_content = Column::new().width(inner_width).gap(gap);
     if show_tab_bar {
         pane_content = pane_content.child(tab_row);
     }
+    let scroll_height =
+        (height - padding * 2.0 - if show_tab_bar { 40.0 + gap } else { 0.0 }).max(100.0);
     pane_content = pane_content.child(
         Scroll::new()
-            .size(
-                width - 36.0,
-                (height - if show_tab_bar { 92.0 } else { 54.0 }).max(100.0),
-            )
-            .child(widget_body(&active, width, compact)),
+            .label(format!("{} pane", active.title))
+            .scrollbar(true)
+            .size(inner_width, scroll_height)
+            .child(widget_body(
+                &active,
+                inner_width - 14.0,
+                scroll_height,
+                compact,
+            )),
     );
     let mut pane_frame =
         Stack::new()
             .size(width, height)
-            .child(framed(width, height, PANEL, pane_content));
+            .child(framed(width, height, PANEL, padding, pane_content));
     if !show_tab_bar {
         let (drag_tab, drag_name) = (active.id, format!("Move {} pane", active.title));
         let drag_start_runtime = runtime.clone();

@@ -9,11 +9,12 @@ use clap::{Parser, ValueEnum};
 use schnellui::a11y::{self, to_access_id, A11yNodeDump, Role};
 use schnellui::accesskit_action::{Action, ActionData, ActionRequest};
 use schnellui::accesskit_reexport::TreeId;
-use schnellui::scene::{Color, Primitive, Rect, Scene, Size, WidgetId, WidgetKind};
+use schnellui::scene::{Color, Primitive, Rect, Size, WidgetId, WidgetKind};
 use schnellui::testing::find_by_role_name;
 use schnellui::widgets::{
-    Align, Badge, Button, Checkbox, Column, Divider, Flex, Justify, Link, Pad, ProgressBar, Row,
-    Scroll, Shape, Stack, Tab, TabBar, Text, TextInput, Theme, View,
+    Align, Badge, Button, ButtonAppearance, Checkbox, Column, Divider, Flex, Justify, Pad,
+    ProgressBar, Row, Scroll, Shape, Stack, Tab, TabBar, Text, TextInput, Theme, ThemeProvider,
+    View,
 };
 use schnellui::{App, Context, State};
 use strum::IntoEnumIterator;
@@ -25,21 +26,36 @@ const TODO_THEME: Theme = Theme {
     surface_muted: Color::rgb(0xf2, 0xe8, 0xd3),
     separator: Color::rgb(0xc9, 0xb9, 0x9d),
     outline: Color::rgb(0x24, 0x28, 0x23),
-    accent: Color::rgb(0xd9, 0x54, 0x35),
+    // Deep enough for the cream button labels to reach 4.5:1.
+    accent: Color::rgb(0xc0, 0x45, 0x2b),
     on_accent: Color::rgb(0xff, 0xfb, 0xee),
     selection: Color::rgb(0xf7, 0xdc, 0x72),
     interactions: schnellui::widgets::InteractionStates {
-        hover: schnellui::widgets::InteractionStyle::all(
-            Color::rgba(0xd9, 0x54, 0x35, 0x20),
-            Color::rgb(0x24, 0x28, 0x23),
-            Color::rgb(0xd9, 0x54, 0x35),
-        ),
-        focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0xd9, 0x54, 0x35)),
-        active: schnellui::widgets::InteractionStyle::background(Color::rgb(0xf7, 0xdc, 0x72)),
+        // Hover lays a faint ink wash and press a stronger one; neither
+        // recolours a label, so hover never reads as pressed.
+        hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x24, 0x28, 0x23, 0x22,
+        )),
+        focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0x24, 0x28, 0x23)),
+        active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x24, 0x28, 0x23, 0x3a,
+        )),
     },
-    component_interactions: schnellui::widgets::ComponentInteractions::NONE,
+    component_interactions: schnellui::widgets::ComponentInteractions {
+        // A filled button needs a deeper wash before its change reads.
+        button: Some(schnellui::widgets::InteractionStates {
+            hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x24, 0x28, 0x23, 0x48,
+            )),
+            focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0x24, 0x28, 0x23)),
+            active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x24, 0x28, 0x23, 0x70,
+            )),
+        }),
+        ..schnellui::widgets::ComponentInteractions::NONE
+    },
     text_selection: Color::rgb(0xf6, 0xc9, 0x79),
-    disabled: Color::rgb(0xc7, 0xbc, 0xa8),
+    disabled: Color::rgb(0xec, 0xe3, 0xcf),
     positive: Color::rgb(0x1d, 0x70, 0x5d),
     attention: Color::rgb(0xf2, 0xb8, 0x44),
     media: Color::rgb(0xdc, 0xd0, 0xba),
@@ -50,6 +66,17 @@ const TODO_THEME: Theme = Theme {
         frame: 1.0,
         shadow: 3.0,
     },
+};
+
+/// The height of the task entry and its Add button, so they line up.
+const ENTRY_HEIGHT: f32 = 40.0;
+/// A task row leaves a gutter at the list's right edge for the scrollbar.
+const TASK_ROW_WIDTH: f32 = 516.0;
+
+/// A finished task's words: the board theme with muted ink.
+const DONE_THEME: Theme = Theme {
+    text: Color::rgb(0x6b, 0x67, 0x5c),
+    ..TODO_THEME
 };
 
 struct BoardBackground;
@@ -162,6 +189,8 @@ enum Filter {
 struct TodoState {
     tasks: Vec<Task>,
     draft: String,
+    /// Set by adding a task, so the next mount scrolls the list to it.
+    reveal_end: bool,
     next_id: u64,
     filter: Filter,
 }
@@ -212,15 +241,12 @@ impl TodoRuntime {
                     },
                 ],
                 draft: String::new(),
+                reveal_end: false,
                 next_id: 6,
                 filter: Filter::All,
             },
             pending_remount: false,
         }))
-    }
-
-    fn read<R>(&self, read: impl FnOnce(&TodoState) -> R) -> R {
-        self.0.read(|state| read(&state.todo))
     }
 
     fn update<R>(&self, update: impl FnOnce(&mut TodoState) -> R) -> R {
@@ -250,20 +276,48 @@ fn tasks_for_filter(state: &TodoState) -> Vec<Task> {
         .collect()
 }
 
+/// Adds the drafted task, as the Add task button and Enter in the field do.
+fn add_draft(runtime: &TodoRuntime) {
+    let added = runtime.update(|store| {
+        let title = store.draft.trim().to_string();
+        if title.is_empty() {
+            return false;
+        }
+        let id = store.next_id;
+        store.next_id += 1;
+        store.tasks.push(Task {
+            id,
+            title,
+            area: "INBOX".into(),
+            done: false,
+        });
+        store.draft.clear();
+        store.reveal_end = true;
+        true
+    });
+    if added {
+        runtime.request_remount();
+    }
+}
+
 fn select_filter(runtime: &TodoRuntime, filter: Filter) {
     runtime.update(|store| store.filter = filter);
     runtime.request_remount();
 }
 
 fn todo_view(runtime: TodoRuntime) -> impl View {
-    let state = runtime.read(Clone::clone);
+    let state = runtime.update(|store| {
+        let state = store.clone();
+        store.reveal_end = false;
+        state
+    });
     let completed = state.tasks.iter().filter(|task| task.done).count();
     let open = state.tasks.len() - completed;
     let total = state.tasks.len();
     let visible_tasks = tasks_for_filter(&state);
     let visible_count = visible_tasks.len();
 
-    let mut task_list = Column::new().gap(9.0).width(540.0);
+    let mut task_list = Column::new().gap(6.0).width(TASK_ROW_WIDTH);
     if visible_tasks.is_empty() {
         task_list = task_list
             .child(Text::new("NOTHING HERE — A RARE AND EXCELLENT SIGHT.").size(12.0))
@@ -274,75 +328,77 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
         let remove_id = task.id;
         let toggle_runtime = runtime.clone();
         let remove_runtime = runtime.clone();
+        let title = Column::new()
+            .gap(2.0)
+            .child(Text::new(task.title.clone()).size(16.0))
+            .child(
+                Text::new(if task.done {
+                    "FINISHED / NICE WORK"
+                } else {
+                    "READY WHEN YOU ARE"
+                })
+                .size(11.0),
+            );
+        // A finished task steps back: its words take the muted ink.
+        let title: Box<dyn View> = if task.done {
+            Box::new(ThemeProvider::new(DONE_THEME, title))
+        } else {
+            Box::new(title)
+        };
         task_list = task_list.child(
             Column::new()
                 .gap(8.0)
-                .width(540.0)
+                .width(TASK_ROW_WIDTH)
                 .child(
                     Row::new()
-                        .width(540.0)
+                        .width(TASK_ROW_WIDTH)
                         .gap(12.0)
                         .align(Align::Center)
-                        .child(Checkbox::new(task.done).on_toggle(move |done| {
-                            toggle_runtime.update(|store| {
-                                if let Some(task) =
-                                    store.tasks.iter_mut().find(|task| task.id == toggle_id)
-                                {
-                                    task.done = done;
-                                }
-                            });
-                            toggle_runtime.request_remount();
-                        }))
                         .child(
-                            Column::new()
-                                .gap(2.0)
-                                .child(Text::new(task.title).size(16.0))
-                                .child(
-                                    Text::new(if task.done {
-                                        "FINISHED / NICE WORK"
-                                    } else {
-                                        "READY WHEN YOU ARE"
-                                    })
-                                    .size(10.0),
-                                ),
+                            Checkbox::new(task.done)
+                                .name(format!("Complete {}", task.title))
+                                .on_toggle(move |done| {
+                                    toggle_runtime.update(|store| {
+                                        if let Some(task) =
+                                            store.tasks.iter_mut().find(|task| task.id == toggle_id)
+                                        {
+                                            task.done = done;
+                                        }
+                                    });
+                                    toggle_runtime.request_remount();
+                                }),
                         )
+                        .child(title)
                         .child(Flex::new().grow(1.0))
                         .child(Badge::new(task.area))
-                        .child(Link::new("remove").on_click(move || {
-                            remove_runtime
-                                .update(|store| store.tasks.retain(|task| task.id != remove_id));
-                            remove_runtime.request_remount();
-                        })),
+                        .child(
+                            Button::new(format!("Remove {}", task.title))
+                                .display("Remove")
+                                .appearance(ButtonAppearance::Outline)
+                                .height(30.0)
+                                .text_size(13.0)
+                                .on_click(move || {
+                                    remove_runtime.update(|store| {
+                                        store.tasks.retain(|task| task.id != remove_id)
+                                    });
+                                    remove_runtime.request_remount();
+                                }),
+                        ),
                 )
                 .child(Divider::new()),
         );
     }
 
     let add_runtime = runtime.clone();
-    let add_button = Button::new("Add task").on_click(move || {
-        let added = add_runtime.update(|store| {
-            let title = store.draft.trim().to_string();
-            if title.is_empty() {
-                return false;
-            }
-            let id = store.next_id;
-            store.next_id += 1;
-            store.tasks.push(Task {
-                id,
-                title,
-                area: "INBOX".into(),
-                done: false,
-            });
-            store.draft.clear();
-            true
-        });
-        if added {
-            add_runtime.request_remount();
-        }
-    });
+    // The button's height includes its 3px block shadow.
+    let add_button = Button::new("Add task")
+        .height(ENTRY_HEIGHT + TODO_THEME.shape.shadow)
+        .on_click(move || add_draft(&add_runtime));
+    let submit_runtime = runtime.clone();
 
     let clear_runtime = runtime.clone();
     let clear_button = Button::new("Clear completed")
+        .appearance(ButtonAppearance::Outline)
         .disabled(completed == 0)
         .on_click(move || {
             clear_runtime.update(|store| store.tasks.retain(|task| !task.done));
@@ -398,14 +454,18 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
             Text::new("Make it clear.\nMake it small.\nMake it done.")
                 .size(15.0)
                 .wrap(schnellui::widgets::WrapMode::Word),
-        )
-        .child(Badge::new(filter_note));
+        );
 
-    let task_panel = Column::new()
-        .width(540.0)
-        .gap(10.0)
-        .child(filters)
-        .child(Scroll::new().size(540.0, 268.0).child(task_list));
+    let task_panel = Column::new().width(540.0).gap(10.0).child(filters).child(
+        Scroll::new()
+            .size(540.0, 304.0)
+            .label("Tasks")
+            .scrollbar(true)
+            // A task just added lands at the end of the list: show it.
+            .follow_end(state.reveal_end)
+            // Room for the checkbox focus ring at the list edge.
+            .child(Pad::all(4.0).child(task_list)),
+    );
 
     let panel = Column::new()
         .width(772.0)
@@ -426,7 +486,7 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
                         .gap(4.0)
                         .align(Align::End)
                         .child(Text::new("NO. 025").size(11.0))
-                        .child(Badge::new(format!("{total} TASKS / {open} OPEN"))),
+                        .child(Text::new(format!("{open} OPEN  ·  {total} IN ALL")).size(12.0)),
                 ),
         )
         .child(Divider::new())
@@ -437,10 +497,13 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
                 .align(Align::Center)
                 .child(
                     TextInput::new(state.draft)
-                        .placeholder("Add a next step…")
+                        .hint("Add a next step…")
+                        .width(360.0)
+                        .height(ENTRY_HEIGHT)
                         .on_input(move |value| {
                             runtime.update(|store| store.draft = value.to_string())
-                        }),
+                        })
+                        .on_submit(move || add_draft(&submit_runtime)),
                 )
                 .child(add_button),
         )
@@ -489,42 +552,7 @@ fn mount_todo(runtime: TodoRuntime, width: u32, height: u32, scale: f32) -> App 
         scale,
     );
     app.set_clear_color(TODO_THEME.page);
-    label_task_controls(&runtime, &mut app);
     app
-}
-
-fn label_task_controls(runtime: &TodoRuntime, app: &mut App) {
-    fn collect(
-        scene: &Scene,
-        id: WidgetId,
-        checkboxes: &mut Vec<WidgetId>,
-        removes: &mut Vec<WidgetId>,
-    ) {
-        if let Some(a11y) = scene.a11y(id) {
-            if a11y.role == Role::CheckBox.as_u16() {
-                checkboxes.push(id);
-            }
-            if a11y.role == Role::Link.as_u16() && a11y.name.as_deref() == Some("remove") {
-                removes.push(id);
-            }
-        }
-        if let Some(node) = scene.node(id) {
-            for &child in &node.children {
-                collect(scene, child, checkboxes, removes);
-            }
-        }
-    }
-
-    let tasks = runtime.read(tasks_for_filter);
-    let mut checkboxes = Vec::new();
-    let mut removes = Vec::new();
-    if let Some(root) = app.scene().root() {
-        collect(app.scene(), root, &mut checkboxes, &mut removes);
-    }
-    for ((checkbox, remove), task) in checkboxes.into_iter().zip(removes).zip(tasks) {
-        app.scene_mut().a11y_mut(checkbox).name = Some(format!("Complete {}", task.title));
-        app.scene_mut().a11y_mut(remove).name = Some(format!("Remove {}", task.title));
-    }
 }
 
 fn click(app: &mut App, role: Role, name: &str) {
@@ -697,7 +725,8 @@ fn main() -> ExitCode {
     };
     if cli.windowed || cli.headless_windowed {
         let (width, height, scale) = (cli.width, cli.height, cli.scale);
-        let (runtime, app) = scenario_app(scenario, width, height, scale);
+        let (runtime, mut app) = scenario_app(scenario, width, height, scale);
+        app.set_escape_exits(true);
         let remount_runtime = runtime.clone();
         return match app.run_windowed_with("todo", move || {
             remount_runtime

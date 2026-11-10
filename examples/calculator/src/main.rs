@@ -14,12 +14,40 @@ use schnellui::accesskit_reexport::TreeId;
 use schnellui::scene::Color;
 use schnellui::signal::{create_signal, Signal};
 use schnellui::testing::find_by_role_name;
-use schnellui::view;
-use schnellui::widgets::{Shape, Theme, View};
-use schnellui::App;
+use schnellui::widgets::{
+    Align, Button, Column, Divider, Justify, Row, Shape, Text, Theme, ThemeProvider, View, WrapMode,
+};
+use schnellui::{App, Shortcut};
 use strum::IntoEnumIterator;
 
-const KEY_WIDTH: f32 = 64.0;
+/// The most characters the readout shows before it would overflow.
+const MAX_DIGITS: usize = 12;
+const KEY_WIDTH: f32 = 72.0;
+const KEY_HEIGHT: f32 = 52.0;
+const KEY_GAP: f32 = 10.0;
+/// Four keys and three gaps.
+const PANEL_WIDTH: f32 = 4.0 * KEY_WIDTH + 3.0 * KEY_GAP;
+
+/// Keyboard focus: 6.1:1 on the page, apart from every key colour.
+const FOCUS: Color = Color::rgb(0x1f, 0x4f, 0xb0);
+/// The error notice under the readout: 5.9:1 on the page.
+const ERROR: Color = Color::rgb(0x9e, 0x2a, 0x14);
+
+/// The dark function keys answer hover by lightening: a darker step would not
+/// show on near-black.
+const LIGHTEN_ON_HOVER: schnellui::widgets::ComponentInteractions =
+    schnellui::widgets::ComponentInteractions {
+        button: Some(schnellui::widgets::InteractionStates {
+            hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0xff, 0xff, 0xff, 0x38,
+            )),
+            focus: schnellui::widgets::InteractionStyle::border(FOCUS),
+            active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x20, 0x1d, 0x18, 0x4c,
+            )),
+        }),
+        ..schnellui::widgets::ComponentInteractions::NONE
+    };
 
 const CALCULATOR_THEME: Theme = Theme {
     text: Color::rgb(0x20, 0x1d, 0x18),
@@ -28,17 +56,21 @@ const CALCULATOR_THEME: Theme = Theme {
     surface_muted: Color::rgb(0xe8, 0xe0, 0xcf),
     separator: Color::rgb(0x8c, 0x82, 0x72),
     outline: Color::rgb(0x20, 0x1d, 0x18),
-    accent: Color::rgb(0xe3, 0x5d, 0x35),
+    // Deep enough that the paper-coloured key labels reach 4.5:1.
+    accent: Color::rgb(0xc2, 0x46, 0x1f),
     on_accent: Color::rgb(0xff, 0xfc, 0xf2),
     selection: Color::rgb(0xf5, 0xc7, 0xa9),
     interactions: schnellui::widgets::InteractionStates {
-        hover: schnellui::widgets::InteractionStyle::all(
-            Color::rgba(0xe3, 0x5d, 0x35, 0x20),
-            Color::rgb(0x20, 0x1d, 0x18),
-            Color::rgb(0xe3, 0x5d, 0x35),
-        ),
-        focus: schnellui::widgets::InteractionStyle::border(Color::rgb(0xe3, 0x5d, 0x35)),
-        active: schnellui::widgets::InteractionStyle::background(Color::rgb(0xf5, 0xc7, 0xa9)),
+        // A key under the pointer darkens a step and a pressed key a step
+        // more; neither changes its label, so hover never reads as pressed.
+        hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x20, 0x1d, 0x18, 0x26,
+        )),
+        // The focus ring is blue, a colour no key family wears.
+        focus: schnellui::widgets::InteractionStyle::border(FOCUS),
+        active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+            0x20, 0x1d, 0x18, 0x4c,
+        )),
     },
     component_interactions: schnellui::widgets::ComponentInteractions::NONE,
     text_selection: Color::rgb(0xf0, 0xa9, 0x7c),
@@ -117,9 +149,9 @@ impl Operator {
     fn symbol(self) -> &'static str {
         match self {
             Self::Add => "+",
-            Self::Subtract => "-",
-            Self::Multiply => "x",
-            Self::Divide => "/",
+            Self::Subtract => "−",
+            Self::Multiply => "×",
+            Self::Divide => "÷",
         }
     }
 
@@ -159,7 +191,7 @@ impl Default for CalculatorState {
     fn default() -> Self {
         Self {
             current: "0".into(),
-            history: "READY".into(),
+            history: String::new(),
             lhs: None,
             pending: None,
             replace_current: false,
@@ -192,7 +224,7 @@ impl CalculatorState {
         if self.current == "0" {
             self.current.clear();
         }
-        if self.current.len() < 14 {
+        if self.current.len() < MAX_DIGITS {
             self.current.push(digit);
         }
     }
@@ -307,7 +339,6 @@ impl CalculatorState {
 
     fn show_error(&mut self) {
         self.current = "Error".into();
-        self.history = "CANNOT DIVIDE BY ZERO".into();
     }
 }
 
@@ -315,7 +346,7 @@ fn format_number(value: f64) -> String {
     if value.abs() < 1e-12 {
         return "0".into();
     }
-    if value.fract().abs() < 1e-10 && value.abs() < 1e14 {
+    if value.fract().abs() < 1e-10 && value.abs() < 1e12 {
         return format!("{value:.0}");
     }
     let mut text = format!("{value:.10}");
@@ -324,6 +355,10 @@ fn format_number(value: f64) -> String {
     }
     if text.ends_with('.') {
         text.pop();
+    }
+    if text.len() > MAX_DIGITS {
+        // Too long for the readout: fall back to scientific notation.
+        return format!("{value:.5e}");
     }
     text
 }
@@ -342,95 +377,328 @@ fn calc_action(
     }
 }
 
-/// The calculator's static structure is expressed with `view!`; only the button
-/// actions are factored into a helper so the example keeps the state transition in
-/// one place. The macro lowers this directly to the equivalent typed widget chain.
-fn calculator_view() -> impl View {
-    let state = Rc::new(RefCell::new(CalculatorState::default()));
-    let display = create_signal("0".to_string());
-    let history = create_signal("READY".to_string());
-    let action = |key| calc_action(key, Rc::clone(&state), display, history);
+/// The visual family of a key: digits are light, the functions that edit the
+/// entry are dark, and the operators carry the accent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyKind {
+    Digit,
+    Function,
+    Operator,
+}
 
-    view! {
-        column(fill, align = center, justify = center) {
-            pad(all = 24.0) {
-                column(width = 326.0, gap = 14.0) {
-                    row(justify = space_between, align = center) {
-                        text(size = 12.0) { "S-01 / DESK CALCULATOR" }
-                        badge { "LIVE" }
-                    }
-                    text(size = 28.0) { "MAKE IT COUNT." }
-                    divider
-                    text(size = 12.0, role = Role::Status, align = end, ellipsis) {
-                        (history.get())
-                    }
-                    text(size = 38.0, role = Role::Status, align = end, ellipsis) {
-                        (display.get())
-                    }
-                    divider
-                    row(gap = 10.0) {
-                        button(width = KEY_WIDTH, on:click = action(Key::Clear)) { "AC" }
-                        button(width = KEY_WIDTH, on:click = action(Key::ToggleSign)) { "+/-" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Percent)) { "%" }
-                        button(
-                            width = KEY_WIDTH,
-                            on:click = action(Key::Operator(Operator::Divide))
-                        ) { "/" }
-                    }
-                    row(gap = 10.0) {
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('7'))) { "7" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('8'))) { "8" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('9'))) { "9" }
-                        button(
-                            width = KEY_WIDTH,
-                            on:click = action(Key::Operator(Operator::Multiply))
-                        ) { "x" }
-                    }
-                    row(gap = 10.0) {
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('4'))) { "4" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('5'))) { "5" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('6'))) { "6" }
-                        button(
-                            width = KEY_WIDTH,
-                            on:click = action(Key::Operator(Operator::Subtract))
-                        ) { "-" }
-                    }
-                    row(gap = 10.0) {
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('1'))) { "1" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('2'))) { "2" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('3'))) { "3" }
-                        button(
-                            width = KEY_WIDTH,
-                            on:click = action(Key::Operator(Operator::Add))
-                        ) { "+" }
-                    }
-                    row(gap = 10.0) {
-                        button(width = KEY_WIDTH, on:click = action(Key::Digit('0'))) { "0" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Decimal)) { "." }
-                        button(width = KEY_WIDTH, on:click = action(Key::Backspace)) { "DEL" }
-                        button(width = KEY_WIDTH, on:click = action(Key::Equals)) { "=" }
-                    }
-                    text(size = 11.0) { "TAB TO MOVE / ENTER TO PRESS" }
+/// One keypad key: its accessible name, the glyph painted on it, its family,
+/// the keyboard characters that press it, and what it does.
+struct KeySpec {
+    name: &'static str,
+    glyph: &'static str,
+    kind: KeyKind,
+    typed: &'static [char],
+    key: Key,
+}
+
+const fn spec(
+    name: &'static str,
+    glyph: &'static str,
+    kind: KeyKind,
+    typed: &'static [char],
+    key: Key,
+) -> KeySpec {
+    KeySpec {
+        name,
+        glyph,
+        kind,
+        typed,
+        key,
+    }
+}
+
+const KEYPAD: [[KeySpec; 4]; 5] = [
+    [
+        spec("clear", "AC", KeyKind::Function, &['c', 'C'], Key::Clear),
+        spec(
+            "toggle sign",
+            "+/−",
+            KeyKind::Function,
+            &['n'],
+            Key::ToggleSign,
+        ),
+        spec("percent", "%", KeyKind::Function, &['%'], Key::Percent),
+        spec(
+            "divide",
+            "÷",
+            KeyKind::Operator,
+            &['/', '÷'],
+            Key::Operator(Operator::Divide),
+        ),
+    ],
+    [
+        spec("7", "7", KeyKind::Digit, &['7'], Key::Digit('7')),
+        spec("8", "8", KeyKind::Digit, &['8'], Key::Digit('8')),
+        spec("9", "9", KeyKind::Digit, &['9'], Key::Digit('9')),
+        spec(
+            "multiply",
+            "×",
+            KeyKind::Operator,
+            &['*', 'x', 'X', '×'],
+            Key::Operator(Operator::Multiply),
+        ),
+    ],
+    [
+        spec("4", "4", KeyKind::Digit, &['4'], Key::Digit('4')),
+        spec("5", "5", KeyKind::Digit, &['5'], Key::Digit('5')),
+        spec("6", "6", KeyKind::Digit, &['6'], Key::Digit('6')),
+        spec(
+            "subtract",
+            "−",
+            KeyKind::Operator,
+            &['-', '−'],
+            Key::Operator(Operator::Subtract),
+        ),
+    ],
+    [
+        spec("1", "1", KeyKind::Digit, &['1'], Key::Digit('1')),
+        spec("2", "2", KeyKind::Digit, &['2'], Key::Digit('2')),
+        spec("3", "3", KeyKind::Digit, &['3'], Key::Digit('3')),
+        spec(
+            "add",
+            "+",
+            KeyKind::Operator,
+            &['+'],
+            Key::Operator(Operator::Add),
+        ),
+    ],
+    [
+        spec("0", "0", KeyKind::Digit, &['0'], Key::Digit('0')),
+        spec(
+            "decimal point",
+            ".",
+            KeyKind::Digit,
+            &['.', ','],
+            Key::Decimal,
+        ),
+        spec(
+            "delete",
+            "DEL",
+            KeyKind::Function,
+            &['d', 'D'],
+            Key::Backspace,
+        ),
+        spec("equals", "=", KeyKind::Operator, &['=', '\r'], Key::Equals),
+    ],
+];
+
+/// The dark function keys: the calculator theme with ink as the key fill.
+const FUNCTION_KEY_THEME: Theme = Theme {
+    accent: Color::rgb(0x33, 0x2e, 0x27),
+    on_accent: Color::rgb(0xff, 0xfc, 0xf2),
+    component_interactions: LIGHTEN_ON_HOVER,
+    ..CALCULATOR_THEME
+};
+
+/// The accent operator keys darken a full step under the pointer.
+const OPERATOR_KEY_THEME: Theme = Theme {
+    component_interactions: schnellui::widgets::ComponentInteractions {
+        button: Some(schnellui::widgets::InteractionStates {
+            hover: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x20, 0x1d, 0x18, 0x58,
+            )),
+            focus: schnellui::widgets::InteractionStyle::border(FOCUS),
+            active: schnellui::widgets::InteractionStyle::background(Color::rgba(
+                0x20, 0x1d, 0x18, 0x80,
+            )),
+        }),
+        ..schnellui::widgets::ComponentInteractions::NONE
+    },
+    ..CALCULATOR_THEME
+};
+
+/// The digit keys: paper-coloured, with the same block shadow as the rest.
+const DIGIT_KEY_THEME: Theme = Theme {
+    accent: Color::rgb(0xff, 0xfc, 0xf2),
+    on_accent: Color::rgb(0x20, 0x1d, 0x18),
+    ..CALCULATOR_THEME
+};
+
+/// The pending operator in the readout, in the operator keys' colour.
+const PENDING_THEME: Theme = Theme {
+    text: Color::rgb(0xa8, 0x3a, 0x17),
+    ..CALCULATOR_THEME
+};
+
+/// The error notice.
+const ERROR_THEME: Theme = Theme {
+    text: ERROR,
+    ..CALCULATOR_THEME
+};
+
+/// Secondary text: the expression line and the keyboard hint.
+const MUTED_THEME: Theme = Theme {
+    text: Color::rgb(0x5c, 0x55, 0x4a),
+    ..CALCULATOR_THEME
+};
+
+/// One keypad key, coloured by its family.
+fn key_view(spec: &KeySpec, on_click: impl FnMut() + 'static) -> Box<dyn View> {
+    let button = Button::new(spec.name)
+        .display(spec.glyph)
+        .width(KEY_WIDTH)
+        .height(KEY_HEIGHT)
+        .text_size(if spec.kind == KeyKind::Function {
+            18.0
+        } else {
+            22.0
+        })
+        .on_click(on_click);
+    let theme = match spec.kind {
+        KeyKind::Digit => DIGIT_KEY_THEME,
+        KeyKind::Function => FUNCTION_KEY_THEME,
+        KeyKind::Operator => OPERATOR_KEY_THEME,
+    };
+    Box::new(ThemeProvider::new(theme, button))
+}
+
+/// A full-width row that pushes its text to the right edge, the way a
+/// calculator readout reads.
+fn readout(text: impl View + 'static) -> Row {
+    Row::new()
+        .width(PANEL_WIDTH)
+        .justify(Justify::End)
+        .child(text)
+}
+
+fn calculator_view(
+    state: Rc<RefCell<CalculatorState>>,
+    display: Signal<String>,
+    history: Signal<String>,
+) -> impl View {
+    let mut keypad = Column::new().gap(KEY_GAP);
+    for row in &KEYPAD {
+        let mut keys = Row::new().gap(KEY_GAP);
+        for spec in row {
+            keys = keys.child(key_view(
+                spec,
+                calc_action(spec.key, Rc::clone(&state), display, history),
+            ));
+        }
+        keypad = keypad.child(keys);
+    }
+
+    // The operator waiting for its second operand, shown at the readout's
+    // left edge until the next digit or `=`.
+    let pending = move || {
+        let history = history.get();
+        match history.chars().last() {
+            Some(c @ ('+' | '−' | '×' | '÷')) => c.to_string(),
+            _ => String::new(),
+        }
+    };
+    let screen = Column::new()
+        .width(PANEL_WIDTH)
+        .gap(4.0)
+        .child(readout(ThemeProvider::new(
+            MUTED_THEME,
+            Text::dynamic(move || history.get())
+                .size(16.0)
+                .role(Role::Status),
+        )))
+        .child(
+            Row::new()
+                .width(PANEL_WIDTH)
+                .justify(Justify::SpaceBetween)
+                .align(Align::Center)
+                .child(ThemeProvider::new(
+                    PENDING_THEME,
+                    Text::dynamic(pending).size(30.0).bold(),
+                ))
+                .child(
+                    Text::dynamic(move || display.get())
+                        .size(46.0)
+                        .role(Role::Status),
+                ),
+        )
+        .child(readout(ThemeProvider::new(
+            ERROR_THEME,
+            Text::dynamic(move || {
+                if display.get() == "Error" {
+                    "Can't divide by zero. Press AC to start over.".to_string()
+                } else {
+                    String::new()
                 }
-            }
+            })
+            .size(13.0)
+            .bold()
+            .role(Role::Status),
+        )));
+
+    Column::new()
+        .fill()
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .child(
+            Column::new()
+                .width(PANEL_WIDTH)
+                .gap(14.0)
+                .child(Text::new("Calculator").size(20.0).bold())
+                .child(Divider::new())
+                .child(screen)
+                .child(Divider::new())
+                .child(keypad)
+                .child(ThemeProvider::new(
+                    MUTED_THEME,
+                    Text::new("Keyboard: digits, + − * / and = or Enter. C clears, D deletes.")
+                        .size(12.0)
+                        .wrap(WrapMode::Word),
+                )),
+        )
+}
+
+/// Lets the physical keyboard press the keypad: every character in a key's
+/// `typed` list presses that key.
+fn register_typing(
+    app: &mut App,
+    state: &Rc<RefCell<CalculatorState>>,
+    display: Signal<String>,
+    history: Signal<String>,
+) {
+    for spec in KEYPAD.iter().flatten() {
+        for &c in spec.typed {
+            app.register_shortcut(
+                Shortcut::new(c, false, false, false),
+                calc_action(spec.key, Rc::clone(state), display, history),
+            );
+            // Shifted symbols (+ * % on most layouts) arrive with Shift held.
+            app.register_shortcut(
+                Shortcut::new(c, false, true, false),
+                calc_action(spec.key, Rc::clone(state), display, history),
+            );
         }
     }
 }
 
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App {
+    let state = Rc::new(RefCell::new(CalculatorState::default()));
+    let display = create_signal("0".to_string());
+    let history = create_signal(String::new());
     let mut app = App::mount_with_theme_size_scaled(
         CALCULATOR_THEME,
-        calculator_view(),
+        calculator_view(Rc::clone(&state), display, history),
         width,
         height,
         scale,
     );
     app.set_clear_color(CALCULATOR_THEME.page);
+    register_typing(&mut app, &state, display, history);
     match scenario {
         Scenario::Ready => {}
-        Scenario::Calculated => drive(&mut app, &["1", "2", ".", "5", "x", "4", "="]),
-        Scenario::Percentage => drive(&mut app, &["2", "0", "0", "+", "1", "0", "%", "="]),
-        Scenario::DivideByZero => drive(&mut app, &["8", "/", "0", "="]),
+        Scenario::Calculated => drive(
+            &mut app,
+            &["1", "2", "decimal point", "5", "multiply", "4", "equals"],
+        ),
+        Scenario::Percentage => drive(
+            &mut app,
+            &["2", "0", "0", "add", "1", "0", "percent", "equals"],
+        ),
+        Scenario::DivideByZero => drive(&mut app, &["8", "divide", "0", "equals"]),
     }
     app
 }
@@ -462,14 +730,14 @@ fn find_status_value<'a>(node: &'a A11yNodeDump, needle: &str) -> Option<&'a str
 fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     let tree = a11y::dump_tree(app.scene());
     let root = tree.root.as_ref().ok_or("empty a11y tree")?;
-    find_by_role_name(&tree, "button", Some("=")).ok_or("missing equals key")?;
+    find_by_role_name(&tree, "button", Some("equals")).ok_or("missing equals key")?;
     match scenario {
         Scenario::Ready => find_status_value(root, "0")
             .map(|_| ())
             .ok_or_else(|| "display is not zero".into()),
         Scenario::Calculated => {
             find_status_value(root, "50").ok_or("display is not 50")?;
-            find_status_value(root, "12.5 x 4 =").ok_or("calculation history is missing")?;
+            find_status_value(root, "12.5 × 4 =").ok_or("calculation history is missing")?;
             Ok(())
         }
         Scenario::Percentage => {
@@ -479,7 +747,8 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
         }
         Scenario::DivideByZero => {
             find_status_value(root, "Error").ok_or("error display is missing")?;
-            find_status_value(root, "CANNOT DIVIDE BY ZERO").ok_or("error context is missing")?;
+            find_status_value(root, "Can't divide by zero").ok_or("error context is missing")?;
+            find_status_value(root, "8 ÷ 0 =").ok_or("error history is missing")?;
             Ok(())
         }
     }
@@ -538,9 +807,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if cli.windowed || cli.headless_windowed {
-        return match scenario_app(scenario, cli.width, cli.height, cli.scale)
-            .run_windowed("calculator")
-        {
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
+        return match app.run_windowed("calculator") {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("windowed run failed: {error}");

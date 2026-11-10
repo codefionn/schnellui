@@ -19,7 +19,8 @@ use schnellui::accesskit_reexport::TreeId;
 use schnellui::scene::Color;
 use schnellui::testing::{assert_value_contains, find_by_role_name, SnapshotConfig};
 use schnellui::widgets::{
-    Column, EditKey, Pad, RichDoc, RichSpan, RichText, Row, SpanStyle, TextArea, View,
+    Align, Column, EditKey, Pad, RichDoc, RichSpan, RichText, Row, SpanStyle, Text, TextArea,
+    Theme, ThemeProvider, View, WrapMode, DEFAULT_THEME,
 };
 use schnellui::App;
 use strum::IntoEnumIterator;
@@ -32,7 +33,13 @@ use strum::IntoEnumIterator;
 const KEYWORD: Color = Color::rgb(0x88, 0x33, 0xaa);
 const STRING: Color = Color::rgb(0x22, 0x77, 0x33);
 const NUMBER: Color = Color::rgb(0x0a, 0x66, 0xaa);
-const COMMENT: Color = Color::rgb(0x88, 0x88, 0x88);
+/// 5.6:1 on the code surface, so comments stay readable under a selection.
+const COMMENT: Color = Color::rgb(0x5a, 0x61, 0x6c);
+/// Markup markers (`#`, `-`, `>`) in the source editor: quieter than the text
+/// they introduce but still 5.6:1 on white.
+const MARKER: Color = Color::rgb(0x5a, 0x61, 0x6c);
+/// Pane captions above the editor and the preview.
+const CAPTION: Color = Color::rgb(0x55, 0x5b, 0x66);
 
 const RUST_KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "pub", "if", "else", "match", "return", "struct", "impl", "use", "for",
@@ -105,6 +112,32 @@ fn highlight_line(line: &str) -> Vec<RichSpan> {
     }
     flush(&mut plain, &mut spans);
     spans
+}
+
+/// Colors the miniature markup in the source editor: block markers muted,
+/// heading text bold, everything else plain.
+fn highlight_markup(src: &str) -> Vec<Vec<RichSpan>> {
+    src.lines()
+        .map(|line| {
+            for marker in ["## ", "# ", "- ", "> "] {
+                if let Some(rest) = line.strip_prefix(marker) {
+                    let rest_style = if marker.starts_with('#') {
+                        SpanStyle {
+                            bold: true,
+                            ..SpanStyle::PLAIN
+                        }
+                    } else {
+                        SpanStyle::PLAIN
+                    };
+                    return vec![
+                        RichSpan::token(marker, MARKER),
+                        RichSpan::new(rest, rest_style),
+                    ];
+                }
+            }
+            vec![RichSpan::plain(line)]
+        })
+        .collect()
 }
 
 /// The example's miniature markup (the implementor-side "format"): `# ` / `## `
@@ -217,7 +250,10 @@ const EDITOR_SOURCE: &str = r#"fn main() {
     println!("{greeting}: {}", 42);
 }"#;
 
-const PREVIEW_SOURCE: &str = "# Live preview\n\nEdit the source, watch the document.\n\n- editor on the left\n- viewer on the right\n\n> driven through AccessKit";
+const PREVIEW_SOURCE: &str = "# Trip notes\n\nType on the left; the page on the right follows as you write.\n\n## Packing\n\n- tide tables\n- spare batteries\n- a second map\n\n> Leave every site as you found it.";
+
+/// The source the `preview` scenario drives in through AccessKit `SetValue`.
+const DRIVEN_SOURCE: &str = "# Driven\n\nThis body arrived via SetValue and the preview re-flowed.\n\n## Checklist\n\n- headings\n- bullet lists\n\n> Quotes render as quotes.";
 
 // ---------------------------------------------------------------------------
 // scenarios (SOUL §7.1 enumerable table)
@@ -257,7 +293,7 @@ struct Cli {
     scenario: Option<Scenario>,
     #[arg(long)]
     out: Option<String>,
-    #[arg(long, default_value_t = 560)]
+    #[arg(long, default_value_t = 880)]
     width: u32,
     #[arg(long, default_value_t = 640)]
     height: u32,
@@ -293,34 +329,74 @@ struct Cli {
     headless_windowed: bool,
 }
 
-fn document_view() -> impl View {
-    Pad::all(16.0).child(RichText::new(showcase_doc()))
+/// Captions in a muted ink (6.6:1 on white).
+const CAPTION_THEME: Theme = Theme {
+    text: CAPTION,
+    ..DEFAULT_THEME
+};
+
+/// A small, quiet label above a pane.
+fn pane_caption(text: &'static str) -> impl View {
+    ThemeProvider::new(
+        CAPTION_THEME,
+        Text::new(text).size(12.0).bold().wrap(WrapMode::Word),
+    )
 }
 
-fn editor_view() -> impl View {
-    Pad::all(16.0).child(
+fn document_view() -> impl View {
+    Pad::all(24.0).child(RichText::new(showcase_doc()))
+}
+
+fn editor_view(width: f32) -> impl View {
+    Pad::all(24.0).child(
         Column::new()
+            .width(width - 48.0)
             .gap(8.0)
             .child(RichText::new(RichDoc::new().heading(2, ["Source editor"])))
+            .child(pane_caption(
+                "main.rs · keywords, strings, numbers and comments are colored by the example",
+            ))
             .child(
                 TextArea::new(EDITOR_SOURCE)
                     .placeholder("type some rust")
+                    .size(15.0)
+                    .rows(23)
+                    .wrap(WrapMode::Word)
+                    .line_numbers(1, EDITOR_SOURCE.lines().count(), CAPTION)
                     .highlight(highlight_rust),
             ),
     )
 }
 
-fn preview_view() -> impl View {
+fn preview_view(width: f32) -> impl View {
     let source = schnellui::signal::create_signal(PREVIEW_SOURCE.to_string());
-    Pad::all(16.0).child(
+    let pane = ((width - 48.0 - 24.0) / 2.0).floor();
+    Pad::all(24.0).child(
         Row::new()
-            .gap(16.0)
+            .gap(24.0)
+            .align(Align::Start)
             .child(
-                TextArea::new(PREVIEW_SOURCE)
-                    .placeholder("mini markup source")
-                    .on_input(move |v| source.set(v.to_string())),
+                Column::new()
+                    .width(pane)
+                    .gap(8.0)
+                    .child(pane_caption("MARKUP SOURCE"))
+                    .child(
+                        TextArea::new(PREVIEW_SOURCE)
+                            .placeholder("mini markup source")
+                            .size(15.0)
+                            .rows(25)
+                            .wrap(WrapMode::Word)
+                            .highlight(highlight_markup)
+                            .on_input(move |v| source.set(v.to_string())),
+                    ),
             )
-            .child(RichText::dynamic(move || parse_mini_markup(&source.get()))),
+            .child(
+                Column::new()
+                    .width(pane)
+                    .gap(8.0)
+                    .child(pane_caption("PREVIEW"))
+                    .child(RichText::dynamic(move || parse_mini_markup(&source.get()))),
+            ),
     )
 }
 
@@ -332,7 +408,8 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
     match scenario {
         Scenario::Document => App::mount_with_size_scaled(document_view(), width, height, scale),
         Scenario::Editor => {
-            let mut app = App::mount_with_size_scaled(editor_view(), width, height, scale);
+            let mut app =
+                App::mount_with_size_scaled(editor_view(width as f32), width, height, scale);
             app.frame();
             // focus the editor by role, then edit through the real key path:
             // append a comment line at the end of the source (SOUL §6.3).
@@ -350,7 +427,8 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             app
         }
         Scenario::Preview => {
-            let mut app = App::mount_with_size_scaled(preview_view(), width, height, scale);
+            let mut app =
+                App::mount_with_size_scaled(preview_view(width as f32), width, height, scale);
             app.frame();
             // drive a new source through the inbound AccessKit SetValue path;
             // on_input feeds the signal, the dynamic viewer re-flows (§6.3).
@@ -359,10 +437,7 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
                     action: Action::SetValue,
                     target_tree: TreeId::ROOT,
                     target_node: to_access_id(id),
-                    data: Some(ActionData::Value(
-                        "# Driven\n\nThis body arrived via SetValue.\n\n- and re-flowed live"
-                            .into(),
-                    )),
+                    data: Some(ActionData::Value(DRIVEN_SOURCE.into())),
                 };
                 app.dispatch_action(&req);
             }
@@ -482,7 +557,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if cli.windowed || cli.headless_windowed {
-        let app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         return match app.run_windowed("rich_text") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

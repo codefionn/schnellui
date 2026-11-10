@@ -558,7 +558,8 @@ fn main() -> ExitCode {
     };
     // Opt-in windowed mode (SOUL §8): run the event loop instead of writing a PNG.
     if cli.windowed || cli.headless_windowed {
-        let app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         return match app.run_windowed("layout_gallery") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

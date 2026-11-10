@@ -178,6 +178,7 @@ fn main() -> ExitCode {
     let mut app = App::mount_with_size_scaled(gallery(), cli.width, cli.height, cli.scale);
 
     if cli.windowed || cli.headless_windowed {
+        app.set_escape_exits(true);
         return match app.run_windowed("schnellui md-icons") {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

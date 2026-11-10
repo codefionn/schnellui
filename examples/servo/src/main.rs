@@ -255,6 +255,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let scale = cli.scale;
         let mut last_size = logical_size;
         let mut last_state = browser.borrow().tab(&tab_id).cloned();
+        app.set_escape_exits(true);
         app.run_windowed_with_viewport("schnellui + Servo", move |viewport| {
             let (width, height) = browser_physical_size(viewport, scale);
             let mut browser = live.borrow_mut();

@@ -12,18 +12,38 @@ use clap::{Parser, ValueEnum};
 use schnellui::a11y::{self, to_access_id, A11yNodeDump, A11yTreeDump, Role};
 use schnellui::accesskit_action::{Action, ActionRequest};
 use schnellui::accesskit_reexport::TreeId;
+use schnellui::layout::EdgeInsets;
+use schnellui::scene::Color;
 use schnellui::signal::{create_signal, Signal};
 use schnellui::testing::find_by_role_name;
 use schnellui::theme::FOREST;
 use schnellui::widgets::{
-    Align, Badge, BuildCtx, Button, ButtonAppearance, Column, Divider, GroupedTabList,
-    GroupedTabMode, Justify, Pad, Row, Stack, TabGroup, TabNode, Text, View, WrapMode,
+    Align, BuildCtx, Button, ButtonAppearance, Column, Divider, GroupedTabList, GroupedTabMode,
+    InteractionStates, InteractionStyle, Justify, Pad, Row, Stack, TabGroup, TabNode, Text, Theme,
+    ThemeProvider, View, WrapMode,
 };
 use schnellui::App;
 use schnellui_icons_md::{outlined, MdIcon};
 use strum::IntoEnumIterator;
 
 const PAGE_PADDING: f32 = 24.0;
+
+/// Forest with a firmer hover wash and an ink focus ring, so focus on a
+/// selected (green) row is not another shade of green.
+const NAVIGATOR_THEME: Theme = Theme {
+    interactions: InteractionStates {
+        hover: InteractionStyle::background(Color::rgba(0x1d, 0x2a, 0x22, 0x24)),
+        focus: InteractionStyle::border(Color::rgb(0x1d, 0x2a, 0x22)),
+        active: InteractionStyle::background(Color::rgba(0x1d, 0x2a, 0x22, 0x40)),
+    },
+    ..FOREST
+};
+
+/// Secondary text: captions and metadata (5.2:1 on the page).
+const MUTED_THEME: Theme = Theme {
+    text: FOREST.text_muted,
+    ..NAVIGATOR_THEME
+};
 const NAV_WIDTH: f32 = 224.0;
 
 #[derive(Clone, Copy)]
@@ -40,11 +60,82 @@ enum Branch {
     Archive,
 }
 
+/// Where a top-level page lives: in its group, under Archive, or gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    Active,
+    Archived,
+    Deleted,
+}
+
+/// The pages a user can archive or delete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    Planning,
+    Build,
+    Notes,
+}
+
+impl Page {
+    fn label(self) -> &'static str {
+        match self {
+            Page::Planning => "Planning",
+            Page::Build => "Build",
+            Page::Notes => "Notes",
+        }
+    }
+
+    /// The page and every page nested under it.
+    fn contains(self, name: &str) -> bool {
+        let children: &[&str] = match self {
+            Page::Planning => &["Roadmap", "Research"],
+            Page::Build => &["UI", "Engine"],
+            Page::Notes => &[],
+        };
+        name == self.label() || children.contains(&name)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Pages {
+    planning: Place,
+    build: Place,
+    notes: Place,
+}
+
+impl Pages {
+    const ALL_ACTIVE: Pages = Pages {
+        planning: Place::Active,
+        build: Place::Active,
+        notes: Place::Active,
+    };
+
+    fn place(self, page: Page) -> Place {
+        match page {
+            Page::Planning => self.planning,
+            Page::Build => self.build,
+            Page::Notes => self.notes,
+        }
+    }
+
+    fn with(mut self, page: Page, place: Place) -> Pages {
+        match page {
+            Page::Planning => self.planning = place,
+            Page::Build => self.build = place,
+            Page::Notes => self.notes = place,
+        }
+        self
+    }
+}
+
 #[derive(Clone)]
 struct ExampleState {
     chosen: Signal<String>,
     last_action: Signal<String>,
     branches: Signal<BranchState>,
+    pages: Signal<Pages>,
+    /// The pages before the last archive, restore or delete, for Undo.
+    undo: Signal<Option<Pages>>,
     remount_requested: Rc<Cell<bool>>,
 }
 
@@ -53,13 +144,43 @@ impl ExampleState {
         let open = !scenario.collapsed();
         ExampleState {
             chosen: create_signal(scenario.expected_selected().to_string()),
-            last_action: create_signal("No document action yet".to_string()),
+            last_action: create_signal("Nothing archived or deleted yet".to_string()),
             branches: create_signal(BranchState {
                 planning: open,
                 build: true,
                 archive: open,
             }),
+            pages: create_signal(Pages::ALL_ACTIVE),
+            undo: create_signal(None),
             remount_requested: Rc::new(Cell::new(false)),
+        }
+    }
+
+    /// Archives, restores or deletes `page`, keeping the old layout for Undo.
+    /// A deleted page that was open hands the reading pane back to Overview.
+    fn move_page(&self, page: Page, place: Place) {
+        let before = self.pages.get();
+        self.pages.set(before.with(page, place));
+        self.undo.set(Some(before));
+        let verb = match place {
+            Place::Active => "Restored",
+            Place::Archived => "Archived",
+            Place::Deleted => "Deleted",
+        };
+        self.last_action.set(format!("{verb} {}", page.label()));
+        if place == Place::Deleted && page.contains(&self.chosen.get()) {
+            self.chosen.set("Overview".to_string());
+        }
+        self.remount_requested.set(true);
+    }
+
+    /// Puts the pages back as they were before the last change.
+    fn undo(&self) {
+        if let Some(before) = self.undo.get() {
+            self.pages.set(before);
+            self.undo.set(None);
+            self.last_action.set("Undone".to_string());
+            self.remount_requested.set(true);
         }
     }
 
@@ -107,32 +228,6 @@ impl Scenario {
             Scenario::Tree => "tree",
             Scenario::Collapsed => "collapsed",
             Scenario::NestedSelected => "nested_selected",
-        }
-    }
-
-    fn badge(self) -> &'static str {
-        match self {
-            Scenario::Flat => "FLAT LIST",
-            Scenario::Tree => "TREE / OPEN",
-            Scenario::Collapsed => "TREE / FOLDED",
-            Scenario::NestedSelected => "TREE / DRIVEN",
-        }
-    }
-
-    fn description(self) -> &'static str {
-        match self {
-            Scenario::Flat => {
-                "The hierarchy is retained in configuration but presented as one depth-first list."
-            }
-            Scenario::Tree => {
-                "Parent and child tabs keep their relationships, with a consistent indented edge."
-            }
-            Scenario::Collapsed => {
-                "Planning and Archive are folded; their tabs remain configured but are not built."
-            }
-            Scenario::NestedSelected => {
-                "An AccessKit Click selected Engine, clearing Overview across groups and depths."
-            }
         }
     }
 
@@ -263,111 +358,237 @@ impl View for IconAction {
 
 fn icon_action(
     icon: MdIcon,
-    label: &'static str,
-    message: &'static str,
+    label: String,
     state: ExampleState,
+    page: Page,
+    place: Place,
 ) -> IconAction {
-    let last_action = state.last_action;
     IconAction {
-        icon: icon.size(18.0).color(FOREST.text),
-        button: Button::new(label)
+        icon: icon.size(18.0).color(FOREST.text_muted),
+        button: Button::new(label.clone())
             .icon_only()
             .tooltip(label)
             .width(28.0)
             .height(28.0)
             .appearance(ButtonAppearance::Ghost)
-            .on_click(move || last_action.set(message.to_string())),
+            .on_click(move || state.move_page(page, place)),
     }
+}
+
+/// The row actions of a top-level page: Archive and Delete while it is in its
+/// group, Restore once it sits under Archive. Every such page gets the same set.
+fn page_actions(page: Page, state: &ExampleState) -> Vec<IconAction> {
+    let name = page.label();
+    match state.pages.get().place(page) {
+        Place::Active => vec![
+            icon_action(
+                MdIcon::outlined("inventory_2", outlined::ICON_INVENTORY_2),
+                format!("Archive {name}"),
+                state.clone(),
+                page,
+                Place::Archived,
+            ),
+            icon_action(
+                MdIcon::outlined("delete", outlined::ICON_DELETE),
+                format!("Delete {name}"),
+                state.clone(),
+                page,
+                Place::Deleted,
+            ),
+        ],
+        Place::Archived => vec![icon_action(
+            MdIcon::outlined("unarchive", outlined::ICON_UNARCHIVE),
+            format!("Restore {name}"),
+            state.clone(),
+            page,
+            Place::Active,
+        )],
+        Place::Deleted => Vec::new(),
+    }
+}
+
+/// A top-level page's row, with its children and actions.
+fn page_node(page: Page, state: &ExampleState) -> TabNode {
+    let node = match page {
+        Page::Planning => branch(
+            "Planning",
+            Branch::Planning,
+            state.clone(),
+            [
+                selectable("Roadmap", state.clone()),
+                selectable("Research", state.clone()),
+            ],
+        ),
+        Page::Build => branch(
+            "Build",
+            Branch::Build,
+            state.clone(),
+            [
+                selectable("UI", state.clone()),
+                selectable("Engine", state.clone()),
+            ],
+        ),
+        Page::Notes => selectable("Notes", state.clone()),
+    };
+    node.actions(page_actions(page, state))
 }
 
 /// Builds the example's data-driven navigation. Passing a different mode changes
 /// presentation only; groups, tab labels, callbacks, and recursive data stay shared.
 fn project_navigation(scenario: Scenario, state: ExampleState) -> GroupedTabList {
+    let pages = state.pages.get();
+    let in_place = |group: &[Page], place: Place| -> Vec<TabNode> {
+        group
+            .iter()
+            .filter(|page| pages.place(**page) == place)
+            .map(|page| page_node(*page, &state))
+            .collect()
+    };
+    let mut project = TabGroup::new("PROJECT").tab(selectable("Overview", state.clone()));
+    for node in in_place(&[Page::Planning, Page::Build], Place::Active) {
+        project = project.tab(node);
+    }
+    let mut personal = TabGroup::new("PERSONAL");
+    for node in in_place(&[Page::Notes], Place::Active) {
+        personal = personal.tab(node);
+    }
+    let mut archived = in_place(&[Page::Planning, Page::Build, Page::Notes], Place::Archived);
+    archived.push(selectable("2025", state.clone()));
+    archived.push(selectable("2024", state.clone()));
+    personal = personal.tab(branch("Archive", Branch::Archive, state.clone(), archived));
+
     GroupedTabList::new()
         .mode(scenario.mode())
         .group_gap(14.0)
         .tab_gap(2.0)
         .indent(18.0)
-        .group_label_size(11.0)
+        .flat_indent(14.0)
+        .group_label_size(12.0)
         .min_tab_width(NAV_WIDTH)
-        .groups([
-            TabGroup::new("PROJECT")
-                .tab(selectable("Overview", state.clone()))
-                .tab(
-                    branch(
-                        "Planning",
-                        Branch::Planning,
-                        state.clone(),
-                        [
-                            selectable("Roadmap", state.clone()),
-                            selectable("Research", state.clone()),
-                        ],
-                    )
-                    .action(icon_action(
-                        MdIcon::outlined("archive", outlined::ICON_ARCHIVE),
-                        "Archive Planning",
-                        "Archived Planning",
-                        state.clone(),
-                    )),
-                )
-                .tab(branch(
-                    "Build",
-                    Branch::Build,
-                    state.clone(),
-                    [
-                        selectable("UI", state.clone()),
-                        selectable("Engine", state.clone()),
-                    ],
-                )),
-            TabGroup::new("PERSONAL")
-                .tab(selectable("Notes", state.clone()).actions([
-                    icon_action(
-                        MdIcon::outlined("archive", outlined::ICON_ARCHIVE),
-                        "Archive Notes",
-                        "Archived Notes",
-                        state.clone(),
-                    ),
-                    icon_action(
-                        MdIcon::outlined("delete", outlined::ICON_DELETE),
-                        "Delete Notes",
-                        "Deleted Notes",
-                        state.clone(),
-                    ),
-                ]))
-                .tab(branch(
-                    "Archive",
-                    Branch::Archive,
-                    state.clone(),
-                    [
-                        selectable("2025", state.clone()),
-                        selectable("2024", state.clone()),
-                    ],
-                )),
-        ])
+        .groups([project, personal])
 }
 
-/// An editorial, utilitarian project navigator: dense navigation on the left and
-/// a calm reading pane on the right. The Forest design system provides the warm
-/// field-notebook palette while all component geometry remains theme-native.
+/// What the reading pane shows for each page: a one-line status and the body.
+fn document(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "Overview" => (
+            "Edited today by Ines",
+            "Fieldwork collects the survey notes from the spring trip. Start with Planning for \
+             the route, then Build for the tools we are writing to sort the samples.",
+        ),
+        "Planning" => (
+            "3 open questions",
+            "Where we go, when, and who carries what. Roadmap holds the dates; Research holds \
+             the reading list and the open questions.",
+        ),
+        "Roadmap" => (
+            "Next milestone: 14 May",
+            "April: permits and transport. May: two weeks on the coast. June: sort, label and \
+             publish the first set of samples.",
+        ),
+        "Research" => (
+            "12 sources",
+            "Tide tables for the bay, the 2019 survey report, and the field guide chapters on \
+             lichens. Each source has a short note on why it matters.",
+        ),
+        "Build" => (
+            "2 tools in progress",
+            "Small programs that help in the field: a sample label printer and an offline map \
+             of the survey squares.",
+        ),
+        "UI" => (
+            "Draft",
+            "The label printer has one screen: pick a square, type the species, print. Large \
+             targets, because we use it with gloves on.",
+        ),
+        "Engine" => (
+            "Tests passing",
+            "The map engine tiles the survey area into 50 m squares and keeps the last week of \
+             tracks on the device.",
+        ),
+        "Notes" => (
+            "Private",
+            "Loose thoughts that are not ready for the team yet. Archive or delete them from \
+             the buttons next to the page name.",
+        ),
+        "Archive" => (
+            "2 past seasons",
+            "Read-only records of earlier trips. Open a year to see what we found and what we \
+             would do differently.",
+        ),
+        "2025" => (
+            "Read-only",
+            "Autumn trip: 48 samples, two new sites, one broken tripod.",
+        ),
+        "2024" => (
+            "Read-only",
+            "First season: we learned to bring spare batteries and a second map.",
+        ),
+        _ => ("", ""),
+    }
+}
+
+/// Secondary text in the muted ink.
+fn caption(text: impl Into<std::borrow::Cow<'static, str>>, size: f32) -> impl View {
+    ThemeProvider::new(MUTED_THEME, Text::new(text).size(size))
+}
+
+/// A view that may be absent: builds `Some` as usual and `None` as an empty,
+/// zero-size stack, so a row can drop a control without another view type.
+struct Maybe<V>(Option<V>);
+
+impl<V: View> View for Maybe<V> {
+    fn build(
+        self: Box<Self>,
+        ctx: &mut BuildCtx,
+        parent: Option<schnellui::scene::WidgetId>,
+    ) -> schnellui::scene::WidgetId {
+        match self.0 {
+            Some(view) => Box::new(view).build(ctx, parent),
+            None => Box::new(Stack::new()).build(ctx, parent),
+        }
+    }
+}
+
+/// A project navigator: grouped pages on the left and the chosen page on the
+/// right. The Forest design system supplies the palette; all component
+/// geometry stays theme-native.
 fn example_view(scenario: Scenario, state: ExampleState) -> impl View {
     let chosen = state.chosen;
     let last_action = state.last_action;
+    let undo = state.undo.get().is_some().then(|| {
+        let state = state.clone();
+        Button::new("Undo")
+            .appearance(ButtonAppearance::Outline)
+            .height(32.0)
+            .on_click(move || state.undo())
+    });
     let navigation = project_navigation(scenario, state);
+    let hint = match scenario.mode() {
+        GroupedTabMode::Flat => "Every page in one list",
+        GroupedTabMode::Tree => "Click an open section again to fold it",
+    };
 
     Pad::all(PAGE_PADDING).child(
         Column::new()
             .gap(14.0)
             .child(
                 Row::new()
-                    .gap(12.0)
-                    .align(Align::Center)
-                    .child(Text::new("Fieldwork / Navigator").size(28.0))
-                    .child(Badge::new(scenario.badge())),
-            )
-            .child(
-                Text::new(scenario.description())
-                    .size(14.0)
-                    .wrap(WrapMode::Word),
+                    .width(712.0)
+                    .justify(Justify::SpaceBetween)
+                    .align(Align::End)
+                    .child(Text::new("Fieldwork").size(28.0).bold())
+                    // 13px text descends 4px less than 28px text; lift it onto
+                    // the title's baseline.
+                    .child(
+                        Pad::insets(EdgeInsets {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 4.0,
+                            left: 0.0,
+                        })
+                        .child(caption(hint, 13.0)),
+                    ),
             )
             .child(Divider::new())
             .child(
@@ -376,42 +597,44 @@ fn example_view(scenario: Scenario, state: ExampleState) -> impl View {
                     .align(Align::Start)
                     .child(navigation)
                     .child(
-                        Pad::all(18.0).child(
+                        Pad::all(8.0).child(
                             Column::new()
-                                .width(360.0)
-                                .gap(12.0)
-                                .child(Text::new("ACTIVE DOCUMENT").size(11.0))
+                                .width(420.0)
+                                .gap(10.0)
                                 .child(
                                     Text::dynamic(move || chosen.get())
                                         .size(30.0)
+                                        .bold()
                                         .role(Role::Status),
+                                )
+                                .child(ThemeProvider::new(
+                                    MUTED_THEME,
+                                    Text::dynamic(move || document(&chosen.get()).0.to_string())
+                                        .size(13.0),
+                                ))
+                                .child(Divider::new())
+                                .child(
+                                    Text::dynamic(move || document(&chosen.get()).1.to_string())
+                                        .size(16.0)
+                                        .wrap(WrapMode::Word),
                                 )
                                 .child(Divider::new())
                                 .child(
-                                    Text::new(
-                                        "Grouped tabs share one selection scope. A nested tab \
-                                             can be selected without losing its place in the tree, \
-                                             and every group remains available to assistive tools.",
-                                    )
-                                    .size(16.0)
-                                    .wrap(WrapMode::Word),
-                                )
-                                .child(Text::new("TRY IT").size(11.0))
-                                .child(
-                                    Text::new(
-                                        "Select any row, or activate a branch to fold and reopen it. \
-                                             Rows can expose multiple independent actions. Hover an icon \
-                                             for its label; assistive tools receive the same descriptive \
-                                             button name.",
-                                    )
-                                    .size(14.0)
-                                    .wrap(WrapMode::Word),
-                                )
-                                .child(Text::new("LAST ACTION").size(11.0))
-                                .child(
-                                    Text::dynamic(move || last_action.get())
-                                        .size(14.0)
-                                        .role(Role::Status),
+                                    Row::new()
+                                        .width(420.0)
+                                        .justify(Justify::SpaceBetween)
+                                        .align(Align::Center)
+                                        .child(
+                                            Column::new()
+                                                .gap(2.0)
+                                                .child(caption("Last change", 12.0))
+                                                .child(
+                                                    Text::dynamic(move || last_action.get())
+                                                        .size(14.0)
+                                                        .role(Role::Status),
+                                                ),
+                                        )
+                                        .child(Maybe(undo)),
                                 ),
                         ),
                     ),
@@ -428,7 +651,7 @@ fn mount_scenario(
 ) -> App {
     let view_state = state.clone();
     App::mount_themed_with_size_scaled(
-        FOREST,
+        NAVIGATOR_THEME,
         move || example_view(scenario, view_state.clone()),
         width,
         height,
@@ -508,7 +731,14 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
     find_by_role_name(&tree, "tab_list", None).ok_or("missing semantic tab list")?;
     find_by_role_name(&tree, "group", Some("PROJECT")).ok_or("missing PROJECT group")?;
     find_by_role_name(&tree, "group", Some("PERSONAL")).ok_or("missing PERSONAL group")?;
-    for action in ["Archive Planning", "Archive Notes", "Delete Notes"] {
+    for action in [
+        "Archive Planning",
+        "Delete Planning",
+        "Archive Build",
+        "Delete Build",
+        "Archive Notes",
+        "Delete Notes",
+    ] {
         find_by_role_name(&tree, "button", Some(action))
             .ok_or_else(|| format!("missing content action {action:?}"))?;
     }
@@ -657,7 +887,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if cli.windowed || cli.headless_windowed {
-        let (app, state) = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        let (mut app, state) = scenario_app(scenario, cli.width, cli.height, cli.scale);
+        app.set_escape_exits(true);
         let remount_state = state.clone();
         return match app.run_windowed_with("Grouped tabs / Project navigator", move || {
             remount_state.take_remount().then(|| {
@@ -708,6 +939,11 @@ mod tests {
         let (mut app, state) = scenario_app(Scenario::Tree, 760, 600, 1.0);
         app.frame();
 
+        // The first click selects the open branch and leaves it open.
+        drive_click(&mut app, "Planning");
+        assert!(!state.take_remount());
+        assert_eq!(state.chosen.get(), "Planning");
+        // Clicking the selected branch folds it.
         drive_click(&mut app, "Planning");
         assert!(state.take_remount());
         assert_eq!(state.chosen.get(), "Planning");
@@ -738,19 +974,51 @@ mod tests {
         assert!(delete_rect.right() <= PAGE_PADDING + NAV_WIDTH);
 
         assert!(drive_named_click(&mut app, Role::Button, "Archive Notes"));
-        app.frame();
         assert_eq!(state.last_action.get(), "Archived Notes");
         assert_eq!(state.chosen.get(), "Overview");
-        assert!(!state.take_remount());
-
-        assert!(drive_named_click(&mut app, Role::Button, "Delete Notes"));
+        assert!(state.take_remount());
+        let mut app = mount_scenario(Scenario::Tree, 760, 600, 1.0, state.clone());
         app.frame();
-        assert_eq!(state.last_action.get(), "Deleted Notes");
-        assert_eq!(state.chosen.get(), "Overview");
-
+        // Notes moved under Archive and offers Restore instead.
+        assert!(app
+            .find_widget(Role::Button, Some("Archive Notes"))
+            .is_none());
+        assert!(app
+            .find_widget(Role::Button, Some("Restore Notes"))
+            .is_some());
         let tree = a11y::dump_tree(app.scene());
         assert_tab_state(&tree, "Overview", "selected", true).unwrap();
         assert_tab_state(&tree, "Notes", "selected", false).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_page_removes_its_row_and_undo_brings_it_back() {
+        let (mut app, state) = scenario_app(Scenario::NestedSelected, 760, 600, 1.0);
+        app.frame();
+        assert_eq!(state.chosen.get(), "Engine");
+        assert!(app.find_widget(Role::Button, Some("Undo")).is_none());
+
+        assert!(drive_named_click(&mut app, Role::Button, "Delete Build"));
+        assert_eq!(state.last_action.get(), "Deleted Build");
+        // The open page was inside Build, so the pane falls back to Overview.
+        assert_eq!(state.chosen.get(), "Overview");
+        assert!(state.take_remount());
+        let mut app = mount_scenario(Scenario::NestedSelected, 760, 600, 1.0, state.clone());
+        app.frame();
+        for gone in ["Build", "UI", "Engine"] {
+            assert!(
+                app.find_widget(Role::Tab, Some(gone)).is_none(),
+                "{gone} still shows"
+            );
+        }
+
+        assert!(drive_named_click(&mut app, Role::Button, "Undo"));
+        assert!(state.take_remount());
+        let mut app = mount_scenario(Scenario::NestedSelected, 760, 600, 1.0, state.clone());
+        app.frame();
+        assert!(app.find_widget(Role::Tab, Some("Build")).is_some());
+        assert!(app.find_widget(Role::Button, Some("Undo")).is_none());
+        assert_eq!(state.last_action.get(), "Undone");
     }
 
     #[test]

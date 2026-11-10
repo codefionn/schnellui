@@ -89,6 +89,7 @@ fn main() -> ExitCode {
     // Opt-in windowed mode (SOUL §8): open a real window instead of writing a PNG.
     // This static UI just displays; close the window or press Esc to exit.
     if cli.windowed || cli.headless_windowed {
+        app.set_escape_exits(true);
         return match app.run_windowed("hello") {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
