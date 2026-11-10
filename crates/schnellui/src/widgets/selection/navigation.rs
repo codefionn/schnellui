@@ -142,6 +142,8 @@ pub struct Tab {
     pub(crate) label: Cow<'static, str>,
     /// Painted instead of `label`, which stays the accessible name.
     pub(crate) display: Option<Cow<'static, str>>,
+    /// Shown while the pointer hovers the tab.
+    pub(crate) tooltip: Option<Cow<'static, str>>,
     pub(crate) selected: bool,
     pub(crate) width: Option<f32>,
     pub(crate) appearance: TabAppearance,
@@ -161,6 +163,7 @@ impl Tab {
         Tab {
             label: label.into(),
             display: None,
+            tooltip: None,
             selected: false,
             width: None,
             appearance: TabAppearance::Classic,
@@ -179,6 +182,14 @@ impl Tab {
     /// tab strip.
     pub fn display(mut self, text: impl Into<Cow<'static, str>>) -> Tab {
         self.display = Some(text.into());
+        self
+    }
+    /// Shows a short label while the pointer hovers the tab, like
+    /// [`Button::tooltip`](crate::widgets::Button::tooltip). The tab stays the hit
+    /// target and keeps its label as the accessible name: for a tab that paints
+    /// an icon only.
+    pub fn tooltip(mut self, label: impl Into<Cow<'static, str>>) -> Tab {
+        self.tooltip = Some(label.into());
         self
     }
     /// Marks this tab as the initially selected one.
@@ -333,18 +344,35 @@ impl View for Tab {
         let sh = theme_for(runtime, id).shape;
         let (pad_h, pad_v) = (this.style.pad_h.unwrap_or(sh.pad(PAD_H)), sh.pad(PAD_V));
         let tab_height = (ts.height + 2.0 * pad_v).max(this.style.min_height.unwrap_or(0.0));
+        let tab_width = (ts.width
+            + 2.0 * pad_h
+            + this.style.lead
+            + if this.disclosure == TabDisclosure::None {
+                0.0
+            } else {
+                TAB_DISCLOSURE_SPACE
+            })
+        .max(this.width.unwrap_or(0.0));
+        if let Some(tooltip) = this.tooltip.as_deref() {
+            crate::widgets::register_hover_tooltip(
+                &ctx.runtime,
+                ctx.scene,
+                ctx.text,
+                ctx.atlas,
+                id,
+                tooltip,
+                Size {
+                    width: tab_width,
+                    height: tab_height,
+                },
+                ctx.scale,
+            );
+            crate::widgets::elevate_tooltip_host(ctx.scene, id);
+        }
         ctx.layout.set_measure(
             id,
             Box::new(move |_avail| Size {
-                width: (ts.width
-                    + 2.0 * pad_h
-                    + this.style.lead
-                    + if this.disclosure == TabDisclosure::None {
-                        0.0
-                    } else {
-                        TAB_DISCLOSURE_SPACE
-                    })
-                .max(this.width.unwrap_or(0.0)),
+                width: tab_width,
                 height: tab_height,
             }),
         );

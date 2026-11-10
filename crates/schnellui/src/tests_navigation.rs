@@ -1534,3 +1534,40 @@ fn replace_subtree_keeps_focus_on_the_same_identity_inside_the_branch() {
     let kept = app.find_widget(Role::Button, Some("Kept")).unwrap();
     assert_eq!(app.focused_widget(), Some(kept));
 }
+
+/// A tab can carry a hover tooltip: the pointer over it paints the label
+/// above the tab, and the tab keeps its role and accessible name.
+#[test]
+fn a_tab_shows_its_tooltip_on_hover() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Column, Panel, Tab, TabBar};
+    let mut app = App::mount_with_size(
+        Column::new().child(Panel::new().width(10.0).height(60.0)).child(
+            TabBar::new()
+                .child(Tab::new("Security").display("").tooltip("Security").selected(true))
+                .child(Tab::new("Audio").display("").tooltip("Audio")),
+        ),
+        320,
+        200,
+    );
+    app.frame();
+    let id = app.find_widget(Role::Tab, Some("Security")).unwrap();
+    let r = app.scene().layout(id).unwrap().rect;
+    let above = |app: &App| {
+        app.scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter(|p| matches!(p, Primitive::SolidRect { rect, color, .. }
+                if color.a > 0 && rect.bottom() <= r.y))
+            .count()
+    };
+    let before = above(&app);
+    app.update_pointer_proximity(Point {
+        x: r.x + r.width * 0.5,
+        y: r.y + r.height * 0.5,
+    });
+    app.frame();
+    assert!(above(&app) > before, "hovering the tab paints its tooltip");
+}
