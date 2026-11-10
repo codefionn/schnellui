@@ -420,6 +420,14 @@ impl LayoutEngine {
             }
         }
 
+        // Content inside a scroll viewport scrolls instead of shrinking to fit.
+        // Without this, a child with an explicit `min_height` gives up the
+        // automatic content minimum, shrinks to that height, and its rows
+        // overflow where the viewport can't reach them.
+        if parent_kind == Some(WidgetKind::Scroll) {
+            s.flex_shrink = 0.0;
+        }
+
         // Per-child flex factors last (SOUL §8.1): only set fields override the
         // base style above, so e.g. a Spacer's built-in grow survives an empty
         // FlexChild while an explicit `grow` re-weights it.

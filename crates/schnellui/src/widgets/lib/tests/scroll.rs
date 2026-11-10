@@ -947,3 +947,37 @@ fn scroll_targets_resolve_enclosing_then_first() {
     let outside = scene.node(root).unwrap().children[0];
     assert_eq!(enclosing_scroll(&scene, outside), None);
 }
+
+#[test]
+fn a_column_with_a_minimum_height_still_scrolls_when_its_rows_overflow() {
+    // A sidebar column keeps a minimum height so a Spacer can push its last
+    // row to the bottom. When the rows are taller than that minimum, the
+    // column must grow and the viewport must scroll to reach them.
+    for (min_height, spacer) in [(None, true), (Some(220.0), false), (Some(220.0), true)] {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let mut col = Column::new().gap(2.0);
+        if let Some(height) = min_height {
+            col = col.min_height(height);
+        }
+        for i in 0..25 {
+            col = col.child(Text::new(format!("Row {i}")));
+        }
+        if spacer {
+            col = col.child(Spacer::new());
+        }
+        let col = col.child(Text::new("Last"));
+        let (mut scene, _l, _t, _a, id) = build_and_layout(
+            runtime,
+            Scroll::new().size(320.0, 220.0).child(col),
+            Size {
+                width: 400.0,
+                height: 300.0,
+            },
+        );
+        assert!(
+            dispatch_scroll(runtime, &mut scene, id, 100_000.0),
+            "min_height {min_height:?}, spacer {spacer}: 26 rows overflow 220 px"
+        );
+    }
+}
