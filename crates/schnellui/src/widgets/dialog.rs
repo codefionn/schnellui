@@ -2204,4 +2204,36 @@ mod tests {
             assert_eq!(x, y, "node {i}");
         }
     }
+
+    /// A window's focus ring steps in to the frame's clip, so it depends on
+    /// the clip: a window dragged narrower and wider again must relay it, not
+    /// leave the ring at the width it was clamped to.
+    #[test]
+    fn a_focus_ring_in_a_resized_window_follows_the_frame_clip() {
+        use crate::windowed::headless::{HeadlessHost, HostKey};
+        let mut app = crate::App::mount_with_size(desktop(), 720, 520);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        host.key(&HostKey::Tab, false, false);
+        for step in 0..=24 {
+            let t = step as f32 / 24.0;
+            host.resize(720.0 - 600.0 * t, 520.0 - 430.0 * t);
+            let widgets = host.app().widgets.clone();
+            assert_eq!(
+                crate::widgets::probes::decoration_relay_diff(&widgets, host.app_mut().scene_mut()),
+                None,
+                "step {step}"
+            );
+        }
+        for step in 0..=24 {
+            let t = step as f32 / 24.0;
+            host.resize(120.0 + 600.0 * t, 90.0 + 430.0 * t);
+            let widgets = host.app().widgets.clone();
+            assert_eq!(
+                crate::widgets::probes::decoration_relay_diff(&widgets, host.app_mut().scene_mut()),
+                None,
+                "grow step {step}"
+            );
+        }
+    }
 }

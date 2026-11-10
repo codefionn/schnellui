@@ -1296,6 +1296,10 @@ struct AppliedInteraction {
     /// A scroll view target's viewport, which its border outlines. Content
     /// that overflows it keeps `bounds` still while the viewport resizes.
     viewport: Option<Rect>,
+    /// The left and right edges, in the target's own layout space, of the clip
+    /// the ring was held inside. A window resized under a control moves them
+    /// without moving the control.
+    clip_sides: (f32, f32),
 }
 
 /// The retained widget-interaction data owned by one [`Runtime`].

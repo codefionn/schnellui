@@ -172,9 +172,17 @@ fn decoration_extent(
     runtime: &Runtime,
     scene: &Scene,
     id: WidgetId,
-) -> Option<(Rect, Option<Rect>)> {
+) -> Option<(Rect, Option<Rect>, (f32, f32))> {
     let (geometry, _) = decoration_geometry(runtime, scene, id)?;
-    Some((geometry, scroll_viewport(scene, id)))
+    Some((geometry, scroll_viewport(scene, id), clip_sides(scene, id)))
+}
+
+/// The left and right edges of the clip `id` paints under, in its layout
+/// space. An outset ring steps in to them, so a clip that moves while the
+/// control stays put changes the ring.
+fn clip_sides(scene: &Scene, id: WidgetId) -> (f32, f32) {
+    let (offset, clip) = scene.composite_context(id);
+    (clip.x - offset.x, clip.right() - offset.x)
 }
 
 fn scroll_viewport(scene: &Scene, id: WidgetId) -> Option<Rect> {
@@ -261,8 +269,7 @@ fn clamp_ring_to_clip_sides(
     radius: f32,
     inset: f32,
 ) -> (Rect, f32, f32) {
-    let (offset, clip) = scene.composite_context(id);
-    let (min_x, max_x) = (clip.x - offset.x, clip.right() - offset.x);
+    let (min_x, max_x) = clip_sides(scene, id);
     let (left, right) = (rect.x + inset, rect.right() - inset);
     if left >= min_x && right <= max_x {
         return (rect, radius, inset);
@@ -431,8 +438,10 @@ pub(crate) fn reapply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: Widge
 pub(crate) fn relay_moved_decorations(runtime: &Runtime, scene: &mut Scene) {
     let targets = runtime.with(|rt| {
         let rt = rt.borrow();
-        [&rt.hover, &rt.active, &rt.ring]
-            .map(|d| d.as_ref().map(|d| (d.target, (d.bounds, d.viewport))))
+        [&rt.hover, &rt.active, &rt.ring].map(|d| {
+            d.as_ref()
+                .map(|d| (d.target, (d.bounds, d.viewport, d.clip_sides)))
+        })
     });
     let mut relaid: [Option<WidgetId>; 3] = [None; 3];
     for (slot, (target, extent)) in targets.into_iter().flatten().enumerate() {
@@ -1095,6 +1104,7 @@ fn apply_interaction_style(
         background,
         bounds: geometry,
         viewport: scroll_viewport(scene, id),
+        clip_sides: clip_sides(scene, id),
     })
 }
 
