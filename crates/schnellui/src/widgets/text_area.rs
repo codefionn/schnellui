@@ -415,6 +415,57 @@ impl AreaCache {
         self.rows.push(acc);
     }
 
+    /// Pointer hit on visual row `row` of a wrapping area: the line painted
+    /// there, and the caret byte and the byte under physical offset `x`
+    /// along that row, both relative to the line. `None` when the area does
+    /// not wrap or the row table is out of date.
+    fn wrapped_hit(
+        &self,
+        wrapping: bool,
+        row: usize,
+        x: f32,
+        value_len: usize,
+    ) -> Option<(usize, usize, usize)> {
+        if !wrapping || !self.usable() || self.rows_stale || self.rows.len() != self.lines.len() + 1
+        {
+            return None;
+        }
+        let row = row.min((*self.rows.last()? as usize).checked_sub(1)?);
+        let line = self
+            .rows
+            .partition_point(|&r| r as usize <= row)
+            .saturating_sub(1);
+        let info = self.lines.get(line)?;
+        let shaped = info.shape.as_deref().filter(|_| info.epoch == self.epoch)?;
+        let len = self.line_end(line, value_len) - self.starts[line];
+        let sub = row - self.rows[line] as usize;
+        if sub >= shaped.lines.len() {
+            return Some((line, len, len));
+        }
+        let (start, end, glyphs) = wrapped_row(shaped, sub, len);
+        let x = x - shaped.lines[sub].x;
+        let (mut caret, mut hit) = (None, None);
+        let mut pen = 0.0f32;
+        for g in glyphs {
+            if caret.is_none() && x < pen + g.x_advance * 0.5 {
+                caret = Some(g.cluster as usize);
+            }
+            if hit.is_none() && x < pen + g.x_advance {
+                hit = Some(g.cluster as usize);
+            }
+            pen += g.x_advance;
+        }
+        // Past the end of a row that a later row continues: `end` would
+        // put the caret at the start of that later row, so stop before the
+        // row's last glyph instead.
+        let tail = if sub + 1 < shaped.lines.len() {
+            glyphs.last().map_or(start, |g| g.cluster as usize)
+        } else {
+            end
+        };
+        Some((line, caret.unwrap_or(tail), hit.unwrap_or(tail)))
+    }
+
     /// Visual row at which line `i` starts.
     fn row_of(&self, i: usize, wrapping: bool) -> usize {
         if wrapping {
@@ -950,6 +1001,35 @@ fn caret_x_in_wrapped(
     (0, 0.0)
 }
 
+/// Visual row `row` of a wrapped line of `len` bytes: the byte where it
+/// starts, the byte where the next row starts (`len` on the last row), and
+/// its glyphs.
+fn wrapped_row(
+    shaped: &ShapedText,
+    row: usize,
+    len: usize,
+) -> (usize, usize, &[schnellui::text::ShapedGlyph]) {
+    let first_cluster = |line: &schnellui::text::ShapedLine| {
+        shaped
+            .glyphs
+            .get(line.glyph_start as usize)
+            .map(|g| g.cluster as usize)
+    };
+    let line = &shaped.lines[row];
+    let start = if row == 0 {
+        0
+    } else {
+        first_cluster(line).unwrap_or(len)
+    };
+    let end = shaped.lines[row + 1..]
+        .iter()
+        .find_map(first_cluster)
+        .unwrap_or(len);
+    let g0 = (line.glyph_start as usize).min(shaped.glyphs.len());
+    let g1 = (g0 + line.glyph_count as usize).min(shaped.glyphs.len());
+    (start, end, &shaped.glyphs[g0..g1])
+}
+
 // ---------------------------------------------------------------------------
 // the widget builder (SOUL §3.3 typed builder chain)
 // ---------------------------------------------------------------------------
@@ -1223,10 +1303,22 @@ pub(crate) fn dispatch_area_pointer(
         let line_h = st.line_height(shaper);
         // pointer → row (clamped), then inline offset within that row's line
         let row_f = ((p.y - rect.y - AREA_PAD) / line_h).floor();
-        let row = (row_f.max(0.0) as usize).min(rows - 1);
-        let ls = st.cache.starts[row];
+        let visual = row_f.max(0.0) as usize;
         let x_phys = (p.x - rect.x - AREA_PAD - gutter_w).max(0.0) * norm_scale(scale);
-        let (rel_caret, rel_hit) = st.flat_hit(row, x_phys, shaper);
+        let wrapping = st.wrap != WrapMode::NoWrap;
+        let (row, rel_caret, rel_hit) =
+            match st
+                .cache
+                .wrapped_hit(wrapping, visual, x_phys, st.value.len())
+            {
+                Some(hit) => hit,
+                None => {
+                    let row = visual.min(rows - 1);
+                    let (caret, hit) = st.flat_hit(row, x_phys, shaper);
+                    (row, caret, hit)
+                }
+            };
+        let ls = st.cache.starts[row];
         let (caret_idx, hit_idx) = (ls + rel_caret, ls + rel_hit);
         st.goal_x = None;
         if action == TextPointerAction::AddCaret {
@@ -1788,6 +1880,93 @@ mod tests {
             false,
         ));
         assert_eq!(caret_anchor(runtime, id), (4, 4));
+    }
+
+    /// A wrapping area whose first line takes several rows. Selecting the
+    /// line below drew its wash on the row above, and a click on that line's
+    /// row put the caret on another line.
+    #[test]
+    fn a_wrapped_area_washes_and_hits_the_rows_it_paints() {
+        let runtime = &crate::widgets::Runtime::new();
+        let value = "aaaa bbbb cccc dddd eeee\nzz";
+        let (mut scene, _l, mut text, mut atlas, id) =
+            build_area(runtime, TextArea::new(value).wrap(WrapMode::Anywhere));
+        let rect = Rect::new(10.0, 10.0, 90.0, 200.0);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        dispatch_edit_key(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            EditKey::SelectAll,
+        );
+        let (rows, line_h) = runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            let st = rt.areas.get_mut(id).unwrap();
+            (st.cache.rows.clone(), st.line_height(&mut text))
+        });
+        assert!(rows[1] >= 2, "the first line wraps: {rows:?}");
+        let selection = crate::widgets::theme(runtime).text_selection;
+        let mut washes: Vec<Rect> = scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::SolidRect { rect, color, .. } if *color == selection => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        washes.sort_by(|a, b| a.y.total_cmp(&b.y));
+        let tops: Vec<f32> = washes.iter().map(|w| w.y).collect();
+        let want: Vec<f32> = (0..rows[2])
+            .map(|r| rect.y + AREA_PAD + r as f32 * line_h)
+            .collect();
+        assert_eq!(tops, want, "one wash per painted row");
+        for wash in &washes {
+            assert_eq!(
+                wash.x,
+                rect.x + AREA_PAD,
+                "every row is selected from its start"
+            );
+            assert!(
+                wash.right() <= rect.right() + NEWLINE_SEL_W,
+                "{wash:?} runs past the area {rect:?}"
+            );
+        }
+        let click = |scene: &mut Scene, text: &mut TextShaper, atlas: &mut GlyphAtlas, row: u32| {
+            dispatch_text_pointer(
+                runtime,
+                scene,
+                text,
+                atlas,
+                id,
+                Point {
+                    x: rect.x + AREA_PAD + 1.0,
+                    y: rect.y + AREA_PAD + (row as f32 + 0.5) * line_h,
+                },
+                false,
+            );
+            caret_anchor(runtime, id).0
+        };
+        assert_eq!(
+            click(&mut scene, &mut text, &mut atlas, rows[1]),
+            25,
+            "the second line's row"
+        );
+        let second_row = click(&mut scene, &mut text, &mut atlas, 1);
+        assert!(
+            (1..24).contains(&second_row),
+            "the first line's second row starts inside it, not at {second_row}"
+        );
     }
 
     /// Press at the end of an area, drag to its start, type over the

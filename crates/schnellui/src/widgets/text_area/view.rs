@@ -445,21 +445,24 @@ fn build_washes(
             let le = cache.line_end(i, value_len);
             let a = s0.max(ls);
             let b = s1.min(le);
-            if a < b || (s0 <= le && s1 > le && a <= b) {
-                let Some(shaped) = cache.lines[i].shape.as_deref() else {
-                    continue;
-                };
-                let x0 = advance_before(shaped, a.saturating_sub(ls)) * m.inv;
-                let mut x1 = advance_before(shaped, b.saturating_sub(ls)) * m.inv;
+            if !(a < b || (s0 <= le && s1 > le && a <= b)) {
+                continue;
+            }
+            let Some(shaped) = cache.lines[i].shape.as_deref() else {
+                continue;
+            };
+            let (a, b, len) = (a - ls, b - ls, le - ls);
+            let row = cache.row_of(i, m.wrapping);
+            let mut wash = |sub: usize, x0: f32, mut x1: f32, last: bool| {
                 // a selection running past this line's newline gets a marker
-                if s1 > le {
+                if last && s1 > le {
                     x1 += NEWLINE_SEL_W;
                 }
                 if x1 > x0 {
                     out.push(Primitive::SolidRect {
                         rect: Rect::new(
                             m.origin.x + x0,
-                            m.origin.y + i as f32 * m.line_h,
+                            m.origin.y + (row + sub) as f32 * m.line_h,
                             x1 - x0,
                             m.line_h,
                         ),
@@ -467,6 +470,38 @@ fn build_washes(
                         corner_radius: 0.0,
                     });
                 }
+            };
+            if !(m.wrapping && shaped.lines.len() > 1) {
+                wash(
+                    0,
+                    advance_before(shaped, a) * m.inv,
+                    advance_before(shaped, b) * m.inv,
+                    true,
+                );
+                continue;
+            }
+            // A wrapped line gets one wash per row the selection touches.
+            for sub in 0..shaped.lines.len() {
+                let (start, end, glyphs) = super::wrapped_row(shaped, sub, len);
+                let last = sub + 1 == shaped.lines.len();
+                let (lo, hi) = (a.max(start), if last { b } else { b.min(end) });
+                if lo > hi || (lo == hi && !(last && s1 > le)) {
+                    continue;
+                }
+                let before = |byte: usize| -> f32 {
+                    glyphs
+                        .iter()
+                        .filter(|g| (g.cluster as usize) < byte)
+                        .map(|g| g.x_advance)
+                        .sum()
+                };
+                let x = shaped.lines[sub].x;
+                wash(
+                    sub,
+                    (x + before(lo)) * m.inv,
+                    (x + before(hi)) * m.inv,
+                    last,
+                );
             }
         }
     }
