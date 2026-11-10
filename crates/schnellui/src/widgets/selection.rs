@@ -439,7 +439,7 @@ fn emit_selectable_paint(
 /// Recolors a tab's / item's selection surfaces **in place** (SOUL Directive #3):
 /// primitive `[0]` is the background, `[1]` (tabs only) the indicator bar. No
 /// re-shape, no primitive growth, no heap touch.
-fn recolor_selection(
+pub(crate) fn recolor_selection(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
     id: WidgetId,

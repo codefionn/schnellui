@@ -414,6 +414,7 @@ impl View for Table {
                 acts.insert(ActionFlags::CLICK);
                 acts.insert(ActionFlags::FOCUS);
                 a.actions = acts.0;
+                crate::widgets::note_authored(&ctx.runtime, row_id, u64::from(row_selected));
                 if row_selected {
                     let mut st = StateFlags::default();
                     st.insert(StateFlags::SELECTED);
@@ -730,7 +731,7 @@ fn recolor_sort_indicator(
 /// (SOUL Directive #3): only each cell's primitive `[0]` colour mutates — the
 /// separator hairline and the label glyphs are untouched, no re-shape, no heap.
 /// Marks each recolored cell paint-dirty so its rect joins the frame damage.
-fn recolor_row(
+pub(crate) fn recolor_row(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
     row: WidgetId,

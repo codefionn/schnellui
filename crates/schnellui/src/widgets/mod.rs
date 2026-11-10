@@ -67,6 +67,9 @@ mod text_area;
 pub use text_area::*;
 mod text_edit;
 pub use text_edit::*;
+mod uncontrolled;
+pub use uncontrolled::{control_changed_by_user, inherit_control_value};
+pub(crate) use uncontrolled::{note_authored, text_bits};
 mod theme;
 pub use theme::*;
 mod virtual_list;
@@ -1279,6 +1282,9 @@ struct WidgetRuntime {
     dynamic_image_scratch: Vec<WidgetId>,
     /// Retained slider range state (SOUL §6.3) — mutated by [`dispatch_adjust`].
     sliders: SecondaryMap<WidgetId, SliderState>,
+    /// What the app authored for each control whose live value the user can
+    /// change (see `uncontrolled`). Written at build, read only on remount.
+    authored: SecondaryMap<WidgetId, u64>,
     /// Per-viewport optional chrome and edge-scrolling behavior.
     scrolls: SecondaryMap<WidgetId, ScrollState>,
     /// Dense mounted-viewport index for wheel routing. `SecondaryMap::keys()`
@@ -1463,6 +1469,7 @@ pub fn reset(runtime: &Runtime) {
         rt.dynamic_image_scratch.clear();
         rt.dynamic_image_ids.clear();
         rt.sliders.clear();
+        rt.authored.clear();
         rt.scrolls.clear();
         rt.scroll_ids.clear();
         rt.scrollbar_pointer = None;
@@ -1553,6 +1560,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
                 scene.images_mut().free(texels);
             }
             rt.sliders.remove(id);
+            rt.authored.remove(id);
             rt.scrolls.remove(id);
             rt.spinners.remove(id);
             rt.proximity_reveals.remove(id);

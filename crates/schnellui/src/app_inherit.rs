@@ -55,6 +55,17 @@ impl App {
         if let Some((source, _, _)) = previous_menu {
             stateful_nodes.push(source);
         }
+        // Controls the user changed away from their authored value, such as a
+        // ticked checkbox or a moved slider, need a counterpart too. Text
+        // editors are listed above already.
+        let changed_controls: Vec<_> = previous
+            .scene
+            .preorder()
+            .filter(|id| {
+                schnellui::widgets::control_changed_by_user(&previous.widgets, &previous.scene, *id)
+            })
+            .collect();
+        stateful_nodes.extend(changed_controls.iter().copied());
         let previous_drag = schnellui::widgets::content_drag_source(&previous.widgets);
         stateful_nodes.extend(previous_drag);
         let counterparts = remount::CounterpartMap::new(
@@ -71,6 +82,18 @@ impl App {
         // only the one that happened to be focused at the instant of the remount.
         for previous_id in stateful_nodes.iter().copied() {
             if let Some(target) = counterparts.get(previous_id) {
+                // The value first: the caret and history below ride along
+                // only when the replacement holds the same text.
+                schnellui::widgets::inherit_control_value(
+                    &self.widgets,
+                    &mut self.scene,
+                    &mut self.text,
+                    &mut self.atlas,
+                    target,
+                    &previous.widgets,
+                    &previous.scene,
+                    previous_id,
+                );
                 schnellui::widgets::inherit_remount_state(
                     &self.widgets,
                     &mut self.scene,

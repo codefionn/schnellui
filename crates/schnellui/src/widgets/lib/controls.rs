@@ -400,6 +400,7 @@ impl View for Checkbox {
             }
             a.state = st.0;
         }
+        note_authored(&ctx.runtime, id, u64::from(this.checked));
         emit_checkbox_paint(&ctx.runtime, ctx.scene, id, this.checked);
         let intrinsic = checkbox_intrinsic(&ctx.runtime, id);
         ctx.layout
@@ -514,6 +515,7 @@ impl View for Slider {
                 },
             );
         });
+        note_authored(&ctx.runtime, id, u64::from(now.to_bits()));
         // Track surface + filled portion up to `now` (SOUL §8.1).
         let frac = if max > min {
             ((now - min) / (max - min)).clamp(0.0, 1.0)
@@ -678,6 +680,7 @@ impl View for TextInput {
             this.password,
             this.hint,
         );
+        note_authored(&ctx.runtime, id, text_bits(&this.value));
         text_edit::set_min_height(&ctx.runtime, id, this.min_height);
         context_menu::register_context_menu(&ctx.runtime, id, context_menu);
         let intrinsic =

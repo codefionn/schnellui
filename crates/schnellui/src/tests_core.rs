@@ -2484,3 +2484,237 @@ mod undo_redo {
         assert_eq!(value(&app, id), "a\nb\nc");
     }
 }
+
+mod uncontrolled_state_across_rebuilds {
+    use super::*;
+    use schnellui::signal::create_signal;
+    use schnellui::widgets::{Checkbox, Column, Radio, Slider, Switch, TextArea, TextInput};
+
+    fn a11y(app: &App, role: Role) -> (Option<String>, u32) {
+        let id = app.find_widget(role, None).unwrap();
+        let a = app.scene().a11y(id).unwrap();
+        (a.value.clone(), a.state.into())
+    }
+
+    fn form() -> Column {
+        Column::new()
+            .child(Checkbox::new(false).name("Remember me"))
+            .child(Switch::new(false))
+            .child(Radio::new(false))
+            .child(Slider::new(0.0, 0.0, 10.0).step(1.0).name("Volume"))
+            .child(TextInput::new("").label("Draft"))
+            .child(TextArea::new(""))
+    }
+
+    fn edit(app: &mut App) {
+        for role in [Role::CheckBox, Role::Switch, Role::Radio] {
+            let id = app.find_widget(role, None).unwrap();
+            assert!(app.dispatch_click(id));
+        }
+        let slider = app.find_widget(Role::Slider, None).unwrap();
+        app.focus(Some(slider));
+        let right = UiKey::Right {
+            shift: false,
+            ctrl: false,
+        };
+        assert!(app.dispatch_key(right));
+        assert!(app.dispatch_key(right));
+        for (role, ch) in [(Role::TextInput, "x"), (Role::MultilineTextInput, "y")] {
+            let id = app.find_widget(role, None).unwrap();
+            app.focus(Some(id));
+            assert!(app.dispatch_key(UiKey::Char(ch)));
+        }
+        app.frame();
+    }
+
+    const ROLES: [Role; 6] = [
+        Role::CheckBox,
+        Role::Switch,
+        Role::Radio,
+        Role::Slider,
+        Role::TextInput,
+        Role::MultilineTextInput,
+    ];
+
+    /// Sequence: tick a checkbox, flip a switch, pick a radio, nudge a
+    /// slider and type into two fields, none of them bound to app state;
+    /// then the system flips to dark mode. Every edit vanished, because the
+    /// theme rebuild remounted each control from its authored value.
+    #[test]
+    fn a_theme_switch_keeps_what_the_user_set_on_unbound_controls() {
+        let mut app = App::mount_themed(theme::LIGHT, form);
+        app.frame();
+        edit(&mut app);
+        let edited: Vec<_> = ROLES.iter().map(|&r| a11y(&app, r)).collect();
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        let rebuilt: Vec<_> = ROLES.iter().map(|&r| a11y(&app, r)).collect();
+        assert_eq!(rebuilt, edited);
+    }
+
+    /// The app still wins: a rebuild whose authored value changed shows the
+    /// new value, not the user's stale edit.
+    #[test]
+    fn a_rebuild_with_a_new_authored_value_takes_it() {
+        let reset = create_signal(false);
+        let mut app = App::mount_themed(theme::LIGHT, move || {
+            if reset.get() {
+                Column::new()
+                    .child(Checkbox::new(true).name("Remember me"))
+                    .child(Switch::new(true))
+                    .child(Radio::new(true))
+                    .child(Slider::new(7.0, 0.0, 10.0).step(1.0).name("Volume"))
+                    .child(TextInput::new("app").label("Draft"))
+                    .child(TextArea::new("app"))
+            } else {
+                form()
+            }
+        });
+        app.frame();
+        edit(&mut app);
+        reset.set(true);
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        let checked = |app: &App, role| a11y(app, role).1 & 1 == 1;
+        assert!(checked(&app, Role::CheckBox));
+        assert!(checked(&app, Role::Switch));
+        assert!(checked(&app, Role::Radio));
+        assert_eq!(a11y(&app, Role::Slider).0.as_deref(), Some("7"));
+        assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some("app"));
+        assert_eq!(
+            a11y(&app, Role::MultilineTextInput).0.as_deref(),
+            Some("app")
+        );
+    }
+    fn selected(app: &App, role: Role, name: &str) -> bool {
+        let id = app.find_widget(role, Some(name)).unwrap();
+        let state = app.scene().a11y(id).unwrap().state;
+        schnellui::a11y::StateFlags(state).contains(schnellui::a11y::StateFlags::SELECTED)
+    }
+
+    /// The user picks another tab, item, row and dropdown option. None of
+    /// them is bound to app state, and a rebuild keeps the pick, without
+    /// calling the handlers that already ran when it was made.
+    #[test]
+    fn a_rebuild_keeps_an_unbound_selection() {
+        use schnellui::widgets::{Dropdown, DropdownOption, List, ListItem, Tab, TabBar, Table};
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let c = calls.clone();
+        let mut app = App::mount_themed(theme::LIGHT, move || {
+            let c = c.clone();
+            Column::new()
+                .child(
+                    TabBar::new()
+                        .child(Tab::new("One").selected(true))
+                        .child(Tab::new("Two").on_select(move || c.set(c.get() + 1))),
+                )
+                .child(
+                    List::new()
+                        .child(ListItem::new("Inbox").selected(true))
+                        .child(ListItem::new("Archive")),
+                )
+                .child(
+                    Table::new()
+                        .columns(["Name"])
+                        .row(["Ann"])
+                        .row(["Bob"])
+                        .selected_row(0),
+                )
+                .child(
+                    Dropdown::new("Mode")
+                        .open(true)
+                        .option(DropdownOption::new("Light").selected(true))
+                        .option(DropdownOption::new("Dark")),
+                )
+        });
+        app.frame();
+        for (role, name) in [
+            (Role::Tab, "Two"),
+            (Role::ListItem, "Archive"),
+            (Role::TableRow, "Bob"),
+            (Role::ListBoxOption, "Dark"),
+        ] {
+            let id = app.find_widget(role, Some(name)).unwrap();
+            assert!(app.dispatch_click(id), "{name}");
+        }
+        app.frame();
+        assert_eq!(calls.get(), 1);
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        assert_eq!(calls.get(), 1, "carrying a pick does not run on_select");
+        assert!(selected(&app, Role::Tab, "Two"));
+        assert!(!selected(&app, Role::Tab, "One"));
+        assert!(selected(&app, Role::ListItem, "Archive"));
+        assert!(!selected(&app, Role::ListItem, "Inbox"));
+        assert!(selected(&app, Role::TableRow, "Bob"));
+        assert!(!selected(&app, Role::TableRow, "Ann"));
+        assert!(selected(&app, Role::ListBoxOption, "Dark"));
+        assert!(!selected(&app, Role::ListBoxOption, "Light"));
+        let trigger = app.find_widget(Role::ComboBox, Some("Mode")).unwrap();
+        assert_eq!(
+            app.scene().a11y(trigger).unwrap().value.as_deref(),
+            Some("Dark")
+        );
+    }
+
+    /// Carrying a value is silent, and a control the app bound to a signal
+    /// keeps whatever the app wrote.
+    #[test]
+    fn carrying_a_value_fires_no_handler_and_a_bound_control_keeps_its_signal() {
+        let fired = std::rc::Rc::new(std::cell::Cell::new(0));
+        let bound = create_signal(false);
+        let f = fired.clone();
+        let mut app = App::mount_themed(theme::LIGHT, move || {
+            let (a, b, c) = (f.clone(), f.clone(), f.clone());
+            Column::new()
+                .child(
+                    Checkbox::new(false)
+                        .name("Free")
+                        .on_toggle(move |_| a.set(a.get() + 1)),
+                )
+                .child(
+                    Checkbox::new(bound.get())
+                        .name("Bound")
+                        .on_toggle(move |v| bound.set(v)),
+                )
+                .child(
+                    Slider::new(0.0, 0.0, 10.0)
+                        .step(1.0)
+                        .on_change(move |_| b.set(b.get() + 1)),
+                )
+                .child(
+                    TextInput::new("")
+                        .label("Draft")
+                        .on_input(move |_| c.set(c.get() + 1)),
+                )
+        });
+        app.frame();
+        for name in ["Free", "Bound"] {
+            let id = app.find_widget(Role::CheckBox, Some(name)).unwrap();
+            assert!(app.dispatch_click(id));
+        }
+        let slider = app.find_widget(Role::Slider, None).unwrap();
+        app.focus(Some(slider));
+        assert!(app.dispatch_key(UiKey::Right {
+            shift: false,
+            ctrl: false
+        }));
+        let input = app.find_widget(Role::TextInput, None).unwrap();
+        app.focus(Some(input));
+        assert!(app.dispatch_key(UiKey::Char("x")));
+        let before = fired.get();
+        assert_eq!(before, 3);
+        assert!(bound.get());
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        assert_eq!(fired.get(), before, "no handler runs while carrying");
+        let checked = |app: &App, name| {
+            let id = app.find_widget(Role::CheckBox, Some(name)).unwrap();
+            app.scene().a11y(id).unwrap().state & 1 == 1
+        };
+        assert!(checked(&app, "Free"));
+        assert!(checked(&app, "Bound"), "the signal the app wrote");
+        assert_eq!(a11y(&app, Role::Slider).0.as_deref(), Some("1"));
+        assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some("x"));
+    }
+}

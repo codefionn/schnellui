@@ -209,7 +209,12 @@ fn switch_intrinsic(runtime: &crate::widgets::Runtime, id: WidgetId) -> Size {
 /// knob, slid to the right when `on` and the left when off (SOUL §8.1). Geometry
 /// derives from the laid-out rect — the density-scaled box keeps its proportions —
 /// and the pill radii square out under a low-roundness design ([`Shape::pill`]).
-fn emit_switch_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: WidgetId, on: bool) {
+pub(crate) fn emit_switch_paint(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+    on: bool,
+) {
     let rect = node_rect(scene, id, switch_intrinsic(runtime, id));
     let t = theme_for(runtime, id);
     let track_color = if on { t.accent } else { t.media };
@@ -272,7 +277,7 @@ fn radio_intrinsic(runtime: &crate::widgets::Runtime, id: WidgetId) -> Size {
 /// when `selected` — a centred blue dot (SOUL §8.1). All circles are [`Shape::pill`]
 /// radii, so a squared design system turns the radio into concentric blocks while
 /// the inner dot still reads as the selection mark.
-fn emit_radio_paint(
+pub(crate) fn emit_radio_paint(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
     id: WidgetId,

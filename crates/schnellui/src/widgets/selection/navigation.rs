@@ -298,6 +298,7 @@ impl View for Tab {
         let id = ctx.scene.insert(WidgetKind::Tab, compound.or(parent));
         let label: String = this.label.into_owned();
         write_selectable_semantics(ctx.scene, id, Role::Tab, &label, this.selected);
+        crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
         let painted: Cow<'static, str> = this.display.unwrap_or_else(|| label.clone().into());
         if this
             .context_menu
@@ -542,6 +543,7 @@ impl View for ListItem {
         let id = ctx.scene.insert(WidgetKind::ListItem, parent);
         let label: String = this.label.into_owned();
         write_selectable_semantics(ctx.scene, id, Role::ListItem, &label, this.selected);
+        crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
         let ts = emit_selectable_paint(
             &ctx.runtime,
             ctx.scene,

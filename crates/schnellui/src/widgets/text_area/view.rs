@@ -27,6 +27,7 @@ impl View for TextArea {
 
         // Retained edit state (caret parked at the end, like TextInput).
         let end = this.value.len();
+        crate::widgets::note_authored(&ctx.runtime, id, crate::widgets::text_bits(&this.value));
         let cache = AreaCache::new(&this.value);
         ctx.runtime.with(|rt| {
             rt.borrow_mut().areas.insert(

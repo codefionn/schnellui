@@ -218,6 +218,7 @@ impl View for Switch {
             }
             a.state = st.0;
         }
+        crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.on));
         emit_switch_paint(&ctx.runtime, ctx.scene, id, this.on);
         let intrinsic = switch_intrinsic(&ctx.runtime, id);
         ctx.layout
@@ -287,6 +288,7 @@ impl View for Radio {
             }
             a.state = st.0;
         }
+        crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
         emit_radio_paint(&ctx.runtime, ctx.scene, id, this.selected);
         let intrinsic = radio_intrinsic(&ctx.runtime, id);
         ctx.layout

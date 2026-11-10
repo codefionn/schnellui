@@ -289,6 +289,7 @@ impl View for Dropdown {
             }
             a.state = st.0;
         }
+        crate::widgets::note_authored(&ctx.runtime, id, crate::widgets::text_bits(&value));
         let ts = emit_dropdown_trigger_paint(
             &ctx.runtime,
             ctx.scene,
@@ -410,6 +411,7 @@ impl View for DropdownOption {
         let id = ctx.scene.insert(WidgetKind::DropdownOption, parent);
         let label: String = this.label.into_owned();
         write_selectable_semantics(ctx.scene, id, Role::ListBoxOption, &label, this.selected);
+        crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
         if this.text_size.is_some() {
             let style = TabStyle {
                 text_size: this.text_size,
