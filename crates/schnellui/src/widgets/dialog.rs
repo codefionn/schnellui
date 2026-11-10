@@ -476,8 +476,19 @@ impl View for Dialog {
             }
         }
         let mut panel_style = ContainerStyle::new(Container::Pad(this.padding));
-        panel_style.width = this.width;
-        panel_style.height = this.height;
+        // A definite size never outgrows the stage, so a fixed width wider
+        // than the viewport shrinks to fit instead of clipping on both sides.
+        // `max_*` folds into a definite size: a per-child max would replace the
+        // stage cap on that axis and let the clamped size through again.
+        panel_style.fit_parent = true;
+        panel_style.width = match (this.width, this.max_width) {
+            (Some(w), Some(max)) => Some(w.min(max)),
+            (w, _) => w,
+        };
+        panel_style.height = match (this.height, this.max_height) {
+            (Some(h), Some(max)) => Some(h.min(max)),
+            (h, _) => h,
+        };
         if let DialogPosition::At(point) = this.position {
             panel_style.anchor = Some(point);
         }
@@ -485,8 +496,8 @@ impl View for Dialog {
         ctx.layout.set_flex(
             panel,
             FlexChild {
-                max_width: this.max_width,
-                max_height: this.max_height,
+                max_width: this.width.is_none().then_some(this.max_width).flatten(),
+                max_height: this.height.is_none().then_some(this.max_height).flatten(),
                 ..FlexChild::default()
             },
         );
@@ -1387,6 +1398,47 @@ mod tests {
         assert!((rect.y + rect.height * 0.5 - 300.0).abs() < 0.01);
         assert!(!scene.paint(root).unwrap().primitives.is_empty());
         assert!(!scene.paint(panel).unwrap().primitives.is_empty());
+    }
+
+    fn panel_rect(dialog: Dialog, size: Size) -> Rect {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let (scene, root) = build(&runtime_handle, dialog, size);
+        let panel = find_kind(&scene, root, WidgetKind::Dialog).unwrap();
+        scene.layout(panel).unwrap().rect
+    }
+
+    #[test]
+    fn fixed_width_dialog_wider_than_viewport_shrinks_inside_the_inset() {
+        let size = Size {
+            width: 444.0,
+            height: 428.0,
+        };
+        for dialog in [
+            Dialog::new("Quick command").undecorated().width(500.0),
+            Dialog::new("Quick command").width(500.0),
+            Dialog::new("Quick command").width(500.0).max_width(400.0),
+            Dialog::new("Quick command").size(500.0, 900.0),
+        ] {
+            let rect = panel_rect(dialog.child(Text::new("Jump to a publishing task")), size);
+            assert!(rect.x >= 24.0 - 0.01, "left edge off the inset: {rect:?}");
+            assert!(rect.y >= 24.0 - 0.01, "top edge off the inset: {rect:?}");
+            assert!(rect.x + rect.width <= 444.0 - 24.0 + 0.01, "{rect:?}");
+            assert!(rect.y + rect.height <= 428.0 - 24.0 + 0.01, "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn fixed_width_dialog_that_fits_keeps_its_width() {
+        let rect = panel_rect(
+            Dialog::new("Quick command")
+                .width(300.0)
+                .child(Text::new("Hi")),
+            Size {
+                width: 444.0,
+                height: 428.0,
+            },
+        );
+        assert!((rect.width - 300.0).abs() < 0.01, "{rect:?}");
     }
 
     #[test]

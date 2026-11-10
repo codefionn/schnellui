@@ -2046,7 +2046,7 @@ fn focus_after_a_replacement_reaches_into_a_wrapper_node() {
 fn a_dropdown_popup_in_a_dialog_hits_above_the_dialog_content_below_it() {
     use schnellui::scene::Point;
     use schnellui::widgets::{Button, Column, Dialog, Dropdown, DropdownOption};
-    let view = Column::new().child(
+    let view = Column::new().fill().child(
         Dialog::new("Settings")
             .child(
                 Dropdown::new("Keymap")

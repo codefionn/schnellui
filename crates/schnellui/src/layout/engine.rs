@@ -910,6 +910,13 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
         s.min_size.height = length(h);
     }
 
+    if style.fit_parent {
+        s.max_size = taffy::Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        };
+    }
+
     // An anchored container floats out of flow (SOUL §8.1): absolutely positioned
     // at the given (left, top) inset within its parent's box, so siblings lay out
     // as if it were not there — the dropdown-popup geometry. (`build_style` skips

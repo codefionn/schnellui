@@ -295,6 +295,10 @@ pub struct ContainerStyle {
     /// such as a chart's hover box over a data point, which has to stay on
     /// that spot even where the parent runs past the window.
     pub keep_in_view: bool,
+    /// Never grow past the parent's content box on either axis, whatever a
+    /// definite `width` / `height` asks for (Taffy `max_size: 100%`). A
+    /// per-child `max_width` / `max_height` replaces this cap on its axis.
+    pub fit_parent: bool,
 }
 
 impl ContainerStyle {
@@ -315,6 +319,7 @@ impl ContainerStyle {
             anchor: None,
             anchor_above: None,
             keep_in_view: true,
+            fit_parent: false,
         }
     }
 }
