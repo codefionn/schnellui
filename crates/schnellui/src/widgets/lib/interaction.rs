@@ -313,6 +313,12 @@ pub fn set_focus_ring_visible(
     // A field shows its ring however it got focus, as CSS :focus-visible
     // does for text inputs: typing goes there next, whatever moved focus.
     let visible = visible || matches!(kind, WidgetKind::TextInput | WidgetKind::TextArea);
+    // Only a control that can hold focus wears the ring. One that is, or has
+    // just become, disabled never does, whatever asked for it.
+    let visible = visible
+        && !scene
+            .a11y(id)
+            .is_some_and(|a| StateFlags(a.state).contains(StateFlags::DISABLED));
     let wearing = runtime.with(|rt| {
         rt.borrow()
             .ring

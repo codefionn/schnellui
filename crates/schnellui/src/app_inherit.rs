@@ -2,10 +2,20 @@
 
 use super::*;
 
+/// Whether `id` can hold focus in `scene`: it advertises the focus action and
+/// is not disabled. A control rebuilt disabled keeps its counterpart but can
+/// no longer take focus, like a browser's disabled `<button>`.
+fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
+    scene.a11y(id).is_some_and(|a| {
+        a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
+            && !a11y::StateFlags(a.state).contains(a11y::StateFlags::DISABLED)
+    })
+}
+
 /// The counterpart in `replacement` of the control nearest to `focused` in
 /// `previous`'s tab order, trying later controls before earlier ones. Only runs
 /// when the focused control has no counterpart, so it costs a remount nothing
-/// in the common case.
+/// in the common case. A counterpart that cannot take focus is skipped.
 fn surviving_neighbour(previous: &App, replacement: &Scene, focused: WidgetId) -> Option<WidgetId> {
     schnellui::a11y::with_tab_order(&previous.scene, |order| {
         let position = order.iter().position(|id| *id == focused)?;
@@ -14,7 +24,8 @@ fn surviving_neighbour(previous: &App, replacement: &Scene, focused: WidgetId) -
         order[position + 1..]
             .iter()
             .chain(order[..position].iter().rev())
-            .find_map(|id| counterparts.get(*id))
+            .filter_map(|id| counterparts.get(*id))
+            .find(|id| takes_focus(replacement, *id))
     })
 }
 
@@ -128,6 +139,12 @@ impl App {
             let target = counterparts.get(previous_id).or_else(|| {
                 previous_option_trigger.and_then(|trigger| counterparts.get(trigger))
             })?;
+            // A control rebuilt disabled cannot hold focus. Fall through to
+            // the neighbour rule instead of ringing a control that is not
+            // the focused one.
+            if !takes_focus(&self.scene, target) {
+                return None;
+            }
             Some(RemountFocus {
                 target,
                 ring_visible,
@@ -138,8 +155,12 @@ impl App {
         // that control survives.
         let restored = restored.or_else(|| {
             let (opener, ring_visible) = previous.modal_opener_of(previous_focus?.0)?;
+            let target = counterparts.get(opener)?;
+            if !takes_focus(&self.scene, target) {
+                return None;
+            }
             Some(RemountFocus {
-                target: counterparts.get(opener)?,
+                target,
                 ring_visible,
             })
         });

@@ -632,6 +632,8 @@ mod tests_core;
 #[cfg(test)]
 mod tests_decorations;
 #[cfg(test)]
+mod tests_disabled_focus;
+#[cfg(test)]
 mod tests_modal_return;
 #[cfg(test)]
 mod tests_navigation;

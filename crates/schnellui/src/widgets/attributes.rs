@@ -209,6 +209,8 @@ pub fn run_reactive_attributes(
         if last != Some(value) {
             if attr == Attribute::FontSize {
                 apply_font(runtime, scene, layout, shaper, atlas, id, value);
+            } else if attr == Attribute::Disabled && value == AttributeValue::Bool(true) {
+                apply_disabled_handing_off_focus(runtime, scene, layout, shaper, atlas, id, value);
             } else {
                 apply(runtime, scene, layout, id, attr, value);
             }
@@ -239,6 +241,45 @@ pub fn reapply_reactive_colors(runtime: &Runtime, scene: &mut Scene) {
         }
     }
 }
+/// Disables `id` in place. When it holds focus, focus goes to the nearest
+/// enabled control in tab order (the next one first, then the previous), with
+/// the ring state it had, so the ring does not stay on a control that can no
+/// longer take focus. The neighbour is read before the disable drops `id` from
+/// the tab order.
+fn apply_disabled_handing_off_focus(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    layout: &mut LayoutEngine,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    value: AttributeValue,
+) {
+    let held = schnellui::a11y::focused(scene) == Some(id);
+    let heir = held
+        .then(|| {
+            schnellui::a11y::with_tab_order(scene, |order| {
+                let position = order.iter().position(|candidate| *candidate == id)?;
+                order[position + 1..]
+                    .first()
+                    .or_else(|| order[..position].last())
+                    .copied()
+            })
+        })
+        .flatten();
+    let ring = held && focus_ring_visible(runtime, id);
+    apply(runtime, scene, layout, id, Attribute::Disabled, value);
+    if !held {
+        return;
+    }
+    // Drops focus and ring from `id`, which is disabled now, and lands on the
+    // heir. With no heir this just blurs.
+    dispatch_focus(runtime, scene, shaper, atlas, heir);
+    if let Some(heir) = heir {
+        set_focus_ring_visible(runtime, scene, heir, ring);
+    }
+}
+
 pub(crate) fn apply(
     runtime: &Runtime,
     scene: &mut Scene,
