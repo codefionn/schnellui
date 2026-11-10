@@ -433,6 +433,9 @@ struct WindowedApp {
     /// Scene render key and paint epoch (scroll offsets and paint marks) the
     /// native cursor was last reconciled against; a frame that leaves both unchanged cannot have moved anything under a still pointer.
     cursor_synced_key: Option<(schnellui::scene::SceneRenderKey, u64)>,
+    /// Logical area last handed to the input method, `None` while it is off.
+    /// Focus on a text field turns it on; focus anywhere else turns it off.
+    ime_area: Option<schnellui::scene::Rect>,
     /// Identity of the glyph atlas the renderer last saw. A remount or theme
     /// rebuild that carried the atlas over keeps it, so no texture reset is needed.
     glyph_atlas_id: u64,

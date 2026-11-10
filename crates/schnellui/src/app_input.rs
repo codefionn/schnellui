@@ -191,6 +191,46 @@ impl App {
         }
     }
 
+    /// Delivers one input-method event. A raw surface with a full-fidelity
+    /// handler gets it as is. Otherwise a commit types its text into the
+    /// focused text field, as typed keys do, and the other events are left
+    /// to the input method's own window.
+    pub fn dispatch_ime(&mut self, ime: RawImeEvent) -> FocusedInputResult {
+        if self
+            .focused_input_semantics()
+            .is_some_and(|(role, name)| self.has_focused_input_binding(role, name.as_deref()))
+        {
+            return self.dispatch_focused_input(FocusedInputEvent::Ime(ime));
+        }
+        let RawImeEvent::Commit(text) = ime else {
+            return FocusedInputResult::Ignored;
+        };
+        if self.ime_area().is_none() {
+            return FocusedInputResult::Ignored;
+        }
+        let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        if !text.is_empty() && self.dispatch_key(UiKey::Char(&text)) {
+            FocusedInputResult::Handled
+        } else {
+            FocusedInputResult::Ignored
+        }
+    }
+
+    /// Where the input method's window belongs: the focused text field, or
+    /// the focused raw surface that takes input-method events. `None` when
+    /// focus is on anything else, so the host turns the input method off.
+    pub fn ime_area(&self) -> Option<scene::Rect> {
+        let id = self.focused_widget()?;
+        let text_field = matches!(
+            self.scene.node(id).map(|n| n.kind),
+            Some(WidgetKind::TextInput | WidgetKind::TextArea)
+        );
+        let raw_surface = self
+            .focused_input_semantics()
+            .is_some_and(|(role, name)| self.has_focused_input_binding(role, name.as_deref()));
+        (text_field || raw_surface).then(|| self.scene.composited_rect(id))
+    }
+
     fn focused_input_binding_index(&self, role: u16, name: Option<&str>) -> Option<usize> {
         self.focused_input_bindings.iter().position(|binding| {
             binding.role == role

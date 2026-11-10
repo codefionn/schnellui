@@ -675,6 +675,31 @@ impl WindowedApp {
         }
     }
 
+    /// Turns the input method on while a text field has focus and keeps its
+    /// window over that field; turns it off when focus moves elsewhere.
+    pub(super) fn sync_ime(&mut self) {
+        let area = self.app.ime_area();
+        if area == self.ime_area {
+            return;
+        }
+        if let Some(window) = &self.window {
+            if area.is_some() != self.ime_area.is_some() {
+                window.set_ime_allowed(area.is_some());
+            }
+            if let Some(rect) = area {
+                let scale = f64::from(self.app.scale());
+                window.set_ime_cursor_area(
+                    PhysicalPosition::new(f64::from(rect.x) * scale, f64::from(rect.y) * scale),
+                    PhysicalSize::new(
+                        f64::from(rect.width) * scale,
+                        f64::from(rect.height) * scale,
+                    ),
+                );
+            }
+        }
+        self.ime_area = area;
+    }
+
     /// Scene state `sync_cursor` resolves against.
     pub(super) fn cursor_sync_state(&self) -> (schnellui::scene::SceneRenderKey, u64) {
         let scene = self.app.scene();
@@ -753,6 +778,7 @@ impl WindowedApp {
     pub(super) fn settle_debug_command(&mut self) {
         self.on_redraw_requested();
         self.sync_cursor();
+        self.sync_ime();
     }
 
     pub(super) fn debug_status(&self) -> Value {
@@ -771,6 +797,12 @@ impl WindowedApp {
             "cursor": point_json(point),
             "cursor_icon": debug_label(self.cursor_icon),
             "focused": focused_json(&self.app),
+            "ime_area": self.ime_area.map(|rect| json!({
+                "x": rect.x,
+                "y": rect.y,
+                "width": rect.width,
+                "height": rect.height,
+            })),
             "hit_path": hit_path_json(&self.app, point),
             "remounts": {
                 "total": self.remount_count,
@@ -1010,6 +1042,17 @@ impl WindowedApp {
                     }
                     _ => self.app.dispatch_key(UiKey::Char(text)),
                 }
+            }
+            // An input method's committed text, as the window's IME event
+            // delivers it.
+            "ime_commit" => {
+                let Some(text) = request.text.as_deref() else {
+                    return DebugReply::error(400, "ime_commit requires text");
+                };
+                let result = self
+                    .app
+                    .dispatch_ime(crate::RawImeEvent::Commit(text.to_owned()));
+                self.apply_focused_input_result(result)
             }
             _ => return DebugReply::error(422, format!("unsupported key {:?}", request.key)),
         };
@@ -1291,6 +1334,7 @@ pub fn run(
         cursor_inside: false,
         cursor_icon: UiCursorIcon::Default,
         cursor_synced_key: None,
+        ime_area: None,
         glyph_atlas_id: app_atlas_id,
         interaction_trace,
         _debug_server: debug_server,
@@ -1373,6 +1417,7 @@ pub(crate) fn run_headless(
         cursor_inside: false,
         cursor_icon: UiCursorIcon::Default,
         cursor_synced_key: None,
+        ime_area: None,
         glyph_atlas_id: app_atlas_id,
         interaction_trace,
         _debug_server: Some(debug_server),

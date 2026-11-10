@@ -184,6 +184,9 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             event_loop.exit();
             return;
         }
+        // Focus moved by any path this turn (keys, pointer, AccessKit, a
+        // remount) decides whether the input method is on.
+        self.sync_ime();
         let now = Instant::now();
         // Trailing scroll callbacks own application state and may request a
         // structural replacement. They are taken out of the widget runtime
@@ -449,14 +452,14 @@ impl WindowedApp {
         EventTail::Normal
     }
 
-    fn on_ime(&mut self, ime: winit::event::Ime) -> EventTail {
+    pub(super) fn on_ime(&mut self, ime: winit::event::Ime) -> EventTail {
         let ime = match ime {
             winit::event::Ime::Enabled => RawImeEvent::Enabled,
             winit::event::Ime::Disabled => RawImeEvent::Disabled,
             winit::event::Ime::Preedit(text, cursor) => RawImeEvent::Preedit { text, cursor },
             winit::event::Ime::Commit(text) => RawImeEvent::Commit(text),
         };
-        let result = self.app.dispatch_focused_input(FocusedInputEvent::Ime(ime));
+        let result = self.app.dispatch_ime(ime);
         if self.apply_focused_input_result(result) {
             if let Some(w) = &self.window {
                 w.request_redraw();

@@ -378,6 +378,7 @@ fn windowed_host(
         cursor_inside: false,
         cursor_icon: Default::default(),
         cursor_synced_key: None,
+        ime_area: None,
         glyph_atlas_id,
         interaction_trace: None,
         _debug_server: None,
@@ -849,5 +850,69 @@ mod input_between_frames {
         host.on_redraw_requested();
         let end = dialog(&host);
         assert_eq!((end.x - start.x, end.y - start.y), (50.0, 30.0));
+    }
+}
+
+/// IME input through the window path: a focused text field turns the IME on
+/// and places it over the field, and a commit types the composed text.
+mod ime {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use winit::event::Ime;
+
+    use crate::a11y::Role;
+    use crate::widgets::{Button, Column, TextInput};
+    use crate::App;
+
+    #[test]
+    fn a_focused_text_field_takes_ime_commits_and_places_the_ime() {
+        let typed = Rc::new(RefCell::new(String::new()));
+        let view = Column::new()
+            .gap(8.0)
+            .child(TextInput::new("").label("Name").on_input({
+                let typed = typed.clone();
+                move |text: &str| *typed.borrow_mut() = text.to_owned()
+            }))
+            .child(Button::new("Go").on_click(|| {}));
+        let mut app = App::mount_with_size(view, 400, 200);
+        app.frame();
+        let mut host = super::windowed_host(app, None);
+        host.sync_ime();
+        assert_eq!(host.ime_area, None, "nothing focused, so no IME");
+
+        let field = host.app.find_widget(Role::TextInput, Some("Name")).unwrap();
+        assert!(host.app.focus(Some(field)));
+        host.sync_ime();
+        let area = host
+            .ime_area
+            .expect("a focused text field turns the IME on");
+        let rect = host.app.scene().composited_rect(field);
+        assert!(
+            area.x >= rect.x - 0.5
+                && area.y >= rect.y - 0.5
+                && area.right() <= rect.right() + 0.5
+                && area.bottom() <= rect.bottom() + 0.5,
+            "IME area {area:?} sits on the field {rect:?}"
+        );
+
+        // A preedit changes nothing yet. The commit types the composed text.
+        host.on_ime(Ime::Enabled);
+        host.on_ime(Ime::Preedit("にほん".into(), Some((0, 9))));
+        assert_eq!(*typed.borrow(), "");
+        host.on_ime(Ime::Preedit(String::new(), None));
+        host.on_ime(Ime::Commit("日本".into()));
+        assert_eq!(*typed.borrow(), "日本");
+        host.on_ime(Ime::Commit("語".into()));
+        assert_eq!(*typed.borrow(), "日本語");
+
+        // Focus leaving the field turns the IME off, and a stray commit
+        // types nowhere.
+        let go = host.app.find_widget(Role::Button, Some("Go")).unwrap();
+        assert!(host.app.focus(Some(go)));
+        host.sync_ime();
+        assert_eq!(host.ime_area, None);
+        host.on_ime(Ime::Commit("x".into()));
+        assert_eq!(*typed.borrow(), "日本語");
     }
 }

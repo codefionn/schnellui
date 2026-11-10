@@ -14,7 +14,7 @@ use winit::keyboard::ModifiersState;
 
 use super::{HostClipboard, WindowedApp};
 use crate::debug_server::DebugKey;
-use crate::scene::{Point, Size};
+use crate::scene::{Point, Rect, Size};
 use crate::widgets::Theme;
 use crate::{App, WindowUpdate};
 
@@ -125,6 +125,7 @@ impl HeadlessHost {
                 cursor_inside: false,
                 cursor_icon: Default::default(),
                 cursor_synced_key: None,
+                ime_area: None,
                 glyph_atlas_id,
                 interaction_trace: None,
                 _debug_server: None,
@@ -195,6 +196,7 @@ impl HeadlessHost {
             self.pin_clock();
             self.host.on_redraw_requested();
         }
+        self.host.sync_ime();
     }
 
     /// With batching on, input events are handled without a redraw between
@@ -307,6 +309,25 @@ impl HeadlessHost {
         self.host
             .on_mouse_input(ElementState::Released, winit_button(button));
         self.settle();
+    }
+
+    /// Delivers one input-method event, as the window's `Ime` event does.
+    pub fn ime(&mut self, event: crate::RawImeEvent) {
+        let ime = match event {
+            crate::RawImeEvent::Enabled => winit::event::Ime::Enabled,
+            crate::RawImeEvent::Disabled => winit::event::Ime::Disabled,
+            crate::RawImeEvent::Preedit { text, cursor } => {
+                winit::event::Ime::Preedit(text, cursor)
+            }
+            crate::RawImeEvent::Commit(text) => winit::event::Ime::Commit(text),
+        };
+        let _ = self.host.on_ime(ime);
+        self.settle();
+    }
+
+    /// The logical area handed to the input method, `None` while it is off.
+    pub fn ime_area(&self) -> Option<Rect> {
+        self.host.ime_area
     }
 
     /// Delivers one key, as the debug server's `key` command does.
