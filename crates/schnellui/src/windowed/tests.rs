@@ -351,6 +351,55 @@ fn width_change_publishes_an_incremental_tree_update() {
     );
 }
 
+/// A window host with no window, renderer or accessibility adapter around
+/// `app`, driven by calling its event handlers directly.
+fn windowed_host(
+    app: App,
+    remount: Option<Box<dyn FnMut(crate::scene::Size) -> Option<crate::WindowUpdate>>>,
+) -> super::WindowedApp {
+    use super::{HostClipboard, WindowedApp};
+    use std::collections::BTreeMap;
+    use winit::dpi::{PhysicalPosition, PhysicalSize};
+    use winit::keyboard::ModifiersState;
+
+    let glyph_atlas_id = app.atlas.id();
+    WindowedApp {
+        app,
+        clipboard: HostClipboard::Memory(None),
+        headless: true,
+        title: "test".into(),
+        window: None,
+        renderer: None,
+        accessibility: None,
+        event_loop_proxy: None,
+        accessibility_full_update_pending: true,
+        accessibility_published: Default::default(),
+        cursor: PhysicalPosition::new(0.0, 0.0),
+        cursor_icon: Default::default(),
+        cursor_synced_key: None,
+        glyph_atlas_id,
+        interaction_trace: None,
+        _debug_server: None,
+        remount_trigger: "startup",
+        remount_count: 0,
+        subtree_replacement_count: 0,
+        remount_counts_by_reason: BTreeMap::new(),
+        last_remount: None,
+        init_phys: PhysicalSize::new(400, 500),
+        deadline: None,
+        interval_deadline: None,
+        animation_deadline: None,
+        modifiers: ModifiersState::default(),
+        control_pressed: false,
+        raw_pointer_capture: Vec::new(),
+        drag_text: None,
+        last_text_click: None,
+        drag_slider: None,
+        left_pointer_down: false,
+        remount,
+    }
+}
+
 /// A host-controlled dropdown in a dialog, driven through the native pointer
 /// path: press, release, then the remount poll `window_event` runs after each.
 mod dropdown_pointer {
@@ -455,42 +504,7 @@ mod dropdown_pointer {
                 )]),
             })
         });
-        let glyph_atlas_id = app.atlas.id();
-        let host = WindowedApp {
-            app,
-            clipboard: HostClipboard::Memory(None),
-            headless: true,
-            title: "dropdown".into(),
-            window: None,
-            renderer: None,
-            accessibility: None,
-            event_loop_proxy: None,
-            accessibility_full_update_pending: true,
-            accessibility_published: Default::default(),
-            cursor: PhysicalPosition::new(0.0, 0.0),
-            cursor_icon: Default::default(),
-            cursor_synced_key: None,
-            glyph_atlas_id,
-            interaction_trace: None,
-            _debug_server: None,
-            remount_trigger: "startup",
-            remount_count: 0,
-            subtree_replacement_count: 0,
-            remount_counts_by_reason: BTreeMap::new(),
-            last_remount: None,
-            init_phys: PhysicalSize::new(400, 500),
-            deadline: None,
-            interval_deadline: None,
-            animation_deadline: None,
-            modifiers: ModifiersState::default(),
-            control_pressed: false,
-            raw_pointer_capture: Vec::new(),
-            drag_text: None,
-            last_text_click: None,
-            drag_slider: None,
-            left_pointer_down: false,
-            remount: Some(remount),
-        };
+        let host = super::windowed_host(app, Some(remount));
         assert!(expanded(&host));
         (state, host)
     }
@@ -591,5 +605,106 @@ mod dropdown_pointer {
             assert!(!state.get().open);
             assert!(!expanded(&host));
         }
+    }
+}
+
+/// The platform switches light/dark while the pointer rests on a button, and
+/// a click arrives before the next redraw. The rebuilt tree must already be
+/// laid out: the click lands and the button keeps its hover treatment, as
+/// after a structural remount.
+mod platform_theme_change {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{ElementState, MouseButton};
+    use winit::window::Theme as WinitTheme;
+
+    use super::windowed_host;
+    use crate::a11y::Role;
+    use crate::widgets::{Button, Pad};
+    use crate::{theme, App, ThemeMode};
+
+    #[test]
+    fn a_click_before_the_next_redraw_lands_on_the_rebuilt_tree() {
+        let clicks = Rc::new(Cell::new(0));
+        let counter = clicks.clone();
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::system(theme::LIGHT, theme::DARK),
+            move || {
+                let counter = counter.clone();
+                Pad::all(20.0)
+                    .child(Button::new("Save").on_click(move || counter.set(counter.get() + 1)))
+            },
+            300,
+            200,
+            1.0,
+        );
+        app.frame();
+        let mut host = windowed_host(app, None);
+        let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+        let r = host.app.scene().layout(save).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.on_redraw_requested();
+        let hovered_prims = host.app.scene().paint(save).unwrap().primitives.len();
+
+        host.on_theme_changed(WinitTheme::Dark);
+        assert_eq!(host.app.active_theme(), theme::DARK);
+        let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+        assert_eq!(
+            host.app.scene().paint(save).unwrap().primitives.len(),
+            hovered_prims,
+            "the button under the resting pointer keeps its hover wash"
+        );
+        host.on_mouse_input(ElementState::Pressed, MouseButton::Left);
+        host.on_mouse_input(ElementState::Released, MouseButton::Left);
+        assert_eq!(
+            clicks.get(),
+            1,
+            "the click before the redraw reached the button"
+        );
+    }
+
+    /// The same through an animated change: every fade frame rebuilds the
+    /// tree, and none of them may drop the hover under a resting pointer.
+    #[test]
+    fn a_fade_keeps_the_hover_under_a_resting_pointer() {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::system(theme::LIGHT, theme::DARK),
+            || Pad::all(20.0).child(Button::new("Save")),
+            300,
+            200,
+            1.0,
+        );
+        app.set_theme_transition_duration(std::time::Duration::from_millis(100));
+        let start = std::time::Instant::now();
+        app.set_clock(Some(start));
+        app.frame();
+        let mut host = windowed_host(app, None);
+        let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+        let r = host.app.scene().layout(save).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.on_redraw_requested();
+        let hovered_prims = host.app.scene().paint(save).unwrap().primitives.len();
+
+        host.on_theme_changed(WinitTheme::Dark);
+        for ms in [30, 60, 120] {
+            host.app
+                .set_clock(Some(start + std::time::Duration::from_millis(ms)));
+            host.on_redraw_requested();
+            let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+            assert_eq!(
+                host.app.scene().paint(save).unwrap().primitives.len(),
+                hovered_prims,
+                "{ms} ms into the fade the button keeps its hover wash"
+            );
+        }
+        assert_eq!(host.app.active_theme(), theme::DARK);
     }
 }

@@ -335,6 +335,12 @@ impl WindowedApp {
             let scale = self.app.scale();
             self.app.resize(pw as f32 / scale, ph as f32 / scale);
         }
+        // Lay the rebuilt tree out now, as a remount does, so input that
+        // arrives before the redraw hits the new widgets and a resting
+        // pointer keeps its hover treatment.
+        let _ = self.app.settle_frame();
+        let pointer = self.cursor_logical();
+        let _ = self.app.update_pointer_proximity(pointer);
         if let Some(window) = &self.window {
             window.request_redraw();
         }

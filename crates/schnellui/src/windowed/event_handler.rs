@@ -316,7 +316,7 @@ impl WindowedApp {
         EventTail::Normal
     }
 
-    fn on_theme_changed(&mut self, native: WinitTheme) -> EventTail {
+    pub(super) fn on_theme_changed(&mut self, native: WinitTheme) -> EventTail {
         let scheme = match native {
             WinitTheme::Light => crate::ColorScheme::Light,
             WinitTheme::Dark => crate::ColorScheme::Dark,
