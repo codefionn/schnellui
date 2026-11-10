@@ -208,10 +208,10 @@ impl App {
                 let position = order.iter().position(|id| *id == focused)?;
                 order[position + 1..]
                     .iter()
-                    .chain(order[..position].iter().rev())
-                    .copied()
-                    .filter(|id| !removed_nodes.contains(id))
-                    .find(|id| {
+                    .map(|id| (*id, true))
+                    .chain(order[..position].iter().rev().map(|id| (*id, false)))
+                    .filter(|(id, _)| !removed_nodes.contains(id))
+                    .find(|(id, _)| {
                         !home_is_gone
                             || schnellui::widgets::enclosing_dialog_panel(
                                 &self.widgets,
@@ -291,15 +291,37 @@ impl App {
             // it goes into the window, as dialog.show() does, before any
             // neighbour. The same control, or the opener a closed window
             // returns to, still comes first.
+            //
+            // A neighbour is only a hand-off for a visible (keyboard) focus.
+            // Invisible pointer focus is cleared instead, and the neighbour
+            // becomes the starting point of the next Tab.
+            let mut parked = None;
             let (heir, ring) = match (same_identity, opener) {
                 (Some(id), _) => (Some(id), ring),
                 (None, Some((id, opener_ring))) => (Some(id), opener_ring),
                 (None, None) => (
-                    self.first_control_of_new_window(&known)
-                        .or_else(|| neighbour.filter(|id| self.scene.node(*id).is_some())),
+                    self.first_control_of_new_window(&known).or_else(|| {
+                        let (id, after) =
+                            neighbour.filter(|(id, _)| self.scene.node(*id).is_some())?;
+                        if ring {
+                            Some(id)
+                        } else {
+                            parked = Some(schnellui::widgets::NavStart {
+                                widget: id,
+                                before: after,
+                            });
+                            None
+                        }
+                    }),
                     ring,
                 ),
             };
+            if let Some(start) = parked.filter(|start| {
+                app_inherit::takes_focus(&self.scene, start.widget)
+                    && self.first_control_of_new_window(&known).is_none()
+            }) {
+                schnellui::widgets::set_nav_start(&self.widgets, Some(start));
+            }
             let heir = heir
                 .filter(|heir| app_inherit::takes_focus(&self.scene, *heir))
                 .or_else(|| self.first_control_of_new_window(&known));

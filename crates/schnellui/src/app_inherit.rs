@@ -15,12 +15,13 @@ pub(crate) fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
 /// The counterpart in `replacement` of the control nearest to `focused` in
 /// `previous`'s tab order, trying later controls before earlier ones. Only runs
 /// when the focused control has no counterpart, so it costs a remount nothing
-/// in the common case. A counterpart that cannot take focus is skipped.
+/// in the common case. A counterpart that cannot take focus is skipped. The
+/// flag is true when the neighbour came after `focused` in the old order.
 ///
 /// When the dialog or window that held `focused` is gone too, its neighbours in
 /// the tab order are the controls of other windows. Focus would land on another
 /// window's Close button, so only controls outside every dialog qualify then.
-fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<WidgetId> {
+fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<(WidgetId, bool)> {
     let replacement = &next.scene;
     let home =
         schnellui::widgets::enclosing_dialog_panel(&previous.widgets, &previous.scene, focused);
@@ -34,14 +35,15 @@ fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<
         let home_is_gone = home.is_some_and(|panel| counterparts.get(panel).is_none());
         order[position + 1..]
             .iter()
-            .chain(order[..position].iter().rev())
-            .filter_map(|id| counterparts.get(*id))
-            .filter(|id| {
+            .map(|id| (id, true))
+            .chain(order[..position].iter().rev().map(|id| (id, false)))
+            .filter_map(|(id, after)| Some((counterparts.get(*id)?, after)))
+            .filter(|(id, _)| {
                 !home_is_gone
                     || schnellui::widgets::enclosing_dialog_panel(&next.widgets, replacement, *id)
                         .is_none()
             })
-            .find(|id| takes_focus(replacement, *id))
+            .find(|(id, _)| takes_focus(replacement, *id))
     })
 }
 
@@ -117,10 +119,15 @@ impl App {
             .iter()
             .flat_map(|entry| [entry.panel, entry.opener])
             .chain(previous_panels.iter().copied());
+        let previous_nav_start = schnellui::widgets::nav_start(&previous.widgets);
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
             &self.scene,
-            stateful_nodes.iter().copied().chain(modal_ids),
+            stateful_nodes
+                .iter()
+                .copied()
+                .chain(modal_ids)
+                .chain(previous_nav_start.map(|start| start.widget)),
         );
 
         self.inherit_dialog_geometry(previous);
@@ -210,9 +217,22 @@ impl App {
         // The focused control did not survive. Rather than strand a keyboard
         // user at the top of the page, hand focus to the nearest control of
         // the old tab order that did: the next one first, then the previous.
+        //
+        // That is for a keyboard user, who sees the ring move. Focus that was
+        // not visible (a pointer press) is cleared instead: parking it on a
+        // neighbour would let Enter activate a control nobody chose. The
+        // neighbour becomes the starting point of the next Tab.
+        let mut nav_start = None;
         let restored = restored.or_else(|| {
             let (focused, ring_visible) = effective_focus?;
-            let target = surviving_neighbour(previous, self, focused)?;
+            let (target, after) = surviving_neighbour(previous, self, focused)?;
+            if !ring_visible {
+                nav_start = Some(schnellui::widgets::NavStart {
+                    widget: target,
+                    before: after,
+                });
+                return None;
+            }
             Some(RemountFocus {
                 target,
                 ring_visible,
@@ -241,6 +261,15 @@ impl App {
 
         if let Some(focus) = restored {
             self.restore_focus_after_remount(focus);
+        } else if self.focused_widget().is_none() {
+            // A starting point that was already waiting survives the remount.
+            let carried = previous_nav_start.and_then(|start| {
+                Some(schnellui::widgets::NavStart {
+                    widget: counterparts.get(start.widget)?,
+                    ..start
+                })
+            });
+            schnellui::widgets::set_nav_start(&self.widgets, nav_start.or(carried));
         }
 
         // A context menu open on a control that survives the rebuild stays

@@ -1581,10 +1581,12 @@ fn remount_moves_focus_to_the_previous_row_when_the_last_is_removed() {
 }
 
 #[test]
-fn remount_pointer_focus_moves_to_the_neighbour_without_a_ring() {
-    let (app, ring) = remount_without(&["A", "B", "C"], &["A", "C"], "B", false);
+fn remount_pointer_focus_is_cleared_and_tab_starts_at_the_neighbour() {
+    let (mut app, ring) = remount_without(&["A", "B", "C"], &["A", "C"], "B", false);
+    assert_eq!(app.focused_widget(), None, "no invisible focus on a row");
+    assert!(!ring);
+    assert!(app.dispatch_key(UiKey::Tab { shift: false }));
     assert_eq!(app.focused_widget(), Some(remove_button(&app, "C")));
-    assert!(!ring, "pointer focus stays without a ring");
 }
 
 #[test]
@@ -1615,8 +1617,15 @@ fn replace_subtree_moves_focus_to_the_nearest_outside_neighbour() {
         app.replace_subtree(slot, Column::new()).unwrap();
         app.frame();
         let after = app.find_widget(Role::Button, Some("After")).unwrap();
-        assert_eq!(app.focused_widget(), Some(after));
-        assert_eq!(app.focus_ring_shown(), expect_ring);
+        if keyboard {
+            assert_eq!(app.focused_widget(), Some(after));
+            assert_eq!(app.focus_ring_shown(), expect_ring);
+        } else {
+            // Invisible pointer focus is cleared; Tab starts at the neighbour.
+            assert_eq!(app.focused_widget(), None);
+            assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+            assert_eq!(app.focused_widget(), Some(after));
+        }
 
         // Removing the last control falls back to the previous one.
         let slot = schnellui::widgets::ComponentRef::new();

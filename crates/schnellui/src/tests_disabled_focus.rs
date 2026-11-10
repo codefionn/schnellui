@@ -115,15 +115,16 @@ fn the_last_control_hands_focus_back_to_the_previous_one() {
 }
 
 #[test]
-fn a_pointer_focused_control_disabled_by_a_remount_leaves_no_ring_behind() {
+fn a_pointer_focused_control_disabled_by_a_remount_clears_focus_and_ring() {
     let view = |disabled| page(Button::new("Open").disabled(disabled));
     let mut previous = mount(view(false));
     let open = button(&previous, "Open");
     previous.focus_without_ring(Some(open));
     assert!(ringed(&previous).is_empty());
     let next = remount(&previous, view(true), None);
-    assert_eq!(focused_name(&next).as_deref(), Some("After"));
-    assert!(ringed(&next).is_empty(), "the modality carries over");
+    // Invisible focus is not parked on a control nobody chose.
+    assert_eq!(next.focused_widget(), None);
+    assert!(ringed(&next).is_empty());
 }
 
 #[test]

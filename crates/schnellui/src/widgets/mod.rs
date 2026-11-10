@@ -1245,6 +1245,29 @@ struct PrimitiveColorRestore {
     color: Color,
 }
 
+/// The sequential-navigation starting point left where a focused control went
+/// away (disabled or removed) while focus was not visible. Focus itself is
+/// cleared, so Enter and Space do nothing, but the next Tab or Shift+Tab walks
+/// on from here as in a browser. `widget` is the control focus would have
+/// moved to. `before` is true when it sat after the lost control, so the
+/// point lies just before it and Tab lands on it; false when it sat before the
+/// lost control, so the point lies just after it and Shift+Tab lands on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavStart {
+    pub widget: WidgetId,
+    pub before: bool,
+}
+
+/// The pending sequential-navigation starting point, if one is set.
+pub fn nav_start(runtime: &Runtime) -> Option<NavStart> {
+    runtime.with(|rt| rt.borrow().nav_start)
+}
+
+/// Sets or clears the sequential-navigation starting point.
+pub fn set_nav_start(runtime: &Runtime, start: Option<NavStart>) {
+    runtime.with(|rt| rt.borrow_mut().nav_start = start);
+}
+
 /// One interaction decoration (focus ring, hover, press) as applied to the scene.
 ///
 /// The primitive ranges it added are tracked here, so removing it never searches
@@ -1324,6 +1347,9 @@ struct WidgetRuntime {
     scrollbar_pointer: Option<ScrollbarPointerCapture>,
     /// A widget to scroll into view once the pending layout has run.
     pending_reveal: Option<WidgetId>,
+    /// Where Tab and Shift+Tab start while nothing is focused, after a
+    /// pointer-modality focus hand-off cleared focus (see [`NavStart`]).
+    nav_start: Option<NavStart>,
     /// Held pointer currently inside an enabled viewport edge.
     edge_auto_scroll: Option<EdgeAutoScrollState>,
     /// Indeterminate progress indicators advanced by [`tick_loading_spinners`].
@@ -1509,6 +1535,7 @@ pub fn reset(runtime: &Runtime) {
         rt.scroll_ids.clear();
         rt.scrollbar_pointer = None;
         rt.pending_reveal = None;
+        rt.nav_start = None;
         rt.edge_auto_scroll = None;
         rt.spinners.clear();
         rt.spinner_ids.clear();

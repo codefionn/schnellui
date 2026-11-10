@@ -244,7 +244,8 @@ pub fn reapply_reactive_colors(runtime: &Runtime, scene: &mut Scene) {
 /// Disables `id` in place. When it holds focus, focus goes to the nearest
 /// enabled control in tab order (the next one first, then the previous), with
 /// the ring state it had, so the ring does not stay on a control that can no
-/// longer take focus. The neighbour is read before the disable drops `id` from
+/// longer take focus. Focus that was not visible (a pointer press) is cleared
+/// instead and the neighbour becomes the [`NavStart`]. The neighbour is read before the disable drops `id` from
 /// the tab order.
 fn apply_disabled_handing_off_focus(
     runtime: &Runtime,
@@ -256,14 +257,15 @@ fn apply_disabled_handing_off_focus(
     value: AttributeValue,
 ) {
     let held = schnellui::a11y::focused(scene) == Some(id);
+    // `true` when the heir sat after `id`.
     let heir = held
         .then(|| {
             schnellui::a11y::with_tab_order(scene, |order| {
                 let position = order.iter().position(|candidate| *candidate == id)?;
                 order[position + 1..]
                     .first()
-                    .or_else(|| order[..position].last())
-                    .copied()
+                    .map(|heir| (*heir, true))
+                    .or_else(|| order[..position].last().map(|heir| (*heir, false)))
             })
         })
         .flatten();
@@ -274,8 +276,19 @@ fn apply_disabled_handing_off_focus(
     }
     // Drops focus and ring from `id`, which is disabled now, and lands on the
     // heir. With no heir this just blurs.
-    dispatch_focus(runtime, scene, shaper, atlas, heir);
-    if let Some(heir) = heir {
+    if !ring {
+        // Pointer focus was invisible. Parking it on a neighbour would let
+        // Enter activate a control the user never chose, so clear focus and
+        // keep the place for the next Tab.
+        dispatch_focus(runtime, scene, shaper, atlas, None);
+        set_nav_start(
+            runtime,
+            heir.map(|(widget, before)| NavStart { widget, before }),
+        );
+        return;
+    }
+    dispatch_focus(runtime, scene, shaper, atlas, heir.map(|(heir, _)| heir));
+    if let Some((heir, _)) = heir {
         set_focus_ring_visible(runtime, scene, heir, ring);
     }
 }

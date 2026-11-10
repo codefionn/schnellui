@@ -205,6 +205,12 @@ impl App {
         let modal = schnellui::widgets::active_modal_panel(scene);
         let current = schnellui::a11y::focused(scene);
         let current_group = current.and_then(|cur| roving_group(scene, cur));
+        // With nothing focused, a hand-off that cleared invisible focus leaves
+        // the place the walk continues from.
+        let start = current
+            .is_none()
+            .then(|| schnellui::widgets::nav_start(&self.widgets))
+            .flatten();
         let next = schnellui::a11y::with_tab_order(scene, |order| {
             // A tab bar, radio group, list or table is one Tab stop: Tab
             // enters it at its chosen member (else its first) and leaves it
@@ -232,6 +238,22 @@ impl App {
             let in_scope = |id: &&WidgetId| in_modal(**id) && is_stop(**id);
             let first = || order.iter().find(in_scope).copied();
             let last = || order.iter().rev().find(in_scope).copied();
+            let from_start = || {
+                let start = start?;
+                let position = order.iter().position(|id| *id == start.widget)?;
+                // The point lies before `widget` when it was the lost control's
+                // next neighbour, after it when its previous one.
+                let (ahead, behind) = if start.before {
+                    (&order[position..], &order[..position])
+                } else {
+                    (&order[position + 1..], &order[..=position])
+                };
+                if backwards {
+                    behind.iter().rev().find(in_scope).copied().or_else(last)
+                } else {
+                    ahead.iter().find(in_scope).copied().or_else(first)
+                }
+            };
             // The focused member of a group is not itself a stop; it is
             // still where the walk starts.
             current
@@ -253,6 +275,7 @@ impl App {
                             .or_else(first)
                     }
                 })
+                .or_else(from_start)
                 .or_else(|| if backwards { last() } else { first() })
         });
         match next {

@@ -245,6 +245,10 @@ fn dispatch_focus_with_indicator(
                 .map(|a| ActionFlags(a.actions).contains(ActionFlags::FOCUS))
                 .unwrap_or(false)
     });
+    // Focus landing anywhere ends the "nothing focused, start here" state.
+    if new.is_some() {
+        crate::widgets::set_nav_start(runtime, None);
+    }
     let indicator_visible = show_indicator
         || new.is_some_and(|id| {
             matches!(

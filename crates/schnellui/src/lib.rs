@@ -655,6 +655,8 @@ mod tests_modal_return;
 #[cfg(test)]
 mod tests_navigation;
 #[cfg(test)]
+mod tests_pointer_handoff;
+#[cfg(test)]
 mod tests_remount;
 #[cfg(test)]
 mod tests_reveal;
