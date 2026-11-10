@@ -59,6 +59,17 @@ fn kept_place(
     })
 }
 
+/// Whether Tab can stop on `id`: it is no roving-group member, or the group's
+/// entry. A tab bar's other tabs are reached by arrow keys, not Tab.
+fn is_tab_stop(scene: &Scene, id: WidgetId) -> bool {
+    match crate::app_interaction::roving_group(scene, id) {
+        None => true,
+        Some(group) => schnellui::a11y::with_tab_order(scene, |order| {
+            crate::app_interaction::roving_entry(scene, order, group) == Some(id)
+        }),
+    }
+}
+
 /// The counterpart in `replacement` of the control nearest to `focused` in
 /// `previous`'s tab order, trying later controls before earlier ones. Only runs
 /// when the focused control has no counterpart, so it costs a remount nothing
@@ -69,12 +80,18 @@ fn kept_place(
 /// children went with it to another part of the page, and the nearest of them
 /// in the old order is far from the gap in the new one. The first neighbour
 /// that kept its place wins (see [`kept_place`]). With none left, the nearest
-/// survivor does, moved or not.
+/// survivor does, moved or not. With `stops_only` (keyboard focus, which shows
+/// the ring) a neighbour Tab can reach is preferred over one it skips.
 ///
 /// When the dialog or window that held `focused` is gone too, its neighbours in
 /// the tab order are the controls of other windows. Focus would land on another
 /// window's Close button, so only controls outside every dialog qualify then.
-fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<(WidgetId, bool)> {
+fn surviving_neighbour(
+    previous: &App,
+    next: &App,
+    focused: WidgetId,
+    stops_only: bool,
+) -> Option<(WidgetId, bool)> {
     let replacement = &next.scene;
     let home =
         schnellui::widgets::enclosing_dialog_panel(&previous.widgets, &previous.scene, focused);
@@ -87,7 +104,7 @@ fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<
         );
         let home_is_gone = home.is_some_and(|panel| counterparts.get(panel).is_none());
         let kept = kept_place(order, &counterparts, replacement);
-        let walk = |only_kept: bool| {
+        let walk = |only_kept: bool, only_stops: bool| {
             order[position + 1..]
                 .iter()
                 .enumerate()
@@ -110,9 +127,17 @@ fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<
                         )
                         .is_none()
                 })
+                .filter(|(id, _)| !only_stops || is_tab_stop(replacement, *id))
                 .find(|(id, _)| takes_focus(replacement, *id))
         };
-        walk(true).or_else(|| walk(false))
+        // Keyboard focus lands where Tab can reach, when something there
+        // qualifies; a pointer start point may be any neighbour.
+        let stops = stops_only;
+        (stops
+            .then(|| walk(true, true).or_else(|| walk(false, true)))
+            .flatten())
+        .or_else(|| walk(true, false))
+        .or_else(|| walk(false, false))
     })
 }
 
@@ -294,7 +319,7 @@ impl App {
         let mut nav_start = None;
         let restored = restored.or_else(|| {
             let (focused, ring_visible) = effective_focus?;
-            let (target, after) = surviving_neighbour(previous, self, focused)?;
+            let (target, after) = surviving_neighbour(previous, self, focused, ring_visible)?;
             if !ring_visible {
                 nav_start = Some(schnellui::widgets::NavStart {
                     widget: target,

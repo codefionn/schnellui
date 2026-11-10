@@ -296,3 +296,84 @@ fn restoring_a_group_hands_off_past_the_children_that_moved_with_it() {
     assert!(next.dispatch_key(UiKey::Tab { shift: false }));
     assert_eq!(focused_name(&next).as_deref(), Some("Undo"));
 }
+
+fn tab(label: &str, selected: bool) -> schnellui::widgets::Tab {
+    schnellui::widgets::Tab::new(label.to_string()).selected(selected)
+}
+
+#[test]
+fn shift_tab_after_a_removed_list_control_lands_on_the_tab_bars_stop() {
+    use schnellui::widgets::TabBar;
+    let page = |names: &[&str]| {
+        let list = names
+            .iter()
+            .fold(Column::new(), |c, n| c.child(Button::new(n.to_string())));
+        Column::new()
+            .child(
+                TabBar::new()
+                    .child(tab("Overview", false))
+                    .child(tab("Engine", true)),
+            )
+            .child(list)
+    };
+    for backwards in [false, true] {
+        let mut previous = App::mount_with_size(page(&["X", "Y"]), 400, 300);
+        previous.frame();
+        let x = button(&previous, "X");
+        assert!(previous.pointer_focus(Some(x)));
+        let mut next = App::mount_with_size(page(&["Y"]), 400, 300);
+        next.inherit_remount_state(&previous);
+        next.frame();
+        assert!(next.dispatch_key(UiKey::Tab { shift: backwards }));
+        let expect = if backwards { "Engine" } else { "Y" };
+        assert_eq!(focused_name(&next).as_deref(), Some(expect));
+    }
+}
+
+/// The grouped_tabs shape: the removed button sits inside the tab bar's span
+/// and the bar's one stop (the selected tab) comes after it.
+fn bar_page(with_archive: bool) -> Column {
+    let bar = schnellui::widgets::TabBar::new().child(tab("Overview", false));
+    let bar = if with_archive {
+        bar.child(Button::new("Archive Planning"))
+    } else {
+        bar
+    };
+    // Undo follows the bar, so the bar's stop is not the last one to wrap to.
+    Column::new()
+        .child(
+            bar.child(tab("Build", false))
+                .child(Button::new("Archive Build"))
+                .child(tab("Engine", true)),
+        )
+        .child(Button::new("Undo"))
+}
+
+#[test]
+fn a_hand_off_inside_a_tab_bar_steps_to_the_bars_stop_backwards() {
+    for backwards in [false, true] {
+        let mut previous = App::mount_with_size(bar_page(true), 400, 300);
+        previous.frame();
+        let gone = button(&previous, "Archive Planning");
+        assert!(previous.pointer_focus(Some(gone)));
+        let mut next = App::mount_with_size(bar_page(false), 400, 300);
+        next.inherit_remount_state(&previous);
+        next.frame();
+        assert!(next.dispatch_key(UiKey::Tab { shift: backwards }));
+        let expect = if backwards { "Engine" } else { "Archive Build" };
+        assert_eq!(focused_name(&next).as_deref(), Some(expect));
+    }
+}
+
+#[test]
+fn a_keyboard_hand_off_lands_on_a_control_tab_can_reach() {
+    let mut previous = App::mount_with_size(bar_page(true), 400, 300);
+    previous.frame();
+    let gone = button(&previous, "Archive Planning");
+    assert!(previous.focus(Some(gone)));
+    let mut next = App::mount_with_size(bar_page(false), 400, 300);
+    next.inherit_remount_state(&previous);
+    next.frame();
+    // Not the Build tab, which Tab skips.
+    assert_eq!(focused_name(&next).as_deref(), Some("Archive Build"));
+}

@@ -249,7 +249,20 @@ impl App {
                     (&order[position + 1..], &order[..=position])
                 };
                 if backwards {
-                    behind.iter().rev().find(in_scope).copied().or_else(last)
+                    // A member of a roving group that is not its entry stands
+                    // for the group's one stop, wherever that sits: the lost
+                    // control was inside the bar, so Shift+Tab reaches the bar.
+                    behind
+                        .iter()
+                        .rev()
+                        .find_map(|&id| {
+                            if in_scope(&&id) {
+                                return Some(id);
+                            }
+                            let group = roving_group(scene, id)?;
+                            roving_entry(scene, order, group).filter(|&entry| in_modal(entry))
+                        })
+                        .or_else(last)
                 } else {
                     ahead.iter().find(in_scope).copied().or_else(first)
                 }
@@ -1309,7 +1322,7 @@ enum RovingStep {
 /// The group a focusable member belongs to, for widgets that share one Tab
 /// stop: tabs in a tab list, radios in a row, items in a list, rows in a
 /// table. `None` for every other widget.
-fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<scene::WidgetId> {
+pub(crate) fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<scene::WidgetId> {
     let kind = scene.node(id)?.kind;
     let parent = scene.node(id)?.parent?;
     match kind {
@@ -1349,7 +1362,7 @@ fn roving_members<'a>(
 }
 
 /// Where Tab enters a group: its selected or checked member, else its first.
-fn roving_entry(
+pub(crate) fn roving_entry(
     scene: &scene::Scene,
     order: &[scene::WidgetId],
     group: scene::WidgetId,
