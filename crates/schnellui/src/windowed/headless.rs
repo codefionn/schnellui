@@ -349,14 +349,38 @@ impl HeadlessHost {
         self.settle();
     }
 
-    /// One wheel notch at the pointer, positive scrolling down.
+    /// One wheel event of `delta_y` logical pixels at the pointer, positive
+    /// scrolling down. It takes the window host's own wheel path: a focused
+    /// raw surface and an open context menu see it first, then the deepest
+    /// scroll viewport under the pointer, bubbling to its ancestors at an
+    /// edge.
     pub fn wheel(&mut self, delta_y: f32) {
         // A window only gets wheel events while the pointer is over it.
-        let Some(p) = self.pointer() else {
+        if self.pointer().is_none() {
             return;
-        };
-        self.host.app.dispatch_wheel_at(p, delta_y);
+        }
+        let scale = f64::from(self.host.app.scale());
+        let _ = self
+            .host
+            .on_mouse_wheel(winit::event::MouseScrollDelta::PixelDelta(
+                PhysicalPosition::new(0.0, -f64::from(delta_y) * scale),
+            ));
         self.settle();
+    }
+
+    /// Moves the pointer to `p`, then wheels there: a wheel over a point other
+    /// than where the pointer rested.
+    pub fn wheel_at(&mut self, p: Point, delta_y: f32) {
+        self.pointer_move(p);
+        self.wheel(delta_y);
+    }
+
+    /// Delivers an accessibility action as the platform bridge does, then
+    /// settles. Returns whether a handler ran.
+    pub fn dispatch_action(&mut self, request: &crate::accesskit_action::ActionRequest) -> bool {
+        let acted = self.host.app.dispatch_action(request);
+        self.settle();
+        acted
     }
 
     /// Resizes the window to a logical size. A window that shrinks out from
@@ -396,6 +420,13 @@ impl HeadlessHost {
             self.host.sync_renderer_after_theme_rebuild();
         }
         self.settle();
+    }
+
+    /// Forgets the last press, so the next one is a single click however soon
+    /// and close to it comes. For replays that change how fast input arrives,
+    /// where a double click would otherwise depend on the speed.
+    pub fn forget_clicks(&mut self) {
+        self.host.last_text_click = None;
     }
 
     /// Draws a frame with no input, even while batching.

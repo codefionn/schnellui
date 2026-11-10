@@ -279,6 +279,16 @@ pub fn scroll_restoration_key(runtime: &Runtime, id: WidgetId) -> Option<String>
     })
 }
 
+/// Whether this viewport draws and takes a native scrollbar.
+pub fn scroll_has_scrollbar(runtime: &Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| {
+        rt.borrow()
+            .scrolls
+            .get(id)
+            .is_some_and(|state| state.scrollbar)
+    })
+}
+
 /// Whether this viewport requests conditional end-following across remounts.
 pub fn scroll_follows_end(runtime: &Runtime, id: WidgetId) -> bool {
     runtime.with(|rt| {

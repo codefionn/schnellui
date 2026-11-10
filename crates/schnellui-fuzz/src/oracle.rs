@@ -10,6 +10,7 @@ use schnellui::App;
 
 use crate::components::{Component, Mount};
 use crate::ops::{aim_point, apply, quiesce, Op};
+use crate::scrolling::{self, Watch};
 use crate::{HeadlessHost, CLASSIC_THEMES, THEMES};
 
 /// One primitive with what a person sees of it: kind, place, size and
@@ -234,7 +235,25 @@ fn check(component: &Component, host: &mut HeadlessHost, when: &str) -> Result<(
         return Ok(());
     }
     invariants(host.app_mut()).map_err(|e| format!("{when}: {e}"))?;
+    scrolling::settled(host).map_err(|e| format!("{when}: {e}"))?;
     (component.check)(host.app()).map_err(|e| format!("{when}: {e}"))
+}
+
+/// Applies `op` to `host`, then runs every check that holds after any op:
+/// the frame's own checks, and the rules that compare it with the frame
+/// before.
+fn run_op(
+    component: &Component,
+    host: &mut HeadlessHost,
+    op: &Op,
+    mounted: (u32, u32),
+    plain: bool,
+    when: &str,
+) -> Result<(), String> {
+    let watch = Watch::before(host, op);
+    apply(host, op, mounted, plain);
+    check(component, host, when)?;
+    watch.after(host, op).map_err(|e| format!("{when}: {e}"))
 }
 
 /// Same input to a decorated host and an undecorated twin. Their
@@ -249,10 +268,9 @@ pub fn twin(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), Strin
         });
         let mut faded = false;
         for (step, op) in ops.iter().enumerate() {
-            apply(&mut decorated, op, mount.size, false);
-            apply(&mut plain, op, mount.size, true);
             let when = format!("after step {step} {op:?}");
-            check(component, &mut decorated, &when)?;
+            apply(&mut plain, op, mount.size, true);
+            run_op(component, &mut decorated, op, mount.size, false, &when)?;
             // The two fade between different themes, and interpolation can
             // round a frame of one onto the theme it already has, so one
             // host may skip a rebuild the other makes. A rebuild resets what
@@ -292,11 +310,11 @@ pub fn history(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), St
         let mut used = (component.mount)(&mount);
         let mut theme = mount.theme;
         for (step, op) in ops.iter().enumerate() {
-            apply(&mut used, op, mount.size, false);
             if let Op::Theme(i) | Op::ThemeFade(i, _) = op {
                 theme = crate::THEMES[i % crate::THEMES.len()];
             }
-            check(component, &mut used, &format!("after step {step} {op:?}"))?;
+            let when = format!("after step {step} {op:?}");
+            run_op(component, &mut used, op, mount.size, false, &when)?;
         }
         quiesce(&mut used);
         canonical(&mut used);
@@ -473,10 +491,9 @@ pub fn animation(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), 
                 Op::Theme(_) | Op::ThemeFade(..) if still.held() => continue,
                 ref other => other.clone(),
             };
-            apply(&mut moving, &op, mount.size, false);
             apply(&mut still, &op, mount.size, false);
             let when = format!("after step {step} {op:?}");
-            check(component, &mut moving, &when)?;
+            run_op(component, &mut moving, &op, mount.size, false, &when)?;
             // A theme change rebuilds the still host at once and the
             // animated one frame by frame, and a rebuild resets what the
             // app does not hold (an open context menu, a press under way, a
@@ -549,6 +566,10 @@ fn paced(component: &Component, mount: Mount, ops: &[Op], pace: Pace) -> Headles
     }
     for op in ops {
         apply(&mut host, op, mount.size, false);
+        // Two presses close in time and place are a double click, so one input
+        // read at two speeds is two different inputs. This property is about
+        // where input lands, not how it is timed: every press is a single click.
+        host.forget_clicks();
         match pace {
             Pace::Burst => {}
             Pace::Slow => host.advance(std::time::Duration::from_millis(400)),

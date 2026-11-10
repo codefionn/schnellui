@@ -9,7 +9,8 @@
 //! painting the same.
 //!
 //! `pace`: the same input as one burst, one event every 400 ms, and a
-//! random mix of the two ends in the same state.
+//! random mix of the two ends in the same state. Its input includes wheel,
+//! page keys and AccessKit scroll actions on a viewport.
 
 use proptest::prelude::*;
 use schnellui_fuzz::components::Mount;
@@ -39,6 +40,47 @@ macro_rules! timing_properties {
                     let _serial = serial();
                     verdict(oracle::animation(&component(), m, &ops))?;
                 }
+            }
+        }
+    )*};
+}
+
+/// The twin property alone, for components whose end state depends on how many
+/// frames the input took.
+macro_rules! twin_property {
+    ($($component:ident),* $(,)?) => {$(
+        mod $component {
+            use super::*;
+
+            fn component() -> components::Component {
+                components::named(stringify!($component))
+            }
+
+            proptest! {
+                #![proptest_config(config(24))]
+
+                #[test]
+                fn twin(m in mount(&component()), ops in ops::timed_ops(40)) {
+                    let _serial = serial();
+                    let m = Mount { animate: true, ..m };
+                    verdict(oracle::twin(&component(), m, &ops))?;
+                }
+            }
+        }
+    )*};
+}
+
+macro_rules! pace_properties {
+    ($($component:ident),* $(,)?) => {$(
+        mod $component {
+            use super::*;
+
+            fn component() -> components::Component {
+                components::named(stringify!($component))
+            }
+
+            proptest! {
+                #![proptest_config(config(24))]
 
                 #[test]
                 fn pace(
@@ -64,6 +106,10 @@ timing_properties!(
     text_input,
     text_area,
     scroll,
+    scroll_form,
+    scroll_nested,
+    scroll_area,
+    scroll_resize,
     dropdown,
     context_menu,
     dialogs,
@@ -72,3 +118,39 @@ timing_properties!(
     rich_text,
     rich_links,
 );
+
+// A virtual list measures its rows as it mounts them and keeps its viewport
+// anchored on a row while it does, so where it ends depends on how many
+// frames and rebuilds the input took. `animation` replays one input as a
+// fade of many frames and as one jump; `pace` as one frame and as many. Both
+// end a pixel apart (`probes.rs` keeps ignored reproducers), so it takes part
+// in `twin`, whose two hosts see the same frames, and in the other properties.
+twin_property!(scroll_virtual);
+
+/// The pace property for every component but `scroll_virtual` (see above).
+mod pace {
+    use super::*;
+
+    pace_properties!(
+        buttons,
+        toggles,
+        sliders,
+        tabs,
+        list,
+        table,
+        text_input,
+        text_area,
+        scroll,
+        scroll_form,
+        scroll_nested,
+        scroll_area,
+        scroll_resize,
+        dropdown,
+        context_menu,
+        dialogs,
+        grouped_tabs,
+        todo,
+        rich_text,
+        rich_links,
+    );
+}

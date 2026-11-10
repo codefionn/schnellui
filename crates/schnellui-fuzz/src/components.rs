@@ -16,7 +16,7 @@ use schnellui::widgets::{
     Button, Checkbox, Column, ContextMenu, ContextMenuItem, Dialog, Dropdown, DropdownOption,
     GroupedTabList, Link, List, ListItem, Pad, Radio, RichDoc, RichSpan, RichText, Row, Scroll,
     Slider, Stack, Switch, Tab, TabBar, TabGroup, TabNode, Table, TableRow, Text, TextArea,
-    TextInput, Theme, View, WrapMode,
+    TextInput, Theme, View, VirtualList, VirtualListController, WrapMode,
 };
 use schnellui::{App, Remount, ThemeMode, WindowUpdate};
 
@@ -76,6 +76,11 @@ pub fn all() -> Vec<Component> {
         TEXT_INPUT,
         TEXT_AREA,
         SCROLL,
+        SCROLL_FORM,
+        SCROLL_NESTED,
+        SCROLL_AREA,
+        SCROLL_VIRTUAL,
+        SCROLL_RESIZE,
         DROPDOWN,
         CONTEXT_MENU,
         DIALOGS,
@@ -618,7 +623,7 @@ fn scroll(mount: &Mount) -> HeadlessHost {
                         .on_select(move || chosen.set(i)),
                 );
             }
-            Pad::all(12.0).child(Scroll::new().size(240.0, 180.0).child(rows))
+            Pad::all(12.0).child(Scroll::new().size(240.0, 180.0).scrollbar(true).child(rows))
         },
         mount,
     )
@@ -648,6 +653,355 @@ pub const SCROLL: Component = Component {
     size: (300, 240),
     mount: scroll,
     canonical: Some(scroll_canonical),
+    check: fine,
+};
+
+/// Scrolls every viewport back to its start, the canonical place for scroll
+/// position: a fresh mount starts there.
+fn scroll_to_top(host: &mut HeadlessHost) {
+    for id in crate::scrolling::viewports(host.app()) {
+        host.app_mut().dispatch_scroll(id, -1.0e9);
+    }
+    host.frame();
+}
+
+// --- a form taller than its window -------------------------------------------
+
+fn scroll_form(mount: &Mount) -> HeadlessHost {
+    // Every control is held by a signal, so a theme rebuild keeps what the
+    // person did.
+    let email = create_signal(false);
+    let notes = create_signal(true);
+    let name = create_signal(String::from("Ada"));
+    let city = create_signal(String::new());
+    let volume = create_signal(40.0f32);
+    let last = create_signal("none");
+    host(
+        move || {
+            let form = Column::new()
+                .gap(10.0)
+                .child(Text::dynamic(move || format!("last {}", last.get())))
+                .child(Button::new("First").on_click(move || last.set("First")))
+                .child(
+                    Checkbox::new(email.get())
+                        .name("Email")
+                        .on_toggle(move |on| email.set(on)),
+                )
+                .child(
+                    TextInput::new(name.get())
+                        .label("Name")
+                        .on_input(move |v: &str| name.set(v.to_owned())),
+                )
+                .child(
+                    Slider::new(volume.get(), 0.0, 100.0)
+                        .step(5.0)
+                        .name("Volume")
+                        .on_change(move |v| volume.set(v)),
+                )
+                .child(Button::new("Middle").on_click(move || last.set("Middle")))
+                .child(
+                    Switch::new(notes.get())
+                        .name("Notes")
+                        .on_toggle(move |on| notes.set(on)),
+                )
+                .child(
+                    TextInput::new(city.get())
+                        .placeholder("City")
+                        .label("City")
+                        .on_input(move |v: &str| city.set(v.to_owned())),
+                )
+                .child(Button::new("Save").on_click(move || last.set("Save")))
+                .child(Button::new("Last").on_click(move || last.set("Last")));
+            Column::new()
+                .fill()
+                .child(Pad::all(8.0).child(Button::new("Help")))
+                .child(
+                    Scroll::new()
+                        .fill()
+                        .label("Form")
+                        .scrollbar(true)
+                        .child(Pad::all(12.0).child(form)),
+                )
+        },
+        mount,
+    )
+}
+
+fn scroll_form_canonical(host: &mut HeadlessHost) {
+    let checked = |host: &HeadlessHost, role, name: &str| {
+        nodes(host.app(), role)
+            .iter()
+            .any(|n| n.name.as_deref() == Some(name) && has(n, "checked"))
+    };
+    if checked(host, Role::CheckBox, "Email") {
+        click(host, Role::CheckBox, "Email");
+    }
+    if !checked(host, Role::Switch, "Notes") {
+        click(host, Role::Switch, "Notes");
+    }
+    retype(host, Role::TextInput, Some("Name"), "Zed");
+    retype(host, Role::TextInput, Some("City"), "Oslo");
+    focus(host, Role::Slider, Some("Volume"));
+    host.key(&HostKey::Home, false, false);
+    click(host, Role::Button, "First");
+    host.blur();
+    scroll_to_top(host);
+}
+
+pub const SCROLL_FORM: Component = Component {
+    name: "scroll_form",
+    size: (320, 220),
+    mount: scroll_form,
+    canonical: Some(scroll_form_canonical),
+    check: clean_text,
+};
+
+// --- a scroll inside a scroll --------------------------------------------------
+
+fn scroll_nested(mount: &Mount) -> HeadlessHost {
+    let chosen = create_signal(0usize);
+    host(
+        move || {
+            let mut rows = List::new();
+            for i in 0..14 {
+                rows = rows.child(
+                    ListItem::new(format!("Item {i}"))
+                        .selected(chosen.get() == i)
+                        .on_select(move || chosen.set(i)),
+                );
+            }
+            let mut page = Column::new()
+                .gap(8.0)
+                .child(Text::new("Outer page"))
+                .child(Button::new("Before"))
+                .child(
+                    Scroll::new()
+                        .size(240.0, 100.0)
+                        .label("Inner")
+                        .scrollbar(true)
+                        .child(rows),
+                );
+            for i in 1..=6 {
+                page = page.child(Button::new(format!("After {i}")));
+            }
+            Column::new().fill().child(
+                Scroll::new()
+                    .fill()
+                    .label("Outer")
+                    .scrollbar(true)
+                    .child(Pad::all(10.0).child(page)),
+            )
+        },
+        mount,
+    )
+}
+
+pub const SCROLL_NESTED: Component = Component {
+    name: "scroll_nested",
+    size: (300, 220),
+    mount: scroll_nested,
+    canonical: Some(|host| {
+        click(host, Role::ListItem, "Item 0");
+        scroll_to_top(host);
+    }),
+    check: |app| exactly_one(app, Role::ListItem, "selected"),
+};
+
+// --- a text area that grows inside a scroll -------------------------------------
+
+fn scroll_area(mount: &Mount) -> HeadlessHost {
+    let text = create_signal(String::from("a first line\nand a second"));
+    host(
+        move || {
+            let mut page = Column::new()
+                .gap(8.0)
+                .child(Text::new("Notes"))
+                .child(
+                    TextArea::new(text.get())
+                        .rows(2)
+                        .wrap(WrapMode::Word)
+                        .on_input(move |v: &str| text.set(v.to_owned())),
+                )
+                .child(Button::new("Save"));
+            for tag in ["red", "green", "blue", "gold"] {
+                page = page.child(Button::new(format!("Tag {tag}")));
+            }
+            Column::new()
+                .fill()
+                .child(
+                    Scroll::new()
+                        .fill()
+                        .label("Notes")
+                        .scrollbar(true)
+                        .child(Pad::all(12.0).child(page)),
+                )
+                .child(Pad::all(6.0).child(Text::new("Footer")))
+        },
+        mount,
+    )
+}
+
+pub const SCROLL_AREA: Component = Component {
+    name: "scroll_area",
+    size: (300, 200),
+    mount: scroll_area,
+    canonical: Some(|host| {
+        retype(host, Role::MultilineTextInput, None, "one\ntwo");
+        scroll_to_top(host);
+    }),
+    check: clean_text,
+};
+
+// --- a virtual list whose length changes ------------------------------------------
+
+const VIRTUAL_ROWS: u32 = 60;
+
+fn scroll_virtual(mount: &Mount) -> HeadlessHost {
+    // The data lives outside the view, as an application keeps it, so a
+    // theme rebuild mounts the same rows.
+    let keys = Rc::new(RefCell::new((0..VIRTUAL_ROWS).collect::<Vec<u32>>()));
+    let next = Rc::new(Cell::new(VIRTUAL_ROWS));
+    let controller = VirtualListController::new(0..VIRTUAL_ROWS, 30.0);
+    host(
+        move || {
+            let (k, n, c) = (keys.clone(), next.clone(), controller.clone());
+            let append = Button::new("Append").on_click(move || {
+                let key = n.replace(n.get() + 1);
+                k.borrow_mut().push(key);
+                c.insert(usize::MAX, key);
+            });
+            let (k, n, c) = (keys.clone(), next.clone(), controller.clone());
+            let prepend = Button::new("Prepend").on_click(move || {
+                let key = n.replace(n.get() + 1);
+                k.borrow_mut().insert(0, key);
+                c.insert(0, key);
+            });
+            let (k, c) = (keys.clone(), controller.clone());
+            let trim = Button::new("Trim").on_click(move || {
+                let mut keys = k.borrow_mut();
+                for _ in 0..8 {
+                    if let Some(key) = keys.pop() {
+                        c.remove(&key);
+                    }
+                }
+            });
+            let (k, n, c) = (keys.clone(), next.clone(), controller.clone());
+            let reset = Button::new("Reset").on_click(move || {
+                *k.borrow_mut() = (0..VIRTUAL_ROWS).collect();
+                n.set(VIRTUAL_ROWS);
+                c.replace(0..VIRTUAL_ROWS);
+            });
+            Column::new()
+                .gap(6.0)
+                .child(
+                    Pad::all(8.0).child(
+                        Row::new()
+                            .gap(6.0)
+                            .child(append)
+                            .child(prepend)
+                            .child(trim)
+                            .child(reset),
+                    ),
+                )
+                .child(
+                    VirtualList::new(controller.clone(), |key: &u32| {
+                        Button::new(format!("Row {key}"))
+                    })
+                    .label("Rows")
+                    .size(300.0, 150.0)
+                    .scrollbar(true),
+                )
+        },
+        mount,
+    )
+}
+
+pub const SCROLL_VIRTUAL: Component = Component {
+    name: "scroll_virtual",
+    size: (340, 240),
+    mount: scroll_virtual,
+    canonical: Some(|host| {
+        click(host, Role::Button, "Reset");
+        scroll_to_top(host);
+    }),
+    check: fine,
+};
+
+// --- a scroll whose content grows and shrinks ---------------------------------------
+
+const RESIZE_ROWS: usize = 20;
+
+fn resize_view(count: Rc<Cell<usize>>, dirty: Rc<Cell<bool>>) -> impl View {
+    let change = |count: &Rc<Cell<usize>>, dirty: &Rc<Cell<bool>>, f: fn(usize) -> usize| {
+        let (count, dirty) = (count.clone(), dirty.clone());
+        move || {
+            count.set(f(count.get()));
+            dirty.set(true);
+        }
+    };
+    let mut rows = Column::new().gap(6.0);
+    for i in 0..count.get() {
+        rows = rows.child(Button::new(format!("Item {i}")));
+    }
+    Column::new()
+        .fill()
+        .child(
+            Pad::all(8.0).child(
+                Row::new()
+                    .gap(6.0)
+                    .child(
+                        Button::new("More").on_click(change(&count, &dirty, |n| (n + 9).min(60))),
+                    )
+                    .child(
+                        Button::new("Fewer")
+                            .on_click(change(&count, &dirty, |n| n.saturating_sub(7))),
+                    )
+                    .child(Button::new("Reset").on_click(change(&count, &dirty, |_| RESIZE_ROWS))),
+            ),
+        )
+        .child(
+            Scroll::new()
+                .fill()
+                .label("Items")
+                .scrollbar(true)
+                .child(Pad::all(8.0).child(rows)),
+        )
+}
+
+fn scroll_resize(mount: &Mount) -> HeadlessHost {
+    let count = Rc::new(Cell::new(RESIZE_ROWS));
+    let dirty = Rc::new(Cell::new(false));
+    let mut host = {
+        let (count, dirty) = (count.clone(), dirty.clone());
+        host(move || resize_view(count.clone(), dirty.clone()), mount)
+    };
+    let (scale, animate) = (mount.scale, mount.animate);
+    host.set_remount(move |size: Size, theme: Theme| {
+        if !dirty.replace(false) {
+            return None;
+        }
+        let (count, dirty) = (count.clone(), dirty.clone());
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme),
+            move || resize_view(count.clone(), dirty.clone()),
+            size.width as u32,
+            size.height as u32,
+            scale,
+        );
+        app.apply_reduced_motion(!animate);
+        Some(WindowUpdate::Remount(Remount::new(app, "scroll_resize")))
+    });
+    host
+}
+
+pub const SCROLL_RESIZE: Component = Component {
+    name: "scroll_resize",
+    size: (300, 220),
+    mount: scroll_resize,
+    canonical: Some(|host| {
+        click(host, Role::Button, "Reset");
+        scroll_to_top(host);
+    }),
     check: fine,
 };
 

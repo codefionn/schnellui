@@ -35,6 +35,66 @@ pub fn placement_faults(app: &App) -> Option<String> {
     crate::widgets::probes::placement_faults(&app.widgets, app.scene(), window)
 }
 
+/// The hover decoration is on the control under the resting `pointer` (or on
+/// nothing while the keyboard holds hover). Describes the mismatch.
+pub fn hover_faults(app: &App, pointer: schnellui::scene::Point) -> Option<String> {
+    crate::widgets::probes::hover_disagrees(
+        &app.widgets,
+        app.scene(),
+        pointer,
+        app.hover_hold.get().is_some(),
+    )
+}
+
+/// A scroll viewport that draws and takes a native scrollbar right now.
+#[derive(Clone, Copy, Debug)]
+pub struct ScrollbarTarget {
+    pub viewport: schnellui::scene::WidgetId,
+    pub track: schnellui::scene::Rect,
+    pub thumb: schnellui::scene::Rect,
+}
+
+/// Every viewport built with `.scrollbar(true)` whose content overflows, in
+/// tree order, with the window-space track and thumb the pointer can grab.
+pub fn scrollbars(app: &App) -> Vec<ScrollbarTarget> {
+    let scene = app.scene();
+    let mut out = Vec::new();
+    for id in scene.preorder() {
+        if !crate::widgets::scroll_has_scrollbar(&app.widgets, id) || !scene.is_visible(id) {
+            continue;
+        }
+        let Some((track, thumb)) =
+            crate::widgets::scroll_metrics(scene, id).and_then(crate::widgets::scrollbar_rects)
+        else {
+            continue;
+        };
+        out.push(ScrollbarTarget {
+            viewport: id,
+            track,
+            thumb,
+        });
+    }
+    out
+}
+
+/// The layout-space rect a keyboard reveal aims at for the control `id`: the
+/// caret row of a text area, else the control's own box. `None` while the
+/// control has no layout, or an area has no row table yet.
+pub fn reveal_target(
+    app: &mut App,
+    id: schnellui::scene::WidgetId,
+) -> Option<schnellui::scene::Rect> {
+    let rect = app.scene().layout(id)?.rect;
+    if rect.is_empty() {
+        return None;
+    }
+    if app.scene().node(id)?.kind == schnellui::scene::WidgetKind::TextArea {
+        let widgets = app.widgets.clone();
+        return crate::widgets::caret_rect(&widgets, &mut app.text, id, rect);
+    }
+    Some(rect)
+}
+
 /// All of the checks above, first failure first.
 pub fn invariants(app: &mut App) -> Result<(), String> {
     if let Some(fault) = decoration_faults(app) {

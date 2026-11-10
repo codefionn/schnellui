@@ -67,7 +67,7 @@ pub(crate) fn decoration_relay_diff(runtime: &Runtime, scene: &mut Scene) -> Opt
                 .collect()
         };
         let same = match (&old, &new) {
-            (Some(a), Some(b)) => shape(a) == shape(b),
+            (Some(a), Some(b)) => same_shape(&shape(a), &shape(b)),
             (None, Some(b)) | (Some(b), None) => b.is_empty(),
             (None, None) => true,
         };
@@ -91,6 +91,45 @@ pub(crate) fn decoration_relay_diff(runtime: &Runtime, scene: &mut Scene) -> Opt
         }
     }
     None
+}
+
+/// Whether two runs of primitives are the same shape, to within the float
+/// noise two ways of adding up the same layout leave (a ten-thousandth of a
+/// pixel), which nobody can see.
+fn same_shape(a: &[Primitive], b: &[Primitive]) -> bool {
+    const NOISE: f32 = 0.01;
+    // The geometry a primitive draws at, as numbers; the rest of it, with
+    // that geometry zeroed, must match exactly.
+    fn split(p: &Primitive) -> (Primitive, [f32; 6]) {
+        let mut rest = *p;
+        let mut g = [0.0; 6];
+        let rect = |r: &mut Rect, g: &mut [f32]| {
+            g[..4].copy_from_slice(&[r.x, r.y, r.width, r.height]);
+            *r = Rect::ZERO;
+        };
+        match &mut rest {
+            Primitive::SolidRect { rect: r, .. }
+            | Primitive::GlyphQuad { rect: r, .. }
+            | Primitive::ImageQuad { rect: r, .. } => rect(r, &mut g),
+            Primitive::StrokeRect { rect: r, width, .. } => {
+                rect(r, &mut g);
+                g[4] = std::mem::take(width);
+            }
+            Primitive::Line {
+                from, to, width, ..
+            } => {
+                g = [from.x, from.y, to.x, to.y, std::mem::take(width), 0.0];
+                *from = Point::default();
+                *to = Point::default();
+            }
+        }
+        (rest, g)
+    }
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            let ((rx, gx), (ry, gy)) = (split(x), split(y));
+            rx == ry && gx.iter().zip(gy).all(|(p, q)| (p - q).abs() <= NOISE)
+        })
 }
 
 /// Checks that every applied hover, press and focus decoration still finds

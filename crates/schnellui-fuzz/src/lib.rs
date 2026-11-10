@@ -23,6 +23,14 @@
 //!   no animation runs past ten seconds; both end painting the same.
 //! - Pace. One input sequence delivered as a single burst, one event every
 //!   400 ms, and a seeded mix of the two ends in the same state.
+//! - Scrolling. Wheel (trackpad steps, notches, flings, bursts, at a point other
+//!   than the pointer), scrollbar thumb drags and track pages, page and arrow
+//!   keys, and AccessKit scroll actions are ops, in the ordinary and the pace
+//!   properties. After every step each viewport's offset is inside its range
+//!   and told to assistive technology, the pointer hits what is drawn
+//!   under it, and (compared with the step before) a wheel leaves hover on the
+//!   control now under the pointer, a key that moves focus or edits a field
+//!   leaves it in view, and a theme switch keeps the offsets. See [`scrolling`].
 //! - Retained-state checks from `schnellui::testing::fuzz::invariants`, run
 //!   after every step: decoration records match their paint, no decoration is
 //!   sized for paint that moved, and tooltips and floating layers stay inside
@@ -44,6 +52,7 @@ pub mod components;
 pub mod curve;
 pub mod ops;
 pub mod oracle;
+pub mod scrolling;
 
 use std::sync::{Mutex, MutexGuard};
 
