@@ -33,6 +33,10 @@ pub enum EditKey<'a> {
     /// Newline insertion — multi-line only; a single-line input ignores it.
     Enter,
     SelectAll,
+    /// Takes back the newest edit (Ctrl+Z); a no-op without history.
+    Undo,
+    /// Reapplies the edit the last undo took back (Ctrl+Shift+Z, Ctrl+Y).
+    Redo,
 }
 
 /// The semantic phase of a pointer-selection gesture in an editable text

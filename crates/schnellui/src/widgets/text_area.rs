@@ -30,10 +30,11 @@ use smallvec::SmallVec;
 
 use crate::widgets::rich::RichSpan;
 use crate::widgets::text_edit::{
-    advance_before, apply_pointer_selection, byte_at_x, byte_under_x, map_selections,
+    advance_before, apply_pointer_selection, byte_at_x, byte_under_x, insert_kind, map_selections,
     next_boundary, next_word, pointer_selection_index, prev_boundary, prev_word,
-    replace_selections, selection_list, selection_text, toggle_additional_caret, Change, EditKey,
-    PointerOrigin, ReplaceMode, TextPointerAction, TextSelection, CARET_W, INPUT_BORDER_W,
+    replace_selections, selection_list, selection_text, toggle_additional_caret, Change,
+    EditHistory, EditKey, EditKind, Open, PointerOrigin, ReplaceMode, TextPointerAction,
+    TextSelection, CARET_W, INPUT_BORDER_W,
 };
 use crate::widgets::{
     node_rect, norm_scale, phys_size_px, with_handlers, BuildCtx, ContextMenu, ContextMenuItem,
@@ -114,6 +115,8 @@ pub(crate) struct AreaState {
     /// Line starts, per-line shapes and the primitive layout of the last
     /// emission: what lets an edit or a caret move cost what changed.
     cache: AreaCache,
+    /// Undo/redo steps of this area's edits.
+    pub(crate) history: EditHistory,
 }
 
 // ---------------------------------------------------------------------------
@@ -545,8 +548,17 @@ impl AreaState {
     }
 
     /// Replaces the selection (or splices at the caret) with `t`.
-    fn insert(&mut self, t: &str) -> Change {
-        self.edit_text(|s| {
+    fn insert(&mut self, t: &str, kind: EditKind) -> Change {
+        let open = self.history.begin(
+            &self.value,
+            self.caret,
+            self.anchor,
+            &self.secondary,
+            kind,
+            t,
+            ReplaceMode::Selection,
+        );
+        let change = self.edit_text(|s| {
             replace_selections(
                 &mut s.value,
                 &mut s.caret,
@@ -555,12 +567,27 @@ impl AreaState {
                 t,
                 ReplaceMode::Selection,
             )
-        })
+        });
+        self.record_finish(open, change);
+        change
     }
 
     /// Backspace/Delete over every selection.
     fn erase(&mut self, mode: ReplaceMode) -> Change {
-        self.edit_text(|s| {
+        let kind = match mode {
+            ReplaceMode::Backspace => EditKind::Backspace,
+            _ => EditKind::Delete,
+        };
+        let open = self.history.begin(
+            &self.value,
+            self.caret,
+            self.anchor,
+            &self.secondary,
+            kind,
+            "",
+            mode,
+        );
+        let change = self.edit_text(|s| {
             replace_selections(
                 &mut s.value,
                 &mut s.caret,
@@ -569,7 +596,44 @@ impl AreaState {
                 "",
                 mode,
             )
-        })
+        });
+        self.record_finish(open, change);
+        change
+    }
+
+    fn record_finish(&mut self, open: Open, change: Change) {
+        self.history.finish(
+            open,
+            &self.value,
+            self.caret,
+            self.anchor,
+            &self.secondary,
+            change,
+        );
+    }
+
+    /// Takes back (`undoing`) or reapplies the newest edit, keeping the line
+    /// table in step with the rewritten span.
+    fn rewrite_from_history(&mut self, undoing: bool) -> Change {
+        let Self {
+            history,
+            value,
+            caret,
+            anchor,
+            secondary,
+            ..
+        } = self;
+        let rewrite = if undoing {
+            history.undo(value, caret, anchor, secondary)
+        } else {
+            history.redo(value, caret, anchor, secondary)
+        };
+        let Some(rewrite) = rewrite else {
+            return Change::None;
+        };
+        self.cache
+            .note_edit(&self.value, rewrite.lo, rewrite.hi, rewrite.old_len);
+        Change::Text
     }
 
     /// Runs `f` with the unwrapped (caret/pointer mapping) shape of line
@@ -732,14 +796,16 @@ impl AreaState {
         }
     }
 
-    fn apply(&mut self, key: &EditKey, shaper: &mut TextShaper) -> Change {
+    fn apply(&mut self, key: &EditKey, kind: Option<EditKind>, shaper: &mut TextShaper) -> Change {
         // Any non-vertical edit re-anchors the goal column.
         if !matches!(key, EditKey::Up { .. } | EditKey::Down { .. }) {
             self.goal_x = None;
         }
         match key {
-            EditKey::Insert(t) => self.insert(t),
-            EditKey::Enter => self.insert("\n"),
+            EditKey::Insert(t) => self.insert(t, kind.unwrap_or_else(|| insert_kind(t))),
+            EditKey::Enter => self.insert("\n", EditKind::Other),
+            EditKey::Undo => self.rewrite_from_history(true),
+            EditKey::Redo => self.rewrite_from_history(false),
             EditKey::Backspace => self.erase(ReplaceMode::Backspace),
             EditKey::Delete => self.erase(ReplaceMode::Delete),
             EditKey::Left { select, word } => map_selections(
@@ -829,9 +895,10 @@ impl AreaState {
     }
 }
 
-/// Carries the user-controlled selection of a text area into its counterpart
-/// in a freshly mounted runtime. Controlled value changes intentionally retain
-/// the replacement area's default end selection.
+/// Carries the user-controlled selection and undo history of a text area into
+/// its counterpart in a freshly mounted runtime. Controlled value changes
+/// intentionally retain the replacement area's default end selection and drop
+/// the history.
 pub(crate) fn inherit_area_selection(
     runtime: &crate::widgets::Runtime,
     id: WidgetId,
@@ -839,7 +906,7 @@ pub(crate) fn inherit_area_selection(
     previous_id: WidgetId,
 ) -> bool {
     let previous = previous_runtime.with(|rt| {
-        rt.borrow().areas.get(previous_id).map(|state| {
+        rt.borrow_mut().areas.get_mut(previous_id).map(|state| {
             (
                 state.value.clone(),
                 state.caret,
@@ -848,10 +915,11 @@ pub(crate) fn inherit_area_selection(
                 state.size_px,
                 state.scale,
                 state.goal_x,
+                std::mem::take(&mut state.history),
             )
         })
     });
-    let Some((value, caret, anchor, secondary, size_px, scale, goal_x)) = previous else {
+    let Some((value, caret, anchor, secondary, size_px, scale, goal_x, history)) = previous else {
         return false;
     };
     runtime.with(|rt| {
@@ -871,6 +939,12 @@ pub(crate) fn inherit_area_selection(
             .then_some(goal_x)
             .flatten();
         state.pointer_origin = None;
+        // The history rides along with the value it was recorded against. A
+        // counterpart can be visited twice (focused and listed); the second
+        // visit finds the history already taken.
+        if !history.is_empty() {
+            state.history = history;
+        }
         true
     })
 }
@@ -1250,6 +1324,7 @@ pub(crate) fn dispatch_area_key(
     atlas: &mut GlyphAtlas,
     id: WidgetId,
     key: EditKey,
+    kind: Option<EditKind>,
 ) -> bool {
     if !is_text_area(scene, id) || is_disabled(scene, id) {
         return false;
@@ -1269,7 +1344,7 @@ pub(crate) fn dispatch_area_key(
         ) {
         Change::None
     } else {
-        st.apply(&key, shaper)
+        st.apply(&key, kind, shaper)
     };
     runtime.with(|rt| {
         rt.borrow_mut().areas.insert(id, st);
@@ -1385,6 +1460,7 @@ pub(crate) fn dispatch_area_set_value(
         st.anchor = st.caret;
         st.secondary.clear();
         st.goal_x = None;
+        st.history.clear();
         Change::Text
     });
     commit_area_change(runtime, scene, shaper, atlas, id, change)

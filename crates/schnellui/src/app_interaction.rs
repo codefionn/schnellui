@@ -355,6 +355,8 @@ impl App {
                     UiKey::End { shift } => Some(EditKey::End { select: shift }),
                     UiKey::Enter => Some(EditKey::Enter),
                     UiKey::SelectAll => Some(EditKey::SelectAll),
+                    UiKey::Undo => Some(EditKey::Undo),
+                    UiKey::Redo => Some(EditKey::Redo),
                     UiKey::PageUp
                     | UiKey::PageDown
                     | UiKey::Tab { .. }

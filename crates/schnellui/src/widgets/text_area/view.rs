@@ -49,6 +49,7 @@ impl View for TextArea {
                     pointer_origin: None,
                     secondary: SmallVec::new(),
                     cache,
+                    history: EditHistory::default(),
                 },
             );
         });

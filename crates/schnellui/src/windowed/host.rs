@@ -1022,6 +1022,8 @@ impl WindowedApp {
             "browser_back" => self.app.dispatch_navigation(crate::Navigation::Back),
             "browser_forward" => self.app.dispatch_navigation(crate::Navigation::Forward),
             "select_all" => self.app.dispatch_key(UiKey::SelectAll),
+            "undo" => self.app.dispatch_key(UiKey::Undo),
+            "redo" => self.app.dispatch_key(UiKey::Redo),
             "text" => {
                 let Some(text) = request.text.as_deref() else {
                     return DebugReply::error(400, "text key requires text");
@@ -1232,6 +1234,14 @@ impl WindowedApp {
             Key::Named(NamedKey::PageDown) => UiKey::PageDown,
             Key::Named(NamedKey::Escape) => UiKey::Escape,
             Key::Character(c) if command && c.eq_ignore_ascii_case("a") => UiKey::SelectAll,
+            Key::Character(c) if command && c.eq_ignore_ascii_case("z") => {
+                if shift {
+                    UiKey::Redo
+                } else {
+                    UiKey::Undo
+                }
+            }
+            Key::Character(c) if command && c.eq_ignore_ascii_case("y") => UiKey::Redo,
             _ => {
                 if let Some(key) = physical_key {
                     return self.app.dispatch_key(key);

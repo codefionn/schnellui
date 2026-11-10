@@ -36,6 +36,8 @@ mod paint;
 pub(crate) use paint::*;
 mod dispatch;
 pub use dispatch::*;
+mod history;
+pub(crate) use history::*;
 
 // ---------------------------------------------------------------------------
 // visual + metric constants (deterministic for shots, SOUL §7.3)
@@ -122,6 +124,8 @@ pub(crate) struct EditState {
     /// following the caret, so the press that focused the field lands on the
     /// glyph the user saw under the pointer.
     pub(crate) hold_scroll: bool,
+    /// Undo/redo steps of this field's edits.
+    pub(crate) history: EditHistory,
 }
 
 /// What a key application changed — selects the re-emit + notify work. Shared
@@ -141,10 +145,11 @@ pub(crate) struct TextSelection {
     pub(crate) anchor: usize,
 }
 
-/// Carries the user-controlled selection of a single-line editor into its
-/// counterpart in a freshly mounted runtime. The replacement view remains
-/// authoritative for the value: a changed controlled value deliberately keeps
-/// the replacement editor's default selection.
+/// Carries the user-controlled selection and undo history of a single-line
+/// editor into its counterpart in a freshly mounted runtime. The replacement
+/// view remains authoritative for the value: a changed controlled value
+/// deliberately keeps the replacement editor's default selection and drops
+/// the history.
 pub(crate) fn inherit_edit_selection(
     runtime: &crate::widgets::Runtime,
     id: WidgetId,
@@ -152,7 +157,7 @@ pub(crate) fn inherit_edit_selection(
     previous_id: WidgetId,
 ) -> bool {
     let previous = previous_runtime.with(|rt| {
-        rt.borrow().edits.get(previous_id).map(|state| {
+        rt.borrow_mut().edits.get_mut(previous_id).map(|state| {
             (
                 state.value.clone(),
                 state.password,
@@ -162,11 +167,21 @@ pub(crate) fn inherit_edit_selection(
                 state.secondary.clone(),
                 state.label_progress,
                 state.scroll_x,
+                std::mem::take(&mut state.history),
             )
         })
     });
-    let Some((value, password, placeholder, caret, anchor, secondary, label_progress, scroll_x)) =
-        previous
+    let Some((
+        value,
+        password,
+        placeholder,
+        caret,
+        anchor,
+        secondary,
+        label_progress,
+        scroll_x,
+        history,
+    )) = previous
     else {
         return false;
     };
@@ -189,6 +204,12 @@ pub(crate) fn inherit_edit_selection(
         state.secondary = secondary;
         state.scroll_x = scroll_x;
         state.pointer_origin = None;
+        // The history rides along with the value it was recorded against. A
+        // counterpart can be visited twice (focused and listed); the second
+        // visit finds the history already taken.
+        if !history.is_empty() {
+            state.history = history;
+        }
         true
     })
 }
@@ -407,37 +428,104 @@ pub(crate) fn toggle_additional_caret(
 }
 
 impl EditState {
+    /// Runs the value-changing edit `f`, recording it in the undo history.
+    fn recorded(
+        &mut self,
+        kind: EditKind,
+        inserted: &str,
+        mode: ReplaceMode,
+        f: impl FnOnce(&mut Self) -> Change,
+    ) -> Change {
+        let open = self.history.begin(
+            &self.value,
+            self.caret,
+            self.anchor,
+            &self.secondary,
+            kind,
+            inserted,
+            mode,
+        );
+        let change = f(self);
+        self.history.finish(
+            open,
+            &self.value,
+            self.caret,
+            self.anchor,
+            &self.secondary,
+            change,
+        );
+        change
+    }
+
     /// Replaces the selection (or splices at the caret) with `t`.
-    fn insert(&mut self, t: &str) -> Change {
-        replace_selections(
-            &mut self.value,
-            &mut self.caret,
-            &mut self.anchor,
-            &mut self.secondary,
+    fn insert(&mut self, t: &str, kind: Option<EditKind>) -> Change {
+        self.recorded(
+            kind.unwrap_or_else(|| insert_kind(t)),
             t,
             ReplaceMode::Selection,
+            |s| {
+                replace_selections(
+                    &mut s.value,
+                    &mut s.caret,
+                    &mut s.anchor,
+                    &mut s.secondary,
+                    t,
+                    ReplaceMode::Selection,
+                )
+            },
         )
     }
 
-    fn apply(&mut self, key: &EditKey) -> Change {
+    fn erase(&mut self, mode: ReplaceMode) -> Change {
+        let kind = match mode {
+            ReplaceMode::Backspace => EditKind::Backspace,
+            _ => EditKind::Delete,
+        };
+        self.recorded(kind, "", mode, |s| {
+            replace_selections(
+                &mut s.value,
+                &mut s.caret,
+                &mut s.anchor,
+                &mut s.secondary,
+                "",
+                mode,
+            )
+        })
+    }
+
+    /// Applies `key`. `kind` overrides how an `Insert` is classified for the
+    /// undo history (a paste is never part of a typed run).
+    fn apply(&mut self, key: &EditKey, kind: Option<EditKind>) -> Change {
         match key {
-            EditKey::Insert(t) => self.insert(t),
-            EditKey::Backspace => replace_selections(
-                &mut self.value,
-                &mut self.caret,
-                &mut self.anchor,
-                &mut self.secondary,
-                "",
-                ReplaceMode::Backspace,
-            ),
-            EditKey::Delete => replace_selections(
-                &mut self.value,
-                &mut self.caret,
-                &mut self.anchor,
-                &mut self.secondary,
-                "",
-                ReplaceMode::Delete,
-            ),
+            EditKey::Insert(t) => self.insert(t, kind),
+            EditKey::Backspace => self.erase(ReplaceMode::Backspace),
+            EditKey::Delete => self.erase(ReplaceMode::Delete),
+            EditKey::Undo => {
+                let Self {
+                    history,
+                    value,
+                    caret,
+                    anchor,
+                    secondary,
+                    ..
+                } = self;
+                history
+                    .undo(value, caret, anchor, secondary)
+                    .map_or(Change::None, |_| Change::Text)
+            }
+            EditKey::Redo => {
+                let Self {
+                    history,
+                    value,
+                    caret,
+                    anchor,
+                    secondary,
+                    ..
+                } = self;
+                history
+                    .redo(value, caret, anchor, secondary)
+                    .map_or(Change::None, |_| Change::Text)
+            }
             EditKey::Left { select, word } => {
                 // A plain Left over a selection collapses to its start (standard
                 // editor behavior); otherwise step a char (or word) boundary.
@@ -566,6 +654,7 @@ pub(crate) fn register_edit_state(
             label_target: label_progress,
             scroll_x: 0.0,
             hold_scroll: false,
+            history: EditHistory::default(),
         };
         if rt.edits.insert(id, state).is_none() {
             rt.edit_ids.push(id);

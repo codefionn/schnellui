@@ -313,10 +313,24 @@ pub fn dispatch_edit_key(
     id: WidgetId,
     key: EditKey,
 ) -> bool {
+    dispatch_edit_key_as(runtime, scene, shaper, atlas, id, key, None)
+}
+
+/// [`dispatch_edit_key`] with the undo-history kind of an `Insert` spelled
+/// out: a paste is one step of its own, never part of a typed run.
+fn dispatch_edit_key_as(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    key: EditKey,
+    kind: Option<EditKind>,
+) -> bool {
     // A multi-line area routes to its own edit state (same key set, SOUL §6.3).
     if matches!(editable_kind(scene, id), Some(WidgetKind::TextArea)) {
         return crate::widgets::text_area::dispatch_area_key(
-            runtime, scene, shaper, atlas, id, key,
+            runtime, scene, shaper, atlas, id, key, kind,
         );
     }
     if !is_text_input(scene, id) || is_disabled(scene, id) {
@@ -326,7 +340,7 @@ pub fn dispatch_edit_key(
         rt.borrow_mut()
             .edits
             .get_mut(id)
-            .map(|e| e.apply(&key))
+            .map(|e| e.apply(&key, kind))
             .unwrap_or(Change::None)
     });
     commit_change(runtime, scene, shaper, atlas, id, change)
@@ -386,7 +400,15 @@ pub fn dispatch_paste(
             } else {
                 text
             };
-            dispatch_edit_key(runtime, scene, shaper, atlas, id, EditKey::Insert(text))
+            dispatch_edit_key_as(
+                runtime,
+                scene,
+                shaper,
+                atlas,
+                id,
+                EditKey::Insert(text),
+                Some(EditKind::Other),
+            )
         }
         Some(WidgetKind::TextArea) => {
             let normalized;
@@ -396,7 +418,15 @@ pub fn dispatch_paste(
             } else {
                 text
             };
-            dispatch_edit_key(runtime, scene, shaper, atlas, id, EditKey::Insert(text))
+            dispatch_edit_key_as(
+                runtime,
+                scene,
+                shaper,
+                atlas,
+                id,
+                EditKey::Insert(text),
+                Some(EditKind::Other),
+            )
         }
         _ => false,
     }
@@ -544,6 +574,7 @@ pub fn set_text_value(
         e.caret = e.value.len();
         e.anchor = e.caret;
         e.secondary.clear();
+        e.history.clear();
         Change::Text
     });
     commit_change(runtime, scene, shaper, atlas, id, change)

@@ -2176,3 +2176,311 @@ fn chart_marks_stay_on_their_points_in_a_narrow_window() {
     app.frame();
     assert_eq!(marks(&app), wide);
 }
+
+// ---------------------------------------------------------------------------
+// undo / redo in editable text (SOUL §6.3: one inbound edit path)
+// ---------------------------------------------------------------------------
+
+mod undo_redo {
+    use super::*;
+    use schnellui::widgets::{Column, EditKey, TextArea, TextInput};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn input_app(value: &str) -> (App, scene::WidgetId) {
+        let mut app = App::mount(TextInput::new(value));
+        app.frame();
+        let id = app.find_widget(Role::TextInput, None).unwrap();
+        app.focus(Some(id));
+        (app, id)
+    }
+
+    fn area_app(value: &str) -> (App, scene::WidgetId) {
+        let mut app = App::mount(TextArea::new(value));
+        app.frame();
+        let id = app.find_widget(Role::MultilineTextInput, None).unwrap();
+        app.focus(Some(id));
+        (app, id)
+    }
+
+    fn value(app: &App, id: scene::WidgetId) -> String {
+        app.scene().a11y(id).unwrap().value.clone().unwrap()
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            let mut buf = [0u8; 4];
+            assert!(app.dispatch_key(UiKey::Char(ch.encode_utf8(&mut buf))));
+        }
+    }
+
+    fn left(app: &mut App) {
+        app.dispatch_key(UiKey::Left {
+            shift: false,
+            ctrl: false,
+        });
+    }
+
+    #[test]
+    fn a_typed_run_is_one_undo_step() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "hello");
+            assert_eq!(value(&app, id), "hello");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "");
+            assert!(!app.dispatch_key(UiKey::Undo), "nothing older to undo");
+            assert!(app.dispatch_key(UiKey::Redo));
+            assert_eq!(value(&app, id), "hello");
+            assert!(!app.dispatch_key(UiKey::Redo));
+        }
+    }
+
+    #[test]
+    fn whitespace_and_caret_moves_split_runs() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "ab cd");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab", "the space opens a new step");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "");
+
+            assert!(app.dispatch_key(UiKey::Redo));
+            assert!(app.dispatch_key(UiKey::Redo));
+            assert_eq!(value(&app, id), "ab cd");
+            left(&mut app);
+            type_text(&mut app, "X");
+            type_text(&mut app, "Y");
+            assert_eq!(value(&app, id), "ab cXYd");
+            left(&mut app);
+            left(&mut app);
+            type_text(&mut app, "Z");
+            assert_eq!(value(&app, id), "ab cZXYd");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab cXYd", "a caret move ended the XY run");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab cd", "XY is one step");
+        }
+    }
+
+    #[test]
+    fn backspace_runs_are_one_step_and_restore_the_caret() {
+        let (mut app, id) = input_app("hello");
+        for _ in 0..3 {
+            assert!(app.dispatch_key(UiKey::Backspace));
+        }
+        assert_eq!(value(&app, id), "he");
+        type_text(&mut app, "y");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "he");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "hello");
+        assert!(app.dispatch_key(UiKey::Char("!")));
+        assert_eq!(value(&app, id), "hello!", "the caret came back to the end");
+    }
+
+    #[test]
+    fn undo_restores_the_selection_and_redo_reapplies_the_edit() {
+        let (mut app, id) = input_app("hello");
+        assert!(app.dispatch_key(UiKey::SelectAll));
+        type_text(&mut app, "x");
+        assert_eq!(value(&app, id), "x");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "hello");
+        assert_eq!(app.selected_text().as_deref(), Some("hello"));
+        assert!(app.dispatch_key(UiKey::Redo));
+        assert_eq!(value(&app, id), "x");
+        assert_eq!(app.selected_text(), None);
+        assert!(app.dispatch_key(UiKey::Char("y")));
+        assert_eq!(value(&app, id), "xy", "the caret follows the redone edit");
+    }
+
+    #[test]
+    fn a_new_edit_clears_the_redo_stack() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "a");
+            assert!(app.dispatch_key(UiKey::Undo));
+            type_text(&mut app, "b");
+            assert!(!app.dispatch_key(UiKey::Redo));
+            assert_eq!(value(&app, id), "b");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "");
+        }
+    }
+
+    #[test]
+    fn cut_paste_enter_and_ime_commits_undo() {
+        for area in [false, true] {
+            let (mut app, id) = if area {
+                area_app("one two")
+            } else {
+                input_app("one two")
+            };
+            assert!(app.dispatch_key(UiKey::SelectAll));
+            assert!(app.delete_text_selection());
+            assert_eq!(value(&app, id), "");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "one two");
+            assert_eq!(app.selected_text().as_deref(), Some("one two"));
+
+            assert!(app.dispatch_key(UiKey::Redo));
+            assert!(app.paste_text("ab"));
+            assert!(app.paste_text("cd"));
+            assert_eq!(value(&app, id), "abcd", "pastes never merge");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "one two");
+        }
+        let (mut app, id) = area_app("ab");
+        assert!(app.dispatch_key(UiKey::Enter));
+        type_text(&mut app, "c");
+        assert_eq!(value(&app, id), "ab\nc");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "ab\n");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "ab");
+        let (mut app, id) = input_app("");
+        assert_eq!(
+            app.dispatch_ime(crate::RawImeEvent::Commit("日本".into())),
+            FocusedInputResult::Handled
+        );
+        assert_eq!(value(&app, id), "日本");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "");
+    }
+
+    #[test]
+    fn undo_reports_through_on_input_and_a_controlled_field_stays_in_sync() {
+        let state = schnellui::signal::create_signal(String::from("start"));
+        let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        let mut app = App::mount_themed(theme::LIGHT, move || {
+            let log = log.clone();
+            Column::new().child(TextInput::new(state.get()).on_input(move |v| {
+                log.borrow_mut().push(v.to_string());
+                state.set(v.to_string());
+            }))
+        });
+        app.frame();
+        let id = app.find_widget(Role::TextInput, None).unwrap();
+        app.focus(Some(id));
+        type_text(&mut app, "!?");
+        assert_eq!(state.get(), "start!?");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(state.get(), "start", "undo wrote the app's state");
+        assert_eq!(seen.borrow().last().map(String::as_str), Some("start"));
+        assert!(app.dispatch_key(UiKey::Redo));
+        assert_eq!(state.get(), "start!?");
+
+        // A remount whose controlled value matches keeps the history.
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        let id = app.find_widget(Role::TextInput, None).unwrap();
+        assert_eq!(app.focused_widget(), Some(id));
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(state.get(), "start");
+        assert_eq!(value(&app, id), "start");
+        assert!(app.dispatch_key(UiKey::Redo));
+        assert_eq!(state.get(), "start!?");
+
+        // The app rewriting the value drops the history instead of
+        // resurrecting stale text.
+        state.set(String::from("rewritten"));
+        assert!(app.set_theme(theme::LIGHT));
+        app.frame();
+        let id = app.find_widget(Role::TextInput, None).unwrap();
+        assert_eq!(value(&app, id), "rewritten");
+        assert!(!app.dispatch_key(UiKey::Undo));
+        assert!(!app.dispatch_key(UiKey::Redo));
+        assert_eq!(state.get(), "rewritten");
+    }
+
+    #[test]
+    fn set_value_drops_the_history() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "abc");
+            assert!(schnellui::widgets::set_text_value(
+                &app.widgets,
+                &mut app.scene,
+                &mut app.text,
+                &mut app.atlas,
+                id,
+                "other",
+            ));
+            assert!(!app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "other");
+        }
+    }
+
+    #[test]
+    fn undo_and_redo_without_history_return_false() {
+        for area in [false, true] {
+            let (mut app, id) = if area {
+                area_app("text")
+            } else {
+                input_app("text")
+            };
+            assert!(!app.dispatch_key(UiKey::Undo));
+            assert!(!app.dispatch_key(UiKey::Redo));
+            assert!(!app.dispatch_edit_key(EditKey::Undo));
+            assert!(!app.dispatch_edit_key(EditKey::Redo));
+            assert_eq!(value(&app, id), "text");
+        }
+        // Moving the caret is not an edit.
+        let (mut app, _) = input_app("text");
+        left(&mut app);
+        assert!(!app.dispatch_key(UiKey::Undo));
+    }
+
+    #[test]
+    fn history_is_per_widget_and_capped_at_one_hundred_steps() {
+        let mut app = App::mount(
+            Column::new()
+                .child(TextInput::new("").placeholder("first"))
+                .child(TextInput::new("").placeholder("second")),
+        );
+        app.frame();
+        let first = app.find_widget(Role::TextInput, Some("first")).unwrap();
+        let second = app.find_widget(Role::TextInput, Some("second")).unwrap();
+        app.focus(Some(first));
+        type_text(&mut app, "one");
+        app.focus(Some(second));
+        assert!(!app.dispatch_key(UiKey::Undo), "the second field has none");
+        for _ in 0..150 {
+            assert!(app.paste_text("p"));
+        }
+        let mut undone = 0;
+        while app.dispatch_key(UiKey::Undo) {
+            undone += 1;
+        }
+        assert_eq!(undone, 100);
+        assert_eq!(value(&app, second), "p".repeat(50));
+        assert_eq!(value(&app, first), "one");
+        app.focus(Some(first));
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, first), "");
+    }
+
+    #[test]
+    fn read_only_areas_and_multi_caret_edits_undo_cleanly() {
+        let mut app = App::mount(TextArea::new("fixed").read_only());
+        app.frame();
+        let id = app.find_widget(Role::MultilineTextInput, None).unwrap();
+        app.focus(Some(id));
+        assert!(!app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "fixed");
+
+        let (mut app, id) = area_app("a\nb\nc");
+        assert!(app.dispatch_key(UiKey::Home { shift: false }));
+        assert!(app.dispatch_edit_key(EditKey::Insert("> ")));
+        assert_eq!(value(&app, id), "a\nb\n> c");
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app, id), "a\nb\nc");
+    }
+}

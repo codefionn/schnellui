@@ -424,6 +424,10 @@ pub enum UiKey<'a> {
     Escape,
     /// The platform select-all command (Ctrl+A, or Cmd+A on macOS).
     SelectAll,
+    /// The platform undo command (Ctrl+Z, or Cmd+Z on macOS) in a focused editable.
+    Undo,
+    /// The platform redo command (Ctrl+Shift+Z or Ctrl+Y; Cmd on macOS).
+    Redo,
     /// A control-modified ASCII character, used by raw keyboard surfaces such
     /// as terminal emulators (for example Ctrl+C → ETX).
     Control(char),

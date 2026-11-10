@@ -51,6 +51,8 @@ pub enum HostKey {
     PageDown,
     Escape,
     SelectAll,
+    Undo,
+    Redo,
     /// Typed text, delivered as one character event.
     Text(String),
 }
@@ -73,6 +75,8 @@ impl HostKey {
             HostKey::PageDown => "page_down",
             HostKey::Escape => "escape",
             HostKey::SelectAll => "select_all",
+            HostKey::Undo => "undo",
+            HostKey::Redo => "redo",
             HostKey::Text(_) => "text",
         }
     }

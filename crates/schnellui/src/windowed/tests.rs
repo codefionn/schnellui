@@ -205,6 +205,31 @@ fn headless_wake_coalesces_then_accepts_another_controller_update() {
 }
 
 #[test]
+fn debug_server_keys_undo_and_redo_typed_text() {
+    use crate::debug_server::DebugKey;
+
+    let mut app = App::mount(crate::widgets::TextInput::new(""));
+    app.frame();
+    let input = app.find_widget(Role::TextInput, None).unwrap();
+    app.focus(Some(input));
+    let mut host = windowed_host(app, None);
+    let key = |name: &str, text: Option<&str>| DebugKey {
+        key: name.into(),
+        shift: false,
+        ctrl: false,
+        text: text.map(str::to_owned),
+    };
+    let value = |host: &super::WindowedApp| host.app.scene().a11y(input).unwrap().value.clone();
+    host.handle_debug_key(key("text", Some("a")));
+    host.handle_debug_key(key("text", Some("b")));
+    assert_eq!(value(&host).as_deref(), Some("ab"));
+    host.handle_debug_key(key("undo", None));
+    assert_eq!(value(&host).as_deref(), Some(""));
+    host.handle_debug_key(key("redo", None));
+    assert_eq!(value(&host).as_deref(), Some("ab"));
+}
+
+#[test]
 fn headless_clipboard_stays_in_memory() {
     let mut clipboard = super::HostClipboard::Memory(None);
     assert!(clipboard.read_text().is_err());
