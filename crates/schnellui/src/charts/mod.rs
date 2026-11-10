@@ -1147,6 +1147,14 @@ impl Sparkline {
         }
     }
 
+    /// Sets the **accessible name** (SOUL §6.1). Not painted. Without one a
+    /// screen reader hears only "chart" and the value summary, so name a
+    /// sparkline that stands on its own.
+    pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> Sparkline {
+        self.spec.title = Some(title.into());
+        self
+    }
+
     /// Sets the line color (default `SERIES[0]`).
     pub fn color(mut self, color: Color) -> Sparkline {
         self.spec.color = color;
@@ -1194,7 +1202,7 @@ impl Sparkline {
 
 impl View for Sparkline {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
-        // No title builder — a sparkline is nameless (minimal), value = summary only.
+        // Nameless unless titled; the value is the summary either way.
         build_chart(ctx, parent, self.spec)
     }
 }
@@ -1627,6 +1635,14 @@ mod tests {
         let a = scene.a11y(id).unwrap();
         assert_eq!(Role::from_u16(a.role), Role::Chart);
         assert!(a.name.is_none(), "sparkline is nameless (minimal)");
+        assert_eq!(a.value.as_deref(), Some("n=3 min=1 max=3 last=3"));
+    }
+
+    #[test]
+    fn a_titled_sparkline_is_named() {
+        let (scene, id) = build_one(Sparkline::new([1.0, 2.0, 3.0]).title("CPU load"));
+        let a = scene.a11y(id).unwrap();
+        assert_eq!(a.name.as_deref(), Some("CPU load"));
         assert_eq!(a.value.as_deref(), Some("n=3 min=1 max=3 last=3"));
     }
 

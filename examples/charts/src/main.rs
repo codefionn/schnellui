@@ -194,6 +194,7 @@ fn sparkline_card(w: f32) -> impl View {
             .align(Align::Stretch)
             .child(
                 Sparkline::new(LOAD)
+                    .title("CPU load, last 8 samples")
                     .size(w, SPARK_H)
                     .color(SERIES[2])
                     .baseline(true)
