@@ -384,6 +384,25 @@ impl Watch {
         if seen {
             return Ok(());
         }
+        // A window frame clips its content and nothing scrolls it into view
+        // (open design item #19), so a control the frame cuts off is not a
+        // reveal fault. A control inside the frame but outside a viewport is.
+        let mut panel = scene.node(id).and_then(|n| n.parent);
+        while let Some(p) = panel {
+            let node = scene.node(p);
+            if node.is_some_and(|n| n.kind == WidgetKind::Dialog) {
+                break;
+            }
+            panel = node.and_then(|n| n.parent);
+        }
+        let frame = panel
+            .and_then(|panel| scene.layout(panel))
+            .map(|layout| layout.rect);
+        if let Some(frame) = frame {
+            if shown.y < frame.y - EPS || shown.bottom() > frame.bottom() + EPS {
+                return Ok(());
+            }
+        }
         // The target carries the focus ring. A control at the very end of its
         // content has its ring cut there whatever the viewport does, so with a
         // viewport resting at an end the control's own box is what must show.
