@@ -1190,14 +1190,18 @@ mod tests {
         for &o in &opts {
             let r = scene.layout(o).unwrap().rect;
             // 8px of extra room carries the chosen row's check mark
-            assert_eq!(
+            // (measured lengths sit on a 1/64 px grid, so allow one step)
+            assert!(
+                (r.width - (trigger.width + 8.0)).abs() <= 1.0 / 64.0,
+                "every option row spans the trigger's width plus check room: {} vs {}",
                 r.width,
-                trigger.width + 8.0,
-                "every option row spans the trigger's width plus check room"
+                trigger.width + 8.0
             );
             // the painted surface spans the full row, not just the label
             match scene.paint(o).unwrap().primitives[0] {
-                Primitive::SolidRect { rect, .. } => assert_eq!(rect.width, r.width),
+                Primitive::SolidRect { rect, .. } => {
+                    assert!((rect.width - r.width).abs() <= 1.0 / 64.0)
+                }
                 ref p => panic!("expected the background SolidRect, got {p:?}"),
             }
         }

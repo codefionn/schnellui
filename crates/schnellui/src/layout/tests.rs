@@ -101,6 +101,49 @@ mod tests {
         assert_eq!(b2, Rect::new(0.0, 20.0, 30.0, 10.0));
     }
 
+    /// A wrapping row sized to its content keeps every child on one line, and its
+    /// parent measures that one line. The widths are real text and button
+    /// measures whose f32 sum is not the same in every order.
+    #[test]
+    fn wrapping_row_sized_to_content_does_not_break_on_rounding() {
+        let mut scene = Scene::new();
+        let root = scene.insert(WidgetKind::Column, None);
+        scene.set_root(root);
+        let row = scene.insert(WidgetKind::Row, Some(root));
+        let widths = [110.06875, 95.85781, 36.453125, 51.196095, 104.03906];
+        let leaves: Vec<_> = widths
+            .iter()
+            .map(|_| scene.insert(WidgetKind::Text, Some(row)))
+            .collect();
+        let below = scene.insert(WidgetKind::Text, Some(root));
+
+        let mut eng = LayoutEngine::new();
+        let mut cs = ContainerStyle::new(Container::Column);
+        cs.align = Align::Start;
+        eng.set_container(root, cs);
+        let mut rs = ContainerStyle::new(Container::Row);
+        rs.gap = 10.0;
+        rs.wrap = true;
+        eng.set_container(row, rs);
+        for (leaf, w) in leaves.iter().zip(widths) {
+            eng.set_measure(*leaf, fixed_measure(w, 20.0));
+        }
+        eng.set_measure(below, fixed_measure(10.0, 5.0));
+        eng.sync_tree(&scene, root);
+        eng.compute(
+            &mut scene,
+            root,
+            Size {
+                width: 1200.0,
+                height: 900.0,
+            },
+        );
+        for leaf in &leaves {
+            assert_eq!(scene.layout(*leaf).unwrap().rect.y, 0.0, "one line");
+        }
+        assert_eq!(scene.layout(below).unwrap().rect.y, 20.0);
+    }
+
     fn stack_with(justify: Justify, align: Align) -> (Scene, WidgetId) {
         let mut scene = Scene::new();
         let root = scene.insert(WidgetKind::Stack, None);

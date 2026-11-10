@@ -557,8 +557,8 @@ impl LayoutEngine {
                                     .or_else(|| measures.get_mut(wid).map(|m| m(avail)));
                                 match out {
                                     Some(s) => taffy::Size {
-                                        width: s.width,
-                                        height: s.height,
+                                        width: on_grid(s.width),
+                                        height: on_grid(s.height),
                                     },
                                     None => taffy::Size {
                                         width: 0.0,
@@ -756,6 +756,20 @@ impl LayoutEngine {
     pub(crate) fn taffy_node(&self, id: WidgetId) -> Option<taffy::NodeId> {
         self.map.get(id).copied()
     }
+}
+
+/// Rounds a measured length up to a 1/64 px grid.
+///
+/// Measured text and control sizes are arbitrary floats. Taffy sums them in one
+/// order to size a flex container at its max-content and in another to decide
+/// where a wrapping line breaks, so the two sums can differ in the last bit. A
+/// row sized to hold its children on one line then broke before the last one,
+/// and its parent, measured for the single line, was a line too short. Lengths
+/// on a 1/64 grid add exactly in f32, in any order, so both sums agree. The
+/// error is under 0.016 px, below what a pixel can show.
+#[inline]
+fn on_grid(length: f32) -> f32 {
+    (length * 64.0).ceil() / 64.0
 }
 
 /// Resolve the concrete available length handed to a [`MeasureFn`]: prefer a

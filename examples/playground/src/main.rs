@@ -1668,6 +1668,82 @@ mod tests {
         assert!(stops > 0, "no scenario has a Tab stop");
     }
 
+    /// In every theme and at every scale no two siblings of the gallery overlap:
+    /// a control a theme draws larger (the Brutal radio, density 1.6) must be
+    /// laid out that large too, so the row below starts under it.
+    #[test]
+    fn gallery_siblings_do_not_overlap_in_any_theme() {
+        let mut faults = Vec::new();
+        for theme in ThemeChoice::iter() {
+            for scale in ["1", "1.5", "2"] {
+                let runtime = PlaygroundRuntime::default();
+                let cli = Cli::parse_from([
+                    "playground",
+                    "--headless-windowed",
+                    "--width",
+                    "1200",
+                    "--height",
+                    "900",
+                    "--scale",
+                    scale,
+                ]);
+                let mut app = scenario_app(
+                    &runtime,
+                    MountState {
+                        scenario: Scenario::Gallery,
+                        theme,
+                        theme_open: false,
+                    },
+                    &cli,
+                );
+                app.frame();
+                let scene = app.scene();
+                for id in scene.preorder() {
+                    let Some(node) = scene.node(id) else { continue };
+                    let rects: Vec<_> = node
+                        .children
+                        .iter()
+                        .filter(|c| scene.is_visible(**c))
+                        .filter_map(|c| scene.layout(*c).map(|l| (*c, l.rect)))
+                        .filter(|(_, r)| r.width > 0.5 && r.height > 0.5)
+                        .collect();
+                    // a child that runs out of its parent's box is what lets the
+                    // next row of the parent's parent start under it
+                    if let Some(parent) = scene.layout(id).map(|l| l.rect) {
+                        for (c, rc) in &rects {
+                            if rc.bottom() > parent.bottom() + 0.5 {
+                                faults.push(format!(
+                                    "{theme:?} @{scale}x: {:?} {rc:?} ends below its parent {:?} {parent:?}",
+                                    scene.a11y(*c).map(|a| (a.role, a.name.clone())),
+                                    node.kind,
+                                ));
+                            }
+                        }
+                    }
+                    for (i, (a, ra)) in rects.iter().enumerate() {
+                        for (b, rb) in &rects[i + 1..] {
+                            let w = ra.right().min(rb.right()) - ra.x.max(rb.x);
+                            let h = ra.bottom().min(rb.bottom()) - ra.y.max(rb.y);
+                            if w > 0.5 && h > 0.5 {
+                                let name = |w: &schnellui::scene::WidgetId| {
+                                    scene.a11y(*w).map(|a| format!("{:?} {:?}", a.role, a.name))
+                                };
+                                faults.push(format!(
+                                    "{theme:?} @{scale}x: {:?} {:?} {ra:?} overlaps {:?} {:?} {rb:?}",
+                                    scene.node(*a).map(|n| n.kind),
+                                    name(a),
+                                    scene.node(*b).map(|n| n.kind),
+                                    name(b),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
+
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content scrolls sideways.
     #[test]
