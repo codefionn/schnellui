@@ -9,8 +9,11 @@ impl App {
         let previous = self.focused_input_semantics();
         let dismissed =
             schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
+        // Focus walking the rows of an open menu keeps it open.
         let context_dismissed =
-            schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+            !target.is_some_and(|id| {
+                schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id)
+            }) && schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
         let raised = target
             .filter(|id| {
                 schnellui::widgets::active_modal_panel(&self.scene)
@@ -57,8 +60,11 @@ impl App {
         });
         let dismissed =
             schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
+        // Focus walking the rows of an open menu keeps it open.
         let context_dismissed =
-            schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+            !target.is_some_and(|id| {
+                schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id)
+            }) && schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
         let raised = target
             .filter(|id| {
                 schnellui::widgets::active_modal_panel(&self.scene)
@@ -232,6 +238,20 @@ impl App {
         use widgets::{ActivateKey, Adjust, EditKey};
 
         if self.context_menu_is_open() {
+            if let Some(changed) = self.step_context_menu(key) {
+                return changed;
+            }
+            if matches!(key, UiKey::Enter | UiKey::Space { .. }) {
+                if let Some(row) = self.focused_context_menu_row() {
+                    let Some(activation) = self.activate_context_menu_item(row) else {
+                        return false;
+                    };
+                    if activation.action == widgets::ContextMenuAction::SelectAll {
+                        let _ = self.select_all_text_for(activation.source);
+                    }
+                    return true;
+                }
+            }
             return self.dismiss_context_menu();
         }
         if self.dispatch_focused_key_handler(key) {
@@ -431,6 +451,15 @@ impl App {
             _ => None,
         };
         if let (Some(f), Some(k)) = (focused, activate) {
+            // A menu button opens its menu with focus on the first row, the
+            // keyboard half of what a click on it does.
+            if schnellui::widgets::context_menu_trigger_source(&self.widgets, f).is_some() {
+                let opened = self.dispatch_click(f);
+                if opened {
+                    self.menu_opened_from_keyboard(f);
+                }
+                return focus_visible | opened;
+            }
             if let Some(changed) =
                 schnellui::widgets::dispatch_key_activate(&self.widgets, &mut self.scene, f, k)
             {
@@ -758,9 +787,59 @@ impl App {
         self.open_context_menu(id, position, can_paste)
     }
 
-    /// Dismisses the active transient context menu.
+    /// Dismisses the active transient context menu. Focus on one of its rows
+    /// goes back to the control that opened it from the keyboard.
     pub fn dismiss_context_menu(&mut self) -> bool {
-        schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene)
+        let back = self.menu_focus_return();
+        let dismissed = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+        dismissed | back.is_some_and(|id| self.focus(Some(id)))
+    }
+
+    /// Records `opener` as the control a keyboard-opened menu returns focus
+    /// to and moves focus to the menu's first enabled row.
+    pub(crate) fn menu_opened_from_keyboard(&mut self, opener: scene::WidgetId) -> bool {
+        schnellui::widgets::set_context_menu_opener(&self.widgets, opener);
+        let rows = schnellui::widgets::context_menu_enabled_rows(&self.widgets, &self.scene);
+        rows.first().is_some_and(|&row| self.focus(Some(row)))
+    }
+
+    /// The open menu row that holds focus, if any.
+    pub(crate) fn focused_context_menu_row(&self) -> Option<scene::WidgetId> {
+        self.focused_widget()
+            .filter(|&id| schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id))
+    }
+
+    /// Walks focus through the open menu's enabled rows: Down and Up step
+    /// and wrap, Home and End jump to the ends. `None` for any other key.
+    pub(crate) fn step_context_menu(&mut self, key: UiKey<'_>) -> Option<bool> {
+        let rows = schnellui::widgets::context_menu_enabled_rows(&self.widgets, &self.scene);
+        let last = rows.len().checked_sub(1)?;
+        let at = self
+            .focused_context_menu_row()
+            .and_then(|id| rows.iter().position(|&row| row == id));
+        let next = match key {
+            UiKey::Down { .. } => at.map_or(0, |i| if i == last { 0 } else { i + 1 }),
+            UiKey::Up { .. } => at.map_or(last, |i| if i == 0 { last } else { i - 1 }),
+            UiKey::Home { .. } => 0,
+            UiKey::End { .. } => last,
+            _ => return None,
+        };
+        if at.is_none() {
+            // A menu opened by the pointer starts its keyboard walk here and
+            // returns focus to whatever held it.
+            if let Some(opener) = self.focused_widget() {
+                schnellui::widgets::set_context_menu_opener(&self.widgets, opener);
+            }
+        }
+        Some(self.focus(Some(rows[next])))
+    }
+
+    /// Where focus goes when the open menu closes: the opener, if focus is on
+    /// one of the menu's rows and the opener is still mounted.
+    fn menu_focus_return(&self) -> Option<scene::WidgetId> {
+        self.focused_context_menu_row()?;
+        schnellui::widgets::context_menu_opener(&self.widgets)
+            .filter(|&id| self.scene.node(id).is_some())
     }
 
     /// Whether a transient context menu is currently open.
@@ -774,7 +853,13 @@ impl App {
         &mut self,
         id: scene::WidgetId,
     ) -> Option<widgets::ContextMenuActivation> {
-        schnellui::widgets::activate_context_menu_item(&self.widgets, &mut self.scene, id)
+        let back = self.menu_focus_return();
+        let activation =
+            schnellui::widgets::activate_context_menu_item(&self.widgets, &mut self.scene, id)?;
+        if let Some(back) = back {
+            let _ = self.focus(Some(back));
+        }
+        Some(activation)
     }
 
     /// Places the caret (press) or extends the selection (`extend`: drag /

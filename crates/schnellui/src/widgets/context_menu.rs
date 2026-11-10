@@ -184,6 +184,9 @@ struct OpenMenu {
     /// can open the same menu on the source's counterpart.
     position: Point,
     can_paste: bool,
+    /// The control that had focus when the menu opened from the keyboard.
+    /// Closing the menu from the keyboard gives focus back to it.
+    opener: Option<WidgetId>,
 }
 
 #[derive(Default)]
@@ -418,8 +421,11 @@ pub fn open_context_menu(
     let y = position.y.clamp(CONTEXT_MENU_MARGIN, max_y);
     let menu_rect = Rect::new(x, y, width, height);
 
-    let parent = crate::widgets::dialog::active_modal_layer(runtime, scene)
-        .filter(|layer| crate::widgets::dialog::is_in_subtree(scene, source, *layer))
+    // Inside a modal the menu hangs off the dialog panel: the panel is the
+    // accessibility root and the focus boundary while it is open, so a menu
+    // beside it would be invisible to screen readers and the keyboard.
+    let parent = crate::widgets::dialog::active_modal_panel_in(runtime, scene)
+        .filter(|panel| crate::widgets::dialog::is_in_subtree(scene, source, *panel))
         .or_else(|| scene.root());
     let Some(parent) = parent else {
         return false;
@@ -514,7 +520,8 @@ pub fn open_context_menu(
             semantics.role = Role::MenuItem.as_u16();
             semantics.name = Some(item.label.clone());
             if item.enabled {
-                semantics.actions = ActionFlags::CLICK.0;
+                // Focus lets the keyboard walk the rows.
+                semantics.actions = ActionFlags::CLICK.0 | ActionFlags::FOCUS.0;
             } else {
                 semantics.state = StateFlags::DISABLED.0;
             }
@@ -584,6 +591,7 @@ pub fn open_context_menu(
             items: item_ids,
             position,
             can_paste,
+            opener: None,
         });
     });
     true
@@ -650,6 +658,46 @@ pub fn context_menu_item(runtime: &crate::widgets::Runtime, scene: &Scene, id: W
         && runtime
             .context_menu
             .with(|state| state.borrow().actions.contains_key(id))
+}
+
+/// Records the control a keyboard-opened menu returns focus to.
+pub(crate) fn set_context_menu_opener(runtime: &crate::widgets::Runtime, opener: WidgetId) {
+    runtime.context_menu.with(|state| {
+        if let Some(open) = state.borrow_mut().open.as_mut() {
+            open.opener = Some(opener);
+        }
+    });
+}
+
+/// The control a keyboard-opened menu returns focus to, if any.
+pub(crate) fn context_menu_opener(runtime: &crate::widgets::Runtime) -> Option<WidgetId> {
+    runtime
+        .context_menu
+        .with(|state| state.borrow().open.as_ref().and_then(|open| open.opener))
+}
+
+/// The enabled rows of the open menu, top to bottom: the stops of the
+/// keyboard walk through it.
+pub(crate) fn context_menu_enabled_rows(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+) -> Vec<WidgetId> {
+    let items = runtime.context_menu.with(|state| {
+        state
+            .borrow()
+            .open
+            .as_ref()
+            .map(|open| open.items.clone())
+            .unwrap_or_default()
+    });
+    items
+        .into_iter()
+        .filter(|&id| {
+            scene
+                .a11y(id)
+                .is_some_and(|a| !StateFlags(a.state).contains(StateFlags::DISABLED))
+        })
+        .collect()
 }
 
 /// Activates one open menu row and dismisses the popup.

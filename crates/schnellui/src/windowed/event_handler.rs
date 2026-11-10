@@ -423,7 +423,14 @@ impl WindowedApp {
                 || (self.modifiers.shift_key()
                     && matches!(&event.logical_key, Key::Named(NamedKey::F10)));
             if context_key {
-                let changed = self.app.dismiss_context_menu() | self.open_focused_context_menu();
+                let opener = self.app.focused_widget();
+                let mut changed = self.app.dismiss_context_menu();
+                if self.open_focused_context_menu() {
+                    changed = true;
+                    if let Some(opener) = opener {
+                        let _ = self.app.menu_opened_from_keyboard(opener);
+                    }
+                }
                 if changed {
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -431,9 +438,11 @@ impl WindowedApp {
                 }
                 return EventTail::Skip;
             }
-            if self.app.dismiss_context_menu() {
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+            if self.app.context_menu_is_open() {
+                if self.context_menu_key(&event) {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                 }
                 return EventTail::Skip;
             }

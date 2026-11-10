@@ -1193,3 +1193,128 @@ fn a_tooltip_stays_in_the_window_when_the_root_overflows_it() {
         "tooltip {tooltip:?} leaves a 120px window"
     );
 }
+
+/// Tab to a button that opens a menu (the dockable workspace's "+" on a
+/// pane) and press Enter or Space. Nothing opened: only a pointer click or
+/// an accessibility click reached the menu.
+/// The menu button contract: Enter or Space on a focused menu button opens
+/// its menu with focus on the first row, the arrows walk the rows (wrapping),
+/// Enter picks one, and Escape closes the menu. Either way focus goes back
+/// to the button. Before this, Enter and Space did nothing on the
+/// dockable_workspace "+" buttons and any key closed an open menu.
+#[test]
+fn enter_or_space_on_a_menu_button_opens_its_menu() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    for key in [UiKey::Enter, UiKey::Space { shift: false }] {
+        let picked = Rc::new(Cell::new(0));
+        let on_notes = picked.clone();
+        let menu = ContextMenu::new()
+            .item(ContextMenuItem::new("Pulse").on_select(|| {}))
+            .item(ContextMenuItem::new("Off").on_select(|| {}).enabled(false))
+            .item(
+                ContextMenuItem::new("Notes").on_select(move || on_notes.set(on_notes.get() + 1)),
+            );
+        let mut app = App::mount_with_size(Button::new("Add a widget").menu(menu), 400, 300);
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Add a widget")).unwrap();
+        app.focus(Some(button));
+        app.dispatch_key(key);
+        app.frame();
+        let pulse = app.find_widget(Role::MenuItem, Some("Pulse"));
+        assert!(pulse.is_some(), "{key:?} opens the menu");
+        assert_eq!(app.focused_widget(), pulse, "{key:?} focuses the first row");
+
+        let notes = app.find_widget(Role::MenuItem, Some("Notes"));
+        app.dispatch_key(UiKey::Down { shift: false });
+        assert_eq!(app.focused_widget(), notes, "Down skips the disabled row");
+        app.dispatch_key(UiKey::Down { shift: false });
+        assert_eq!(app.focused_widget(), pulse, "Down wraps to the first row");
+        app.dispatch_key(UiKey::Up { shift: false });
+        assert_eq!(app.focused_widget(), notes, "Up wraps to the last row");
+        app.dispatch_key(UiKey::Home { shift: false });
+        assert_eq!(app.focused_widget(), pulse, "Home goes to the first row");
+        app.dispatch_key(UiKey::End { shift: false });
+        assert_eq!(app.focused_widget(), notes, "End goes to the last row");
+
+        app.dispatch_key(key);
+        app.frame();
+        assert_eq!(picked.get(), 1, "{key:?} on a row picks it");
+        assert!(!app.context_menu_is_open(), "picking a row closes the menu");
+        assert_eq!(
+            app.focused_widget(),
+            Some(button),
+            "focus returns to the button"
+        );
+
+        app.dispatch_key(key);
+        app.frame();
+        assert!(app.context_menu_is_open(), "{key:?} opens the menu again");
+        app.dispatch_key(UiKey::Escape);
+        app.frame();
+        assert!(!app.context_menu_is_open(), "Escape closes the menu");
+        assert_eq!(app.focused_widget(), Some(button), "Escape returns focus");
+        assert_eq!(picked.get(), 1, "Escape picks nothing");
+    }
+}
+
+/// A menu button inside a modal dialog walks its menu the same way, and a
+/// row picked with the pointer after a keyboard open still gives focus back
+/// to the button. A pointer-opened menu starts the walk on Down.
+#[test]
+fn a_menu_button_in_a_modal_keeps_its_keyboard_walk() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem, Dialog, Stack};
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("Rename").on_select(|| {}))
+        .item(ContextMenuItem::new("Delete").on_select(|| {}));
+    let mut app = App::mount_with_size(
+        Stack::new()
+            .child(Button::new("Background"))
+            .child(Dialog::new("Pane").child(Button::new("More").menu(menu))),
+        400,
+        300,
+    );
+    app.frame();
+    let more = app.find_widget(Role::Button, Some("More")).unwrap();
+    app.focus(Some(more));
+    app.dispatch_key(UiKey::Enter);
+    app.frame();
+    let rename = app.find_widget(Role::MenuItem, Some("Rename"));
+    assert!(rename.is_some(), "Enter opens the menu inside the modal");
+    assert!(
+        app.a11y_json().contains("\"Rename\""),
+        "the menu inside a modal is in the accessibility tree"
+    );
+    assert_eq!(app.focused_widget(), rename, "focus lands on the first row");
+    app.dispatch_key(UiKey::Down { shift: false });
+    let delete = app.find_widget(Role::MenuItem, Some("Delete")).unwrap();
+    assert_eq!(app.focused_widget(), Some(delete));
+
+    assert!(app.activate_context_menu_item(delete).is_some());
+    app.frame();
+    assert!(!app.context_menu_is_open());
+    assert_eq!(
+        app.focused_widget(),
+        Some(more),
+        "a pointer pick returns focus too"
+    );
+
+    assert!(app.dispatch_click(more), "a click opens the menu");
+    app.frame();
+    assert_eq!(
+        app.focused_widget(),
+        Some(more),
+        "a click leaves focus alone"
+    );
+    app.dispatch_key(UiKey::Down { shift: false });
+    let rename = app.find_widget(Role::MenuItem, Some("Rename"));
+    assert_eq!(app.focused_widget(), rename, "Down starts the walk");
+    app.dispatch_key(UiKey::Tab { shift: false });
+    assert!(!app.context_menu_is_open(), "Tab closes the menu");
+    assert_eq!(
+        app.focused_widget(),
+        Some(more),
+        "Tab gives focus back first"
+    );
+}

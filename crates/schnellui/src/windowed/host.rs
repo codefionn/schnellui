@@ -201,6 +201,32 @@ impl WindowedApp {
         true
     }
 
+    /// A key pressed while a menu is open: the arrows, Home and End walk its
+    /// rows, Enter or Space picks the focused row and any other key closes
+    /// the menu.
+    pub(super) fn context_menu_key(&mut self, event: &KeyEvent) -> bool {
+        let shift = self.modifiers.shift_key();
+        let walk = match &event.logical_key {
+            Key::Named(NamedKey::ArrowDown) => Some(UiKey::Down { shift }),
+            Key::Named(NamedKey::ArrowUp) => Some(UiKey::Up { shift }),
+            Key::Named(NamedKey::Home) => Some(UiKey::Home { shift }),
+            Key::Named(NamedKey::End) => Some(UiKey::End { shift }),
+            _ => None,
+        };
+        if let Some(changed) = walk.and_then(|key| self.app.step_context_menu(key)) {
+            return changed;
+        }
+        if matches!(
+            &event.logical_key,
+            Key::Named(NamedKey::Enter | NamedKey::Space)
+        ) {
+            if let Some(row) = self.app.focused_context_menu_row() {
+                return self.activate_context_menu_item(row);
+            }
+        }
+        self.app.dismiss_context_menu()
+    }
+
     pub(super) fn open_focused_context_menu(&mut self) -> bool {
         let Some(source) = self.app.focused_widget().and_then(|id| {
             schnellui::widgets::context_menu_source(&self.app.widgets.clone(), self.app.scene(), id)
