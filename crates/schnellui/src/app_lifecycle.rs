@@ -437,6 +437,9 @@ impl App {
         {
             let _ = self.open_context_menu(source, position, can_paste);
         }
+        if let Some(point) = self.redrive_content_drag.take_if(|_| self.laid_out) {
+            let _ = self.update_drag(point);
+        }
         if layout_changed {
             schnellui::widgets::relay_moved_decorations(&self.widgets, &mut self.scene);
         }

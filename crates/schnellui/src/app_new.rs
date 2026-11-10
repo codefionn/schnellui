@@ -130,6 +130,7 @@ impl App {
             theme_transition_duration: Duration::ZERO,
             theme_transition: None,
             reopen_context_menu: None,
+            redrive_content_drag: None,
             theme_binding: None,
             animations_enabled: true,
             continuous_redraw: false,

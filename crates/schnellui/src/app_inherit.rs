@@ -55,6 +55,8 @@ impl App {
         if let Some((source, _, _)) = previous_menu {
             stateful_nodes.push(source);
         }
+        let previous_drag = schnellui::widgets::content_drag_source(&previous.widgets);
+        stateful_nodes.extend(previous_drag);
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
             &self.scene,
@@ -99,6 +101,13 @@ impl App {
         self.reopen_context_menu = previous_menu.and_then(|(source, position, can_paste)| {
             Some((counterparts.get(source)?, position, can_paste))
         });
+        // A drag in progress keeps going from the source's counterpart, so
+        // a rebuild under a held button neither drops it nor fires a click.
+        self.redrive_content_drag = previous_drag
+            .and_then(|source| counterparts.get(source))
+            .and_then(|source| {
+                schnellui::widgets::transfer_content_drag(&self.widgets, source, &previous.widgets)
+            });
     }
 
     /// Moves app-level host registrations into an internally reconstructed tree.

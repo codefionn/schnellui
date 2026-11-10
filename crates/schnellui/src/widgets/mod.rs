@@ -353,6 +353,9 @@ struct TabReorderHover {
 struct DragPointerCapture {
     source: WidgetId,
     origin: Point,
+    /// Where the pointer was last reported, so a rebuilt tree can find the
+    /// drop target under it again.
+    last: Point,
     active: bool,
     hovered: Option<DropHover>,
 }

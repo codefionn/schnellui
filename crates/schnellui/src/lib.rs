@@ -521,6 +521,9 @@ pub struct App {
     /// menu places itself on laid-out geometry, so it reopens after the
     /// replacement's first layout.
     reopen_context_menu: Option<(scene::WidgetId, scene::Point, bool)>,
+    /// A content drag that was moving when the tree was rebuilt: the point
+    /// to find its drop target at again after the replacement's first layout.
+    redrive_content_drag: Option<scene::Point>,
     theme_binding: Option<bindings::ThemeBinding>,
     /// Whether motion is allowed by the host platform's accessibility preference.
     /// Headless/custom hosts default to `true` and can update this through

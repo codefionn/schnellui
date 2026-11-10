@@ -997,3 +997,64 @@ fn a_dialog_drag_keeps_going_across_a_theme_rebuild() {
         "the dialog followed the pointer"
     );
 }
+
+/// Start dragging a button onto a drop target, switch the theme mid-drag,
+/// and release over the target. The rebuilt tree still owns the drag: the
+/// target shows its preview again, the drop lands, and the drag starts once.
+#[test]
+fn a_content_drag_survives_a_theme_rebuild() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::scene::Point;
+    use schnellui::widgets::{Button, DragRelease, Row};
+
+    let starts = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    let accepted = Rc::new(Cell::new(false));
+    let view = {
+        let (starts, drops, accepted) = (starts.clone(), drops.clone(), accepted.clone());
+        move || {
+            let (starts, drops, accepted) = (starts.clone(), drops.clone(), accepted.clone());
+            Row::new()
+                .gap(80.0)
+                .child(
+                    Button::new("source")
+                        .on_drag_start(move || starts.set(starts.get() + 1))
+                        .on_drag_end(move |value| accepted.set(value)),
+                )
+                .child(Button::new("target").on_drop(move || drops.set(drops.get() + 1)))
+        }
+    };
+    let mut app =
+        App::mount_themed_with_size_scaled(ThemeMode::Fixed(theme::LIGHT), view, 400, 120, 1.0);
+    app.frame();
+    let centre = |app: &App, name: &str| {
+        let id = app.find_widget(Role::Button, Some(name)).unwrap();
+        let rect = app.scene().layout(id).unwrap().rect;
+        let at = Point {
+            x: rect.x + rect.width * 0.5,
+            y: rect.y + rect.height * 0.5,
+        };
+        (id, at)
+    };
+    let (_, from) = centre(&app, "source");
+    let (target, to) = centre(&app, "target");
+    let plain = app.scene().paint(target).unwrap().primitives.len();
+
+    assert!(app.begin_drag(from));
+    assert!(app.update_drag(to));
+    assert_eq!(starts.get(), 1);
+    assert!(app.set_theme(theme::DARK));
+    app.frame();
+    let (target, _) = centre(&app, "target");
+    assert_eq!(
+        app.scene().paint(target).unwrap().primitives.len(),
+        plain + 4,
+        "the target under the pointer still shows the drop preview"
+    );
+    assert_eq!(app.end_drag(to), DragRelease::Drop { accepted: true });
+    assert_eq!(app.scene().paint(target).unwrap().primitives.len(), plain);
+    assert_eq!((starts.get(), drops.get()), (1, 1));
+    assert!(accepted.get());
+}

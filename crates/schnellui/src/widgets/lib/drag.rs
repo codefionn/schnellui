@@ -323,11 +323,38 @@ pub fn begin_drag(runtime: &Runtime, scene: &Scene, point: Point) -> bool {
         rt.borrow_mut().drag_pointer = Some(DragPointerCapture {
             source,
             origin: point,
+            last: point,
             active: false,
             hovered: None,
         });
     });
     true
+}
+
+/// The source of a content drag in progress, pressed or already moving.
+pub(crate) fn content_drag_source(runtime: &Runtime) -> Option<WidgetId> {
+    runtime.with(|rt| rt.borrow().drag_pointer.map(|capture| capture.source))
+}
+
+/// Hands a content drag in progress to `source`, its source's counterpart in
+/// a rebuilt tree. The old tree's drop preview went with it, so the drag
+/// starts over no target. Returns where the pointer last was when the drag
+/// had started moving, for [`update_drag`] to find the target under it once
+/// the new tree is laid out.
+pub(crate) fn transfer_content_drag(
+    replacement: &Runtime,
+    source: WidgetId,
+    previous: &Runtime,
+) -> Option<Point> {
+    let capture = previous.with(|rt| rt.borrow().drag_pointer)?;
+    replacement.with(|rt| {
+        rt.borrow_mut().drag_pointer = Some(DragPointerCapture {
+            source,
+            hovered: None,
+            ..capture
+        });
+    });
+    capture.active.then_some(capture.last)
 }
 
 /// Returns the widget runtime's current pointer-capture state for diagnostics.
@@ -352,6 +379,8 @@ pub fn update_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> bool {
         return false;
     };
     let mut changed = false;
+    capture.last = point;
+    runtime.with(|rt| rt.borrow_mut().drag_pointer = Some(capture));
     if !capture.active {
         let dx = point.x - capture.origin.x;
         let dy = point.y - capture.origin.y;
