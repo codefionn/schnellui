@@ -16,8 +16,10 @@ mod doc;
 mod view;
 
 pub use doc::{ListMarker, RichBlock, RichDoc, RichSpan, SpanStyle};
-pub use view::RichText;
+pub use view::{LinkFn, RichText};
 
+#[cfg(test)]
+pub(crate) use view::link_fragments;
 pub(crate) use view::{
-    emit_rich_paint, measure_rich, poll_dynamic_source, push_rich_glyphs, RichState,
+    emit_rich_paint, measure_rich, poll_dynamic_source, push_rich_glyphs, RichLinkNode, RichState,
 };

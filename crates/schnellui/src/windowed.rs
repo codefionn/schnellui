@@ -486,7 +486,9 @@ struct WindowedApp {
 }
 
 mod event_handler;
-#[cfg(feature = "fuzzing")]
+// Also built for the crate's own tests, which drive the real pointer and key paths.
+#[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(not(feature = "fuzzing"), allow(dead_code))]
 pub(crate) mod headless;
 mod host;
 pub(crate) use host::{run, run_headless};

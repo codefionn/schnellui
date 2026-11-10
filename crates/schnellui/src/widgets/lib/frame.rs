@@ -598,6 +598,8 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
         // (post-layout, SOUL §8.1) — a min-origin slide would double-shift.
         rt.text_layouts.contains_key(id)
             || rt.rich.contains_key(id)
+            // a rich text link's paint and box both come from the document flow
+            || rt.rich_links.contains_key(id)
             || terminal_grid::contains(runtime, id)
     }) {
         return;

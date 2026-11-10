@@ -1369,6 +1369,9 @@ struct WidgetRuntime {
     /// Retained document + deferred-paint state per rich text view (SOUL §8.1) —
     /// owned by [`rich`], populated at build, re-flowed by measure/emit.
     rich: SecondaryMap<WidgetId, rich::RichState>,
+    /// Link child nodes of rich text views, keyed by the node: their owner and
+    /// line boxes, for hit testing and paint anchoring.
+    rich_links: SecondaryMap<WidgetId, rich::RichLinkNode>,
     /// Content-sized decorated containers repaint from their post-layout boxes.
     panels: SecondaryMap<WidgetId, panel::PanelState>,
     /// Retained virtual-list shells. The list module owns their keyed row
@@ -1507,6 +1510,7 @@ pub fn reset(runtime: &Runtime) {
         rt.dropdown_triggers.clear();
         rt.dropdown_relabels.clear();
         rt.rich.clear();
+        rt.rich_links.clear();
         rt.panels.clear();
         rt.virtual_lists.clear();
         rt.areas.clear();
@@ -1587,6 +1591,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.comboboxes.remove(id);
             rt.dropdown_triggers.remove(id);
             rt.rich.remove(id);
+            rt.rich_links.remove(id);
             rt.panels.remove(id);
             rt.areas.remove(id);
             rt.dialog_layers.remove(id);

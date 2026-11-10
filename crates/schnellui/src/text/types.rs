@@ -27,8 +27,15 @@ use smallvec::SmallVec;
 use parley::FontData;
 
 /// The brush type of our layouts. We don't paint through Parley (the GPU
-/// renderer emits glyph quads itself), so a trivial RGBA brush suffices.
-pub(crate) type Brush = [u8; 4];
+/// renderer emits glyph quads itself), so the brush only carries what the
+/// caller handed in per span: an RGBA color and an opaque tag. Two spans with
+/// different tags never share a style, so Parley cannot merge them into one
+/// run and the tag identifies the span a glyph came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Brush {
+    pub(crate) color: [u8; 4],
+    pub(crate) tag: u32,
+}
 
 /// The embedded, deterministic UI font (SOUL §7.3).
 ///
@@ -338,6 +345,10 @@ pub struct SpanSpec {
     pub color: [u8; 4],
     pub underline: bool,
     pub strikethrough: bool,
+    /// An opaque caller tag (`0` = none), handed back on every glyph and
+    /// decoration of the span as [`RichGlyph::tag`]. Spans with different tags
+    /// never merge, even when they look identical.
+    pub tag: u32,
 }
 
 /// One positioned glyph of a rich (multi-style) shape (SOUL §8.1). Unlike
@@ -354,6 +365,11 @@ pub struct RichGlyph {
     pub font: FontId,
     /// The span's RGBA8 brush.
     pub color: [u8; 4],
+    /// Horizontal advance of the glyph, logical px (its pen travel, so
+    /// `x..x + advance` is the glyph's slot on the line).
+    pub advance: f32,
+    /// The [`SpanSpec::tag`] of the span this glyph came from.
+    pub tag: u32,
 }
 
 /// A resolved underline/strikethrough segment of a rich shape — the renderer
@@ -367,6 +383,8 @@ pub struct RichDecor {
     pub width: f32,
     pub thickness: f32,
     pub color: [u8; 4],
+    /// The [`SpanSpec::tag`] of the span this segment decorates.
+    pub tag: u32,
 }
 
 /// A shaped multi-style (rich) run: absolute-positioned glyphs + decorations +

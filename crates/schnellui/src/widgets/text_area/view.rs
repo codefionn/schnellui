@@ -291,6 +291,7 @@ fn span_specs(spans: &[RichSpan], text: Color) -> SmallVec<[SpanSpec; 8]> {
                 color: [ink.r, ink.g, ink.b, ink.a],
                 underline: s.style.underline,
                 strikethrough: s.style.strike,
+                tag: 0,
             }
         })
         .collect()

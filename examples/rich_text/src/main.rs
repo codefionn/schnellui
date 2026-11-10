@@ -8,7 +8,9 @@
 //! its documents in code and plugs a tiny Rust-ish keyword highlighter into
 //! the editor. The `preview` scenario wires editor → signal → dynamic viewer
 //! (edit-and-preview, SOUL §3.3), driven headlessly through the inbound
-//! AccessKit `SetValue` path (SOUL §6.3, §7.5).
+//! AccessKit `SetValue` path (SOUL §6.3, §7.5). The showcase's hyperlink
+//! carries a target; `RichText::on_link` reports it in a status line, and the
+//! `link` scenario clicks it through the AccessKit `Click` path.
 
 use std::process::ExitCode;
 
@@ -17,6 +19,7 @@ use schnellui::a11y::{self, to_access_id, Role};
 use schnellui::accesskit_action::{Action, ActionData, ActionRequest};
 use schnellui::accesskit_reexport::TreeId;
 use schnellui::scene::Color;
+use schnellui::signal::create_signal;
 use schnellui::testing::{assert_value_contains, find_by_role_name, SnapshotConfig};
 use schnellui::widgets::{
     Align, Column, EditKey, Pad, RichDoc, RichSpan, RichText, Row, SpanStyle, Text, TextArea,
@@ -210,7 +213,7 @@ fn showcase_doc() -> RichDoc {
             RichSpan::plain(", inline "),
             RichSpan::code("code"),
             RichSpan::plain(", a "),
-            RichSpan::link("hyperlink"),
+            RichSpan::link_to("hyperlink", LINK_TARGET),
             RichSpan::plain(", and "),
             RichSpan::new(
                 "strikethrough",
@@ -245,6 +248,11 @@ fn showcase_doc() -> RichDoc {
         .paragraph(["Importers are application code: this document was built by hand."])
 }
 
+/// Where the showcase's hyperlink points.
+const LINK_TARGET: &str = "https://schnellui.dev/docs/rich-text";
+/// What the status line shows until a link is activated.
+const NO_LINK: &str = "No link activated yet. Click or Tab to the hyperlink.";
+
 const EDITOR_SOURCE: &str = r#"fn main() {
     let greeting = "hello, schnellui";
     println!("{greeting}: {}", 42);
@@ -264,6 +272,10 @@ const DRIVEN_SOURCE: &str = "# Driven\n\nThis body arrived via SetValue and the 
 enum Scenario {
     /// the viewer over the hand-built showcase document — constructed.
     Document,
+    /// the showcase with its hyperlink *driven*: an AccessKit `Click` on the
+    /// link node reaches `RichText::on_link`, and the status line names the
+    /// target (the same path a pointer click or Enter takes, SOUL §6.3).
+    Link,
     /// the multi-line editor with the example highlighter, *driven* to a
     /// mid-document caret + an edit through the real key path (SOUL §7.5).
     Editor,
@@ -276,6 +288,7 @@ impl Scenario {
     fn name(self) -> &'static str {
         match self {
             Scenario::Document => "document",
+            Scenario::Link => "link",
             Scenario::Editor => "editor",
             Scenario::Preview => "preview",
         }
@@ -343,8 +356,18 @@ fn pane_caption(text: &'static str) -> impl View {
     )
 }
 
-fn document_view() -> impl View {
-    Pad::all(24.0).child(RichText::new(showcase_doc()))
+fn document_view(width: f32) -> impl View {
+    let status = create_signal(NO_LINK.to_string());
+    Pad::all(24.0).child(
+        Column::new()
+            .width(width - 48.0)
+            .gap(16.0)
+            .child(
+                RichText::new(showcase_doc())
+                    .on_link(move |target| status.set(format!("Opened link: {target}"))),
+            )
+            .child(Text::dynamic(move || status.get()).size(13.0)),
+    )
 }
 
 fn editor_view(width: f32) -> impl View {
@@ -406,7 +429,24 @@ fn preview_view(width: f32) -> impl View {
 /// reachable, not merely constructible.
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App {
     match scenario {
-        Scenario::Document => App::mount_with_size_scaled(document_view(), width, height, scale),
+        Scenario::Document => {
+            App::mount_with_size_scaled(document_view(width as f32), width, height, scale)
+        }
+        Scenario::Link => {
+            let mut app =
+                App::mount_with_size_scaled(document_view(width as f32), width, height, scale);
+            app.frame();
+            // click the link by role + name, through the inbound AccessKit path
+            if let Some(id) = app.find_widget(Role::Link, Some("hyperlink")) {
+                app.dispatch_action(&ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: to_access_id(id),
+                    data: None,
+                });
+            }
+            app
+        }
         Scenario::Editor => {
             let mut app =
                 App::mount_with_size_scaled(editor_view(width as f32), width, height, scale);
@@ -459,6 +499,30 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
             }
             assert_value_contains(&tree, "document", None, "bold")?;
             assert_value_contains(&tree, "document", None, "fn rerender")?;
+            // the targeted span is a real link node: named by its text, a tab
+            // stop that clicks; nothing has been opened yet
+            let link = find_by_role_name(&tree, "link", Some("hyperlink"))
+                .ok_or_else(|| "missing link node for the hyperlink".to_string())?;
+            for action in ["click", "focus"] {
+                if !link.actions.iter().any(|a| a == action) {
+                    return Err(format!(
+                        "link lacks the {action} action: {:?}",
+                        link.actions
+                    ));
+                }
+            }
+            if find_by_role_name(&tree, "label", Some(NO_LINK)).is_none() {
+                return Err("the status line should start at its idle text".to_string());
+            }
+            Ok(())
+        }
+        Scenario::Link => {
+            let opened = format!("Opened link: {LINK_TARGET}");
+            find_by_role_name(&tree, "label", Some(&opened))
+                .ok_or_else(|| format!("status line never said {opened:?}"))?;
+            if find_by_role_name(&tree, "label", Some(NO_LINK)).is_some() {
+                return Err("the idle status text is still showing".to_string());
+            }
             Ok(())
         }
         Scenario::Editor => {

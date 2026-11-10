@@ -426,6 +426,73 @@ pub(crate) fn redecorate_after_refill(runtime: &Runtime, scene: &mut Scene, id: 
     reapply_focus_ring(runtime, scene, id);
 }
 
+/// The decorations taken off by [`lift_decorations`], to be laid again by
+/// [`restore_decorations`].
+#[derive(Default)]
+pub(crate) struct LiftedDecorations {
+    ring: Option<WidgetId>,
+    active: Option<WidgetId>,
+    hover: Option<WidgetId>,
+}
+
+/// Takes hover, press and focus decoration off, for a repaint of `id` and the
+/// nodes under it that would otherwise leave them pointing at primitives that
+/// no longer exist. A decoration on `id`, a node below it or an ancestor
+/// (a scroll view recolours everything it holds) reaches that paint. When none
+/// does, nothing is lifted and the others are left alone; when one does, all
+/// three come off together so that [`restore_decorations`] can stack them in
+/// their order again. Pairs with [`restore_decorations`] around the repaint.
+pub(crate) fn lift_decorations(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+) -> LiftedDecorations {
+    let (ring, active, hover) = runtime.with(|rt| {
+        let rt = rt.borrow();
+        (
+            rt.ring.as_ref().map(|d| d.target),
+            rt.active.as_ref().map(|d| d.target),
+            rt.hover.as_ref().map(|d| d.target),
+        )
+    });
+    let touched = [ring, active, hover]
+        .into_iter()
+        .flatten()
+        .any(|target| shares_nodes(scene, target, id));
+    if !touched {
+        return LiftedDecorations::default();
+    }
+    if let Some(target) = ring {
+        remove_focus_ring(runtime, scene, target);
+    }
+    if active.is_some() {
+        strip_active_decoration(runtime, scene);
+    }
+    if hover.is_some() {
+        strip_hover_decoration(runtime, scene);
+    }
+    LiftedDecorations {
+        ring,
+        active,
+        hover,
+    }
+}
+
+/// Lays again what [`lift_decorations`] took off, on the repainted nodes. A
+/// target that has left the scene meanwhile is dropped.
+pub(crate) fn restore_decorations(runtime: &Runtime, scene: &mut Scene, lifted: LiftedDecorations) {
+    let live = |scene: &Scene, id: WidgetId| scene.node(id).is_some();
+    if let Some(target) = lifted.hover.filter(|&t| live(scene, t)) {
+        apply_hover_decoration(runtime, scene, target);
+    }
+    if let Some(target) = lifted.active.filter(|&t| live(scene, t)) {
+        apply_active_decoration(runtime, scene, target);
+    }
+    if let Some(target) = lifted.ring.filter(|&t| live(scene, t)) {
+        apply_focus_ring(runtime, scene, target);
+    }
+}
+
 fn interaction_component(scene: &Scene, id: WidgetId) -> Option<InteractionComponent> {
     match scene.node(id)?.kind {
         WidgetKind::Button => Some(InteractionComponent::Button),
@@ -616,12 +683,15 @@ fn strip_applied_interaction(
 }
 
 /// Recolours the foreground primitives of `id` and its descendants to `next`,
-/// recording each original colour so the decoration can be undone.
+/// recording each original colour so the decoration can be undone. `wash` is
+/// the background wash the same decoration just inserted, which is not
+/// foreground: a link's own rect would otherwise be taken for its underline.
 fn recolor_foreground(
     runtime: &Runtime,
     scene: &mut Scene,
     id: WidgetId,
     next: Color,
+    wash: Option<(WidgetId, usize)>,
     restores: &mut Vec<PrimitiveColorRestore>,
 ) {
     let end = scene
@@ -632,7 +702,13 @@ fn recolor_foreground(
     let link = scene
         .node(id)
         .is_some_and(|node| node.kind == WidgetKind::Link);
+    // A decoration of an ancestor lays its wash on the last painted descendant,
+    // which can be a link: those washes are rects too, but not underlines.
+    let washes = decoration_washes(runtime, id);
     for (index, primitive) in scene.paint_mut(id).primitives[..end].iter_mut().enumerate() {
+        if washes.contains(&index) || wash == Some((id, index)) {
+            continue;
+        }
         let color = match primitive {
             Primitive::GlyphQuad { color, .. } | Primitive::Line { color, .. } => color,
             Primitive::ImageQuad { tint, .. } => tint,
@@ -656,7 +732,7 @@ fn recolor_foreground(
         .node(id)
         .and_then(|node| node.children.get(child).copied())
     {
-        recolor_foreground(runtime, scene, next_child, next, restores);
+        recolor_foreground(runtime, scene, next_child, next, wash, restores);
         child += 1;
     }
 }
@@ -851,7 +927,7 @@ fn apply_interaction_style(
         foreground = runtime
             .with(|rt| rt.borrow_mut().restore_pool.pop())
             .unwrap_or_default();
-        recolor_foreground(runtime, scene, id, next, &mut foreground);
+        recolor_foreground(runtime, scene, id, next, background, &mut foreground);
     }
 
     let border_owner = style.border.map(|border| {
@@ -1198,10 +1274,26 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
         if node.kind == WidgetKind::Dialog && contains(scene, id, p, offset) {
             return Some(id);
         }
-        if !node.kind.is_container() && contains(scene, id, p, offset) {
+        if !node.kind.is_container()
+            && contains(scene, id, p, offset)
+            && rich_link_hit(runtime, id, p, offset)
+        {
             return Some(id);
         }
         None
+    }
+
+    // A link inside rich text is hit on its glyphs' line boxes, not on the
+    // union box that bounds it: a link wrapped over two lines must not claim
+    // the text between them. Any other node is hit on its layout box.
+    fn rich_link_hit(runtime: &Runtime, id: WidgetId, p: Point, offset: Point) -> bool {
+        runtime.with(|rt| match rt.borrow().rich_links.get(id) {
+            Some(link) if !link.fragments.is_empty() => link
+                .fragments
+                .iter()
+                .any(|r| translated_rect(*r, offset).contains(p)),
+            _ => true,
+        })
     }
     // The overlay layer: resolve every top-level overlay at the point and keep
     // the same highest `(level, within-level order)` the renderer paints last.
@@ -1488,12 +1580,16 @@ fn update_control_hover(runtime: &Runtime, scene: &mut Scene, hit: Option<Widget
         current.is_some_and(|old| shares_nodes(scene, target, old))
             || next.is_some_and(|new| shares_nodes(scene, target, new))
     };
-    let focused_ring = runtime
-        .with(|rt| rt.borrow().ring.as_ref().map(|ring| ring.target))
-        .filter(|&target| overlaps(target));
+    let ring = runtime.with(|rt| rt.borrow().ring.as_ref().map(|ring| ring.target));
     let active = runtime
         .with(|rt| rt.borrow().active.as_ref().map(|active| active.target))
         .filter(|&target| overlaps(target));
+    // A press that comes off and goes back on lands above the focus ring, so
+    // a ring that shares nodes with that press (a link inside a pressed scroll
+    // view) has to come off and go back on above it too.
+    let focused_ring = ring.filter(|&target| {
+        overlaps(target) || active.is_some_and(|pressed| shares_nodes(scene, target, pressed))
+    });
     if let Some(id) = focused_ring {
         remove_focus_ring(runtime, scene, id);
     }

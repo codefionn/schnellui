@@ -532,6 +532,12 @@ pub(crate) fn scale_paths() -> Vec<ScalePath> {
             per_n: false,
         },
         ScalePath {
+            name: "scale_rich_link_hover",
+            note: "hover moves between two links of a rich document with n link nodes + frame; hit testing narrows the viewer's link children through the spatial index and only the two links involved are restyled, so the cost may not depend on the link count",
+            make: rich_link_hover_closure,
+            per_n: false,
+        },
+        ScalePath {
             name: "scale_virtual_list_append",
             note: "append one row to a VirtualList of 100n rows (1k/10k/100k) + frame; the key index and prefix index grow in place and the mounted window is unchanged, so the cost may not depend on the source length",
             make: virtual_list_append_closure,

@@ -617,6 +617,8 @@ mod tests_decorations;
 mod tests_navigation;
 #[cfg(test)]
 mod tests_remount;
+#[cfg(test)]
+mod tests_rich_links;
 /// Persistent live hosts with reactive redraw scheduling. Native mode translates
 /// winit events into the [`App`]'s frame/input path; headless windowed mode drives
 /// the same state through debug commands and channel wakes without a display.

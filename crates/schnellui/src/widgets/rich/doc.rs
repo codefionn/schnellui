@@ -24,9 +24,12 @@ pub struct SpanStyle {
     pub code: bool,
     pub strike: bool,
     pub underline: bool,
-    /// a hyperlink — rendered underlined in the link color. v0 renders the
-    /// link *text*; carry targets in application state (no per-span hit
-    /// testing yet — SOUL §11 honesty: navigation is future work).
+    /// a hyperlink — rendered underlined in the link color. Styling alone
+    /// makes no promise: a span is *actionable* only when it also carries a
+    /// target ([`RichSpan::href`]), which gives it a link node in the
+    /// accessibility tree, a place in the tab order and a click/Enter/AccessKit
+    /// path to [`RichText::on_link`](crate::widgets::RichText::on_link). A
+    /// styled link with no target stays plain, inert text.
     pub link: bool,
     /// An explicit color override (e.g. a syntax token). `None` defers to the
     /// viewer theme.
@@ -84,6 +87,10 @@ impl SpanStyle {
 pub struct RichSpan {
     pub text: String,
     pub style: SpanStyle,
+    /// The link target handed to [`RichText::on_link`](crate::widgets::RichText::on_link)
+    /// when the span is activated. Only meaningful with [`SpanStyle::link`]
+    /// set; see [`RichSpan::link_target`].
+    pub href: Option<String>,
 }
 
 impl RichSpan {
@@ -91,6 +98,7 @@ impl RichSpan {
         RichSpan {
             text: text.into(),
             style,
+            href: None,
         }
     }
     pub fn plain(text: impl Into<String>) -> RichSpan {
@@ -105,8 +113,33 @@ impl RichSpan {
     pub fn code(text: impl Into<String>) -> RichSpan {
         RichSpan::new(text, SpanStyle::code())
     }
+    /// A styled link with no target: underlined in the link color, inert.
+    /// Chain [`RichSpan::href`] (or use [`RichSpan::link_to`]) to make it act.
     pub fn link(text: impl Into<String>) -> RichSpan {
         RichSpan::new(text, SpanStyle::link())
+    }
+    /// A link that carries `target`: shorthand for `RichSpan::link(text).href(target)`.
+    pub fn link_to(text: impl Into<String>, target: impl Into<String>) -> RichSpan {
+        RichSpan::link(text).href(target)
+    }
+    /// Gives the span a link target. A span with a target is a link, so this
+    /// also turns on the link style (underline + link color); it never leaves
+    /// a hidden link that looks like plain text.
+    ///
+    /// The viewer exposes **one** link node per targeted span, in reading
+    /// order. Split one logical link over several spans (say a bold word
+    /// inside it) and each span is its own link node.
+    pub fn href(mut self, target: impl Into<String>) -> RichSpan {
+        self.style.link = true;
+        self.style.underline = true;
+        self.href = Some(target.into());
+        self
+    }
+    /// The span's link target, if it is an actionable link: link-styled **and**
+    /// carrying a target. `None` for plain spans and for a styled link with no
+    /// target.
+    pub fn link_target(&self) -> Option<&str> {
+        self.href.as_deref().filter(|_| self.style.link)
     }
     /// A syntax-highlight token (mono + explicit color).
     pub fn token(text: impl Into<String>, color: Color) -> RichSpan {
@@ -314,6 +347,21 @@ impl RichDoc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_target_makes_a_span_an_actionable_link() {
+        let bare = RichSpan::link("docs");
+        assert_eq!(bare.link_target(), None, "a styled link alone is inert");
+        let linked = RichSpan::link("docs").href("https://example.org");
+        assert_eq!(linked.link_target(), Some("https://example.org"));
+        assert_eq!(linked, RichSpan::link_to("docs", "https://example.org"));
+        // a target turns the link style on, so a link never hides as plain text
+        let forced = RichSpan::plain("docs").href("x");
+        assert!(forced.style.link && forced.style.underline);
+        assert_eq!(RichSpan::plain("p").link_target(), None);
+        // the target takes part in document equality (a retargeted link is a change)
+        assert_ne!(RichSpan::link_to("a", "x"), RichSpan::link_to("a", "y"));
+    }
 
     #[test]
     fn plain_splits_paragraphs_on_blank_lines() {

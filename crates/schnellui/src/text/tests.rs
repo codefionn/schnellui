@@ -558,6 +558,7 @@ mod tests {
                 color: [0, 0, 0, 255],
                 underline: false,
                 strikethrough: false,
+                tag: 0,
             },
             SpanSpec {
                 len: 5, // "bold "
@@ -565,6 +566,7 @@ mod tests {
                 color: [0, 0, 0, 255],
                 underline: false,
                 strikethrough: false,
+                tag: 0,
             },
             SpanSpec {
                 len: 4, // "link"
@@ -572,6 +574,7 @@ mod tests {
                 color: [0, 0, 255, 255],
                 underline: true,
                 strikethrough: false,
+                tag: 0,
             },
         ];
         let rich = shaper.shape_spans(text, &spans, &ShapeOptions::new(18.0));
@@ -604,6 +607,30 @@ mod tests {
     }
 
     #[test]
+    fn shape_spans_hands_each_spans_tag_back_on_its_glyphs() {
+        let mut shaper = TextShaper::new();
+        // two adjacent spans that look identical, told apart only by their tag
+        let spec = |len, tag| SpanSpec {
+            len,
+            face: FontFace::Sans,
+            color: [0, 0, 255, 255],
+            underline: true,
+            strikethrough: false,
+            tag,
+        };
+        let spans = [spec(3, 1), spec(3, 2), spec(3, 0)];
+        let rich = shaper.shape_spans("onetwo end", &spans, &ShapeOptions::new(18.0));
+        let tags: Vec<u32> = rich.glyphs.iter().map(|g| g.tag).collect();
+        assert_eq!(&tags[..3], [1, 1, 1], "{tags:?}");
+        assert_eq!(&tags[3..6], [2, 2, 2], "{tags:?}");
+        assert!(tags[6..].iter().all(|&t| t == 0));
+        // each underline segment names its span too, and glyphs carry their advance
+        assert!(rich.decors.iter().any(|d| d.tag == 1));
+        assert!(rich.decors.iter().any(|d| d.tag == 2));
+        assert!(rich.glyphs.iter().all(|g| g.advance > 0.0));
+    }
+
+    #[test]
     fn shape_spans_wraps_and_positions_absolutely() {
         let mut shaper = TextShaper::new();
         let one = shaper.measure("wwww", 20.0, None).0;
@@ -614,6 +641,7 @@ mod tests {
             color: [0, 0, 0, 255],
             underline: false,
             strikethrough: false,
+            tag: 0,
         }];
         let rich = shaper.shape_spans(
             text,

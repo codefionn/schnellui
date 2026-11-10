@@ -10,8 +10,8 @@ use schnellui::layout::{Align, Container, ContainerStyle};
 use schnellui::scene::{Color, ComponentRef, Point, Primitive, Rect, WidgetKind};
 use schnellui::signal::{create_effect, create_memo, create_signal, Runtime};
 use schnellui::widgets::{
-    Button, Column, EditKey, Flex, Scroll, Text, TextArea, TextInput, View, VirtualList,
-    VirtualListController, WrapMode,
+    Button, Column, EditKey, Flex, RichDoc, RichSpan, RichText, Scroll, Text, TextArea, TextInput,
+    View, VirtualList, VirtualListController, WrapMode,
 };
 use schnellui::{App, TestValue};
 

@@ -37,6 +37,17 @@ fn tab_reorder_item_ancestor(
     None
 }
 
+/// A rich text link that can be activated. A press on one is captured like a
+/// possible drag so the click lands on **release**, over the link, and a press
+/// dragged off the link ends with nothing (see [`end_drag`]).
+fn is_active_rich_link(rt: &WidgetRuntime, id: WidgetId) -> bool {
+    rt.rich_links.contains_key(id)
+        && rt
+            .handlers
+            .get(id)
+            .is_some_and(|handlers| handlers.click.is_some())
+}
+
 fn drag_source_ancestor(runtime: &Runtime, scene: &Scene, from: WidgetId) -> Option<WidgetId> {
     let mut current = Some(from);
     while let Some(id) = current {
@@ -46,6 +57,7 @@ fn drag_source_ancestor(runtime: &Runtime, scene: &Scene, from: WidgetId) -> Opt
                 .get(id)
                 .is_some_and(|handlers| handlers.drag_start.is_some())
                 || rt.tab_reorder_items.contains_key(id)
+                || is_active_rich_link(&rt, id)
         });
         if draggable {
             return Some(id);
@@ -458,10 +470,20 @@ pub fn cancel_drag(runtime: &Runtime, scene: &mut Scene) -> bool {
 /// Releases a possible/active content drag. A sub-threshold gesture becomes a
 /// click; a real drag fires the hovered target's drop handler followed by the
 /// source's `on_drag_end(accepted)` callback.
-pub fn end_drag(runtime: &Runtime, scene: &mut Scene, _point: Point) -> DragRelease {
+pub fn end_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> DragRelease {
     let Some(capture) = runtime.with(|rt| rt.borrow_mut().drag_pointer.take()) else {
         return DragRelease::None;
     };
+    // A rich text link is clicked by pressing and releasing on it. Released
+    // anywhere else, the press ends with no click, however far it moved.
+    if runtime.with(|rt| is_active_rich_link(&rt.borrow(), capture.source))
+        && hit_test(runtime, scene, point) != Some(capture.source)
+    {
+        if let Some(hover) = capture.hovered {
+            strip_drop_preview(runtime, scene, hover);
+        }
+        return DragRelease::None;
+    }
     if !capture.active {
         return DragRelease::Click(capture.source);
     }

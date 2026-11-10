@@ -214,6 +214,24 @@ provisional origin during build and when text changes. Nodes that already sit at
 origin are not written. Wrapped text, rich text and terminal grids emit absolute
 positions themselves and are skipped. The pass then calls `Scene::clear_geometry_changed`.
 
+Rich text links are scene children the layout never sees. Each span built with
+`RichSpan::href` is a `WidgetKind::Link` child of its `RichText`, so hit testing, the tab
+order, hover, press and focus decoration, the pointer cursor, Enter and AccessKit `Click`
+all treat it as the `Link` widget and end in one click handler that calls
+`RichText::on_link`. `LayoutEngine::sync_node` stops at a `RichText`, so these nodes never
+get a Taffy node. The document flow (`flow_with_links` in
+[`rich/view.rs`](../crates/schnellui/src/widgets/rich/view.rs)) paints the link glyphs and
+underlines into the link nodes instead of the view, tagging each span's glyphs through the
+shaper so adjacent links stay apart, and sets each node's box to the union of its line
+boxes. Hit testing uses the per-line boxes, so the gap in a wrapped link is not the link.
+The flow runs at build (provisional paint, so a remount can restore focus before layout)
+and in `emit_rich_paint` when the box or the document changed, never on a clean frame.
+`lift_decorations` and `restore_decorations` wrap that repaint so hover, press and focus
+decoration, including that of an enclosing scroll view, never points at replaced
+primitives. `sync_links` adds, renames, retargets and removes link nodes when a dynamic
+document changes. A press on a link is captured like a possible drag, so the click fires on
+release over the link, and a press released elsewhere fires nothing.
+
 ## Dirty channels and their consumers
 
 The [`Scene`](../crates/schnellui/src/scene/scene.rs) tracks changes as sparse lists

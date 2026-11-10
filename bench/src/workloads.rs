@@ -726,6 +726,47 @@ pub(crate) fn hover_move_closure(n: usize) -> Box<dyn FnMut()> {
     Box::new(move || step(&mut app))
 }
 
+/// Pointer moves between two links of one rich document of n link-bearing
+/// paragraphs, plus a frame: a hover that changes hands inside a viewer that owns
+/// n link nodes. Link nodes are children of the viewer, so hit testing has to
+/// narrow them through the scene's spatial index, and only the two links involved
+/// may be restyled; the cost cannot follow the link count.
+pub(crate) fn rich_link_hover_closure(n: usize) -> Box<dyn FnMut()> {
+    let mut doc = RichDoc::new();
+    for i in 0..n {
+        doc = doc.paragraph([
+            RichSpan::plain(format!("{} see the ", paragraph(i))),
+            RichSpan::link_to(format!("link {i}"), format!("https://example.org/{i}")),
+            RichSpan::plain(" for more."),
+        ]);
+    }
+    let mut app = App::mount_with_size(RichText::new(doc).on_link(|_| {}), 800, 600);
+    app.frame();
+    let center = |app: &App, name: &str| {
+        let id = app
+            .find_widget(Role::Link, Some(name))
+            .expect("bench link mounted");
+        let rect = app.scene().layout(id).expect("laid out").rect;
+        Point {
+            x: rect.x + rect.width * 0.5,
+            y: rect.y + rect.height * 0.5,
+        }
+    };
+    let points = [center(&app, "link 0"), center(&app, "link 1")];
+    app.frame();
+    app.scene_mut().clear_dirty();
+    let mut next = 0;
+    let mut step = move |app: &mut App| {
+        next ^= 1;
+        assert!(app.update_pointer_proximity(black_box(points[next])));
+        app.frame();
+        app.scene_mut().clear_dirty();
+    };
+    step(&mut app);
+    step(&mut app);
+    Box::new(move || step(&mut app))
+}
+
 pub(crate) fn make_hover_move_between_buttons() -> Box<dyn FnMut()> {
     hover_move_closure(1_000)
 }

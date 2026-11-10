@@ -323,6 +323,65 @@ fn rich_text_present_rerender_allocates_nothing() {
     assert_eq!(info.bytes_total, 0, "…and zero bytes (SOUL §1)");
 }
 
+/// **Covenant guard (SOUL §1) for rich text links:** link nodes, their per-link
+/// paint and their line boxes are built at layout time, never per frame. With a
+/// targeted link present, hovered and focused, a steady-state re-render is still
+/// *literal zero* allocations.
+#[test]
+fn rich_text_with_links_rerender_allocates_nothing() {
+    use schnellui::scene::Point;
+    use schnellui::widgets::{RichDoc, RichSpan, RichText};
+    let count = create_signal(0i64);
+    let doc = RichDoc::new().paragraph([
+        RichSpan::plain("see the "),
+        RichSpan::link_to("docs", "https://example.org/docs"),
+        RichSpan::plain(" or the "),
+        RichSpan::link_to("faq", "https://example.org/faq"),
+    ]);
+    let view = stretch_column(
+        Column::new()
+            .child(RichText::new(doc).on_link(|_| {}))
+            .child(Button::new("go")),
+    );
+    let mut app = App::mount_with_size(view, 360, 200);
+    let btn = app
+        .find_widget(Role::Button, Some("go"))
+        .expect("button present");
+    app.bind_paint(btn, move || {
+        let n = count.get();
+        Color::rgb((n & 0xFF) as u8, ((n >> 8) & 0xFF) as u8, 0)
+    });
+    app.register_signal("count", move |v| {
+        if let TestValue::Int(i) = v {
+            count.set(i);
+        }
+    });
+    app.frame();
+    let docs = app
+        .find_widget(Role::Link, Some("docs"))
+        .expect("the targeted span is a link node");
+    let faq = app.find_widget(Role::Link, Some("faq")).expect("faq link");
+    // one link hovered, the other focused: both decorations live while measuring
+    let r = app.scene().layout(docs).expect("laid out").rect;
+    app.update_pointer_proximity(Point {
+        x: r.x + r.width / 2.0,
+        y: r.y + r.height / 2.0,
+    });
+    app.focus(Some(faq));
+    app.set_signal("count", 1);
+    app.frame();
+
+    let info = allocation_counter::measure(|| {
+        app.set_signal("count", std::hint::black_box(2));
+        app.frame();
+    });
+    assert_eq!(
+        info.count_total, 0,
+        "steady-state re-render with rich text links present must be zero-alloc (SOUL §1)"
+    );
+    assert_eq!(info.bytes_total, 0, "…and zero bytes (SOUL §1)");
+}
+
 /// Embedded workbenches can show more than four live browser/canvas surfaces at
 /// once. Polling unchanged versioned frames must retain its key-snapshot storage
 /// instead of spilling a fresh small vector on every frame.

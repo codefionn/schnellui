@@ -352,12 +352,18 @@ impl LayoutEngine {
                 }
             }
             order.push(id);
-            stack.extend(node.children.iter().rev().copied());
+            // A rich text view is a measured leaf. Its scene children are the
+            // link nodes its own paint pass places, so the layout never sees them.
+            if kind != WidgetKind::RichText {
+                stack.extend(node.children.iter().rev().copied());
+            }
         }
         for &id in &order {
             let node = scene.node(id).expect("sync_node: id must be live");
             kids.clear();
-            kids.extend(node.children.iter().map(|c| self.map[*c]));
+            if node.kind != WidgetKind::RichText {
+                kids.extend(node.children.iter().map(|c| self.map[*c]));
+            }
             let _ = self.taffy.set_children(self.map[id], &kids);
             self.touched.push(id);
         }

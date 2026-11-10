@@ -10,12 +10,17 @@
 //! **zero** work here (SOUL §1; the layout block itself is skipped when nothing
 //! is layout-dirty).
 
-use schnellui::a11y::Role;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use schnellui::a11y::{ActionFlags, Role};
 use schnellui::scene::{
-    Color, DirtyFlags, PaintData, Point, Primitive, Rect, Scene, Size, WidgetId, WidgetKind,
+    Color, DirtyFlags, LayoutBox, PaintData, Point, Primitive, Rect, Scene, Size, WidgetId,
+    WidgetKind,
 };
 use schnellui::text::{
-    FontFace, GlyphAtlas, RichShapedText, ShapeOptions, SpanSpec, TextShaper, WrapMode,
+    FontFace, GlyphAtlas, RichDecor, RichGlyph, RichShapedText, ShapeOptions, SpanSpec, TextShaper,
+    WrapMode,
 };
 use smallvec::SmallVec;
 
@@ -87,6 +92,38 @@ const BULLET_DROP: f32 = 0.15;
 /// A signal-bound document producer (`RichText::dynamic`, SOUL §3.3).
 pub type DocFn = Box<dyn FnMut() -> RichDoc + 'static>;
 
+/// The link activation callback (`RichText::on_link`): gets the target of the
+/// link that fired.
+pub type LinkFn = Box<dyn FnMut(&str) + 'static>;
+
+/// One callback shared by every link node of a view. It is taken out while it
+/// runs, so user code never executes under a borrow and a re-entrant
+/// activation is a no-op instead of a panic.
+type LinkCallback = Rc<RefCell<Option<LinkFn>>>;
+
+/// One retained link: the Link child node plus the current target its click
+/// handler reads (updated in place when a dynamic document retargets it).
+struct LinkSlot {
+    node: WidgetId,
+    href: Rc<RefCell<String>>,
+}
+
+/// Registry record of a link child node, for the paths that only have the
+/// node: hit testing and paint anchoring.
+pub(crate) struct RichLinkNode {
+    /// One box per line the link occupies, absolute, logical px. The node's
+    /// layout box is their union; hit testing uses these boxes, so the gap
+    /// between the lines of a wrapped link does not count as the link.
+    pub(crate) fragments: SmallVec<[Rect; 2]>,
+}
+
+/// One link's share of a flow: its glyph + underline primitives and line boxes.
+#[derive(Default)]
+struct LinkPaint {
+    prims: Vec<Primitive>,
+    fragments: SmallVec<[Rect; 2]>,
+}
+
 /// One rich text view's retained state — the document plus the deferred paint
 /// bookkeeping (mirrors `TextLayout` for wrapping text, SOUL §8.1).
 pub(crate) struct RichState {
@@ -105,6 +142,13 @@ pub(crate) struct RichState {
     last_emit: Option<Rect>,
     /// document changed since the last emission ⇒ force a re-flow + re-emit.
     dirty: bool,
+    /// The link activation callback, if the view has one. Without it the
+    /// links stay exposed as Link nodes but are not focusable or clickable.
+    on_link: Option<LinkCallback>,
+    /// One slot per targeted span of the document, in reading order.
+    links: Vec<LinkSlot>,
+    /// Scratch the flow fills per link; capacity is kept across emissions.
+    link_paints: Vec<LinkPaint>,
 }
 
 // ---------------------------------------------------------------------------
@@ -132,10 +176,15 @@ enum RichSource {
 ///
 /// Carries the AccessKit `Document` role; its accessible value is the
 /// document's plain text and its name the first heading (SOUL §6.1/§6.2).
+///
+/// Spans with a target ([`RichSpan::href`]) are links: with
+/// [`RichText::on_link`] set, each is a `Role::Link` child of the document
+/// that a pointer click, Enter or an AccessKit `Click` activates.
 pub struct RichText {
     source: RichSource,
     size_px: f32,
     code_line_height: Option<f32>,
+    on_link: Option<LinkFn>,
 }
 
 impl RichText {
@@ -145,6 +194,7 @@ impl RichText {
             source: RichSource::Static(doc),
             size_px: RICH_BASE_SIZE,
             code_line_height: None,
+            on_link: None,
         }
     }
 
@@ -155,6 +205,7 @@ impl RichText {
             source: RichSource::Dynamic(Box::new(f)),
             size_px: RICH_BASE_SIZE,
             code_line_height: None,
+            on_link: None,
         }
     }
 
@@ -171,6 +222,29 @@ impl RichText {
     /// Horizontal overflow is left for the containing viewport to clip.
     pub fn fixed_code_lines(mut self, line_height: f32) -> RichText {
         self.code_line_height = line_height.is_finite().then(|| line_height.max(1.0));
+        self
+    }
+
+    /// Sets the link activation handler. It gets the target (`href`) of the
+    /// link that was activated, and runs once per activation whether it came
+    /// from a pointer click on the link's glyphs, Enter on the focused link,
+    /// or an AccessKit `Click` (SOUL §6.3: one path for all three).
+    ///
+    /// Every span built with [`RichSpan::href`] / [`RichSpan::link_to`] is
+    /// exposed as a `Role::Link` child of the document, named by its text.
+    /// With a handler set, each is a tab stop, takes hover, press and focus
+    /// feedback like [`Link`](crate::widgets::Link), and shows the pointer
+    /// cursor. Without one, the link nodes are still exposed (a screen reader
+    /// can announce them) but nothing is focusable or clickable. A link that
+    /// wraps is one node whose bounds are the union of its line boxes, while
+    /// clicks only land on the glyphs' own line boxes. Links inside code
+    /// blocks are not supported.
+    ///
+    /// The target arrives as `&str`: the viewer never clones it per frame, and
+    /// a handler that needs to keep it copies it. The closure is `FnMut`
+    /// like every other `on_*` builder in the crate.
+    pub fn on_link(mut self, f: impl FnMut(&str) + 'static) -> RichText {
+        self.on_link = Some(Box::new(f));
         self
     }
 
@@ -217,9 +291,38 @@ impl View for RichText {
                     cache: crate::widgets::MeasureCache::default(),
                     last_emit: None,
                     dirty: true,
+                    on_link: this.on_link.map(|f| Rc::new(RefCell::new(Some(f)))),
+                    links: Vec::new(),
+                    link_paints: Vec::new(),
                 },
             );
         });
+        // Link nodes exist from the first mount, so a remount can hand focus
+        // to a link's counterpart before the first layout. Their paint is
+        // provisional until layout re-emits it at the final position.
+        sync_links(&ctx.runtime, ctx.scene, id);
+        let has_links = ctx.runtime.with(|rt| {
+            rt.borrow()
+                .rich
+                .get(id)
+                .is_some_and(|st| !st.links.is_empty())
+        });
+        if has_links {
+            // a document with no links pays nothing here
+            let mut scratch = PaintData::default();
+            let flow = flow_with_links(
+                &ctx.runtime,
+                ctx.text,
+                ctx.atlas,
+                id,
+                f32::INFINITY,
+                Point { x: 0.0, y: 0.0 },
+                &mut scratch,
+            );
+            if let Some(flow) = flow {
+                finish_link_flow(&ctx.runtime, ctx.scene, flow, false);
+            }
+        }
         id
     }
 }
@@ -283,34 +386,39 @@ pub(crate) fn emit_rich_paint(
             Some(b) if !b.rect.is_empty() => b.rect,
             _ => continue,
         };
-        runtime.with(|rt| {
-            let mut rt = rt.borrow_mut();
-            let Some(st) = rt.rich.get_mut(id) else {
-                return;
-            };
-            if !st.dirty && st.last_emit == Some(rect) {
-                return; // box and document unchanged ⇒ nothing to re-emit
-            }
-            let pd = scene.paint_mut(id);
-            pd.primitives.clear();
-            let origin = Point {
-                x: rect.x,
-                y: rect.y,
-            };
-            flow_doc(
-                shaper,
-                &st.doc,
-                st.base_px,
-                st.scale,
-                rect.width,
-                st.palette,
-                st.code_line_height,
-                &mut Some((pd, atlas, origin)),
-            );
-            st.last_emit = Some(rect);
-            st.dirty = false;
-            scene.mark_dirty(id, DirtyFlags::PAINT);
+        let stale = runtime.with(|rt| {
+            rt.borrow()
+                .rich
+                .get(id)
+                .is_some_and(|st| st.dirty || st.last_emit != Some(rect))
         });
+        if !stale {
+            continue; // box and document unchanged ⇒ nothing to re-emit
+        }
+        // Decorations that cover this paint (on the view, its links or an
+        // enclosing scroll view) come off while it is intact and go back on
+        // the fresh one, so none is left pointing at primitives that moved.
+        let lifted = crate::widgets::lift_decorations(runtime, scene, id);
+        let pd = scene.paint_mut(id);
+        pd.primitives.clear();
+        let origin = Point {
+            x: rect.x,
+            y: rect.y,
+        };
+        let flow = flow_with_links(runtime, shaper, atlas, id, rect.width, origin, pd);
+        runtime.with(|rt| {
+            if let Some(st) = rt.borrow_mut().rich.get_mut(id) {
+                st.last_emit = Some(rect);
+                st.dirty = false;
+            }
+        });
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+        // The links' own paint and boxes follow the same flow. This runs with
+        // no registry borrow held: redecorating re-enters the runtime.
+        if let Some(flow) = flow {
+            finish_link_flow(runtime, scene, flow, true);
+        }
+        crate::widgets::restore_decorations(runtime, scene, lifted);
     }
     ids.clear();
     runtime.with(|rt| rt.borrow_mut().layout_scratch = ids);
@@ -353,6 +461,9 @@ pub(crate) fn poll_dynamic_source(
             scene.set_a11y_name(id, Some(t));
         }
         scene.set_a11y_value(id, Some(plain));
+        // Link nodes follow the document: retarget, rename, add or drop them
+        // so the accessibility tree never lags the text.
+        sync_links(runtime, scene, id);
         scene.mark_dirty(id, DirtyFlags::LAYOUT);
         scene.mark_dirty(id, DirtyFlags::PAINT);
         scene.mark_dirty(id, DirtyFlags::A11Y);
@@ -361,12 +472,260 @@ pub(crate) fn poll_dynamic_source(
 }
 
 // ---------------------------------------------------------------------------
+// link nodes (SOUL §6: one handler for pointer, keyboard and AccessKit)
+// ---------------------------------------------------------------------------
+//
+// Each targeted span is a real `WidgetKind::Link` child of the view. That is
+// what makes it a first-class control: the scene's hit test, tab order,
+// hover / press / focus decorations, cursor choice, Enter rule and AccessKit
+// `Click` all already treat a Link node, and they all end in the node's one
+// click handler. The view only owns what is particular to inline text: the
+// nodes' glyph paint and boxes come out of the document flow.
+
+/// `(text, target)` of every targeted span, in the reading order the flow
+/// numbers them. Code blocks carry no links.
+fn collect_links(doc: &RichDoc) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for block in &doc.blocks {
+        let spans = match block {
+            RichBlock::Paragraph(spans)
+            | RichBlock::Heading { spans, .. }
+            | RichBlock::ListItem { spans, .. }
+            | RichBlock::Quote(spans) => spans,
+            RichBlock::CodeBlock { .. } | RichBlock::Rule => continue,
+        };
+        for span in spans {
+            if let Some(target) = span.link_target() {
+                out.push((span.text.clone(), target.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Brings the view's link nodes in step with its document: retargets and
+/// renames the ones that remain, adds nodes for new links and removes the
+/// surplus. Runs at build and when a dynamic document changes, never per
+/// frame. Nodes keep their ids by reading-order index, so a link that merely
+/// moves keeps its focus and hover.
+fn sync_links(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: WidgetId) {
+    let Some((wanted, callback, existing)) = runtime.with(|rt| {
+        let rt = rt.borrow();
+        let st = rt.rich.get(id)?;
+        Some((
+            collect_links(&st.doc),
+            st.on_link.clone(),
+            st.links
+                .iter()
+                .map(|l| (l.node, l.href.clone()))
+                .collect::<Vec<_>>(),
+        ))
+    }) else {
+        return;
+    };
+
+    // Nodes past the document's last link are dropped. `purge_nodes` takes
+    // their decorations and handlers off first, while their paint still exists.
+    if existing.len() > wanted.len() {
+        let gone: Vec<WidgetId> = existing[wanted.len()..].iter().map(|l| l.0).collect();
+        // A decoration that covers them from an ancestor (a scroll view) is
+        // lifted while they go, so it never records primitives of a dead node.
+        let lifted = crate::widgets::lift_decorations(runtime, scene, id);
+        crate::widgets::purge_nodes(runtime, scene, &gone);
+        for node in gone {
+            let _ = scene.remove_subtree(node);
+        }
+        crate::widgets::restore_decorations(runtime, scene, lifted);
+    }
+
+    let mut slots = Vec::with_capacity(wanted.len());
+    for (i, (text, target)) in wanted.into_iter().enumerate() {
+        match existing.get(i) {
+            Some((node, href)) => {
+                if *href.borrow() != target {
+                    *href.borrow_mut() = target;
+                }
+                scene.set_a11y_name(*node, Some(text));
+                slots.push(LinkSlot {
+                    node: *node,
+                    href: href.clone(),
+                });
+            }
+            None => {
+                let node = scene.insert(WidgetKind::Link, Some(id));
+                let a = scene.a11y_mut(node);
+                a.role = Role::Link.as_u16();
+                a.name = Some(text);
+                let href = Rc::new(RefCell::new(target));
+                if let Some(callback) = callback.clone() {
+                    let mut actions = ActionFlags::default();
+                    actions.insert(ActionFlags::CLICK);
+                    actions.insert(ActionFlags::FOCUS);
+                    scene.a11y_mut(node).actions = actions.0;
+                    // The one activation path: pointer, Enter and AccessKit
+                    // `Click` all reach this closure through `dispatch_click`.
+                    let shared = href.clone();
+                    crate::widgets::with_handlers(runtime, node, |h| {
+                        h.click = Some(Box::new(move || {
+                            let target = shared.borrow().clone();
+                            let taken = callback.borrow_mut().take();
+                            if let Some(mut f) = taken {
+                                f(&target);
+                                let mut slot = callback.borrow_mut();
+                                if slot.is_none() {
+                                    *slot = Some(f);
+                                }
+                            }
+                        }));
+                    });
+                }
+                runtime.with(|rt| {
+                    rt.borrow_mut().rich_links.insert(
+                        node,
+                        RichLinkNode {
+                            fragments: SmallVec::new(),
+                        },
+                    );
+                });
+                slots.push(LinkSlot { node, href });
+            }
+        }
+    }
+    runtime.with(|rt| {
+        if let Some(st) = rt.borrow_mut().rich.get_mut(id) {
+            st.links = slots;
+        }
+    });
+}
+
+/// The line boxes a link node occupies, for tests that aim at its glyphs.
+#[cfg(test)]
+pub(crate) fn link_fragments(runtime: &crate::widgets::Runtime, node: WidgetId) -> Vec<Rect> {
+    runtime.with(|rt| {
+        rt.borrow()
+            .rich_links
+            .get(node)
+            .map_or_else(Vec::new, |l| l.fragments.to_vec())
+    })
+}
+
+/// What a flow hands back for the link nodes: each link's paint, and the
+/// nodes they belong to.
+struct LinkFlow {
+    owner: WidgetId,
+    paints: Vec<LinkPaint>,
+    nodes: SmallVec<[WidgetId; 8]>,
+}
+
+/// Flows the view's document at `width`, emitting ordinary primitives into
+/// `parent` and collecting every link's own paint. `None` when the view is not
+/// registered.
+fn flow_with_links(
+    runtime: &crate::widgets::Runtime,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    width: f32,
+    origin: Point,
+    parent: &mut PaintData,
+) -> Option<LinkFlow> {
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let st = rt.rich.get_mut(id)?;
+        let mut paints = std::mem::take(&mut st.link_paints);
+        for p in &mut paints {
+            p.prims.clear();
+            p.fragments.clear();
+        }
+        paints.resize_with(st.links.len(), LinkPaint::default);
+        flow_doc(
+            shaper,
+            &st.doc,
+            st.base_px,
+            st.scale,
+            width,
+            st.palette,
+            st.code_line_height,
+            &mut Some(Sink {
+                pd: parent,
+                atlas,
+                origin,
+                links: &mut paints,
+                next_link: 0,
+            }),
+        );
+        let nodes = st.links.iter().map(|l| l.node).collect();
+        Some(LinkFlow {
+            owner: id,
+            paints,
+            nodes,
+        })
+    })
+}
+
+/// Writes a flow's link paints into their nodes: swaps the primitives in
+/// (keeping both buffers' capacity), re-boxes each node over its line boxes
+/// when `place` (the post-layout pass; the build-time pass is provisional and
+/// has no box yet). The caller lifts hover / press / focus decoration around
+/// the whole repaint. Runs with no registry borrow held.
+fn finish_link_flow(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    mut flow: LinkFlow,
+    place: bool,
+) {
+    for (&node, link) in flow.nodes.iter().zip(flow.paints.iter_mut()) {
+        if scene.node(node).is_none() {
+            continue;
+        }
+        runtime.with(|rt| {
+            if let Some(record) = rt.borrow_mut().rich_links.get_mut(node) {
+                record.fragments.clear();
+                record.fragments.extend(link.fragments.iter().copied());
+            }
+        });
+        let pd = scene.paint_mut(node);
+        pd.origin = None;
+        std::mem::swap(&mut pd.primitives, &mut link.prims);
+        if place {
+            let bounds = link
+                .fragments
+                .iter()
+                .fold(Rect::default(), |all, r| all.union(r));
+            scene.set_layout(
+                node,
+                LayoutBox {
+                    rect: bounds,
+                    content: bounds,
+                },
+            );
+        }
+    }
+    runtime.with(|rt| {
+        if let Some(st) = rt.borrow_mut().rich.get_mut(flow.owner) {
+            st.link_paints = std::mem::take(&mut flow.paints);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // the document flow (measure and paint share this — SOUL §8.1)
 // ---------------------------------------------------------------------------
 
-/// The paint sink: primitives + atlas + the node's laid-out origin. `None` ⇒
-/// measure-only (shape for sizes, emit nothing).
-type PaintSink<'a> = Option<(&'a mut PaintData, &'a mut GlyphAtlas, Point)>;
+/// The paint sink: the node's primitives + atlas + its laid-out origin, plus
+/// where targeted link spans send their own glyphs. `None` ⇒ measure-only
+/// (shape for sizes, emit nothing).
+struct Sink<'a> {
+    pd: &'a mut PaintData,
+    atlas: &'a mut GlyphAtlas,
+    origin: Point,
+    /// per-link paint, indexed in reading order; a link past the end (a
+    /// document that moved ahead of its nodes) paints as ordinary text
+    links: &'a mut [LinkPaint],
+    /// reading-order index of the next targeted span
+    next_link: usize,
+}
+type PaintSink<'a> = Option<Sink<'a>>;
 
 /// Flows `doc` top-to-bottom at `avail_w` (logical px; non-finite ⇒
 /// unconstrained), returning the logical size. With a paint sink, emits
@@ -442,9 +801,9 @@ fn flow_doc(
                 );
                 // the bar spans the quoted block (disjoint from the glyphs, so
                 // emission order is irrelevant)
-                if let Some((pd, _, origin)) = paint.as_mut() {
-                    pd.primitives.push(Primitive::SolidRect {
-                        rect: Rect::new(origin.x, origin.y + y, QUOTE_BAR_W, sz.height),
+                if let Some(sink) = paint.as_mut() {
+                    sink.pd.primitives.push(Primitive::SolidRect {
+                        rect: Rect::new(sink.origin.x, sink.origin.y + y, QUOTE_BAR_W, sz.height),
                         color: palette.muted,
                         corner_radius: 1.0,
                     });
@@ -518,16 +877,16 @@ fn flow_doc(
             ),
             RichBlock::Rule => {
                 let h = base_px * 0.6;
-                if let Some((pd, _, origin)) = paint.as_mut() {
+                if let Some(sink) = paint.as_mut() {
                     let w = if finite { avail_w } else { max_w.max(64.0) };
-                    let mid = origin.y + y + h * 0.5;
-                    pd.primitives.push(Primitive::Line {
+                    let mid = sink.origin.y + y + h * 0.5;
+                    sink.pd.primitives.push(Primitive::Line {
                         from: Point {
-                            x: origin.x,
+                            x: sink.origin.x,
                             y: mid,
                         },
                         to: Point {
-                            x: origin.x + w,
+                            x: sink.origin.x + w,
                             y: mid,
                         },
                         width: 1.0,
@@ -585,6 +944,10 @@ fn flow_inline(
     let sc = norm_scale(scale);
     let mut text = String::new();
     let mut specs: SmallVec<[SpanSpec; 8]> = SmallVec::new();
+    // Targeted spans are tagged `link index + 1` (reading order across the
+    // whole view), so a glyph names the link it came from.
+    let first_link = paint.as_ref().map_or(0, |sink| sink.next_link);
+    let mut links_here = 0usize;
     for s in spans {
         let st = s.style;
         let ink = st.color.unwrap_or(if st.link {
@@ -600,8 +963,19 @@ fn flow_inline(
             color: [ink.r, ink.g, ink.b, ink.a],
             underline: st.underline || st.link,
             strikethrough: st.strike,
+            tag: if s.link_target().is_some() {
+                links_here += 1;
+                (first_link + links_here) as u32
+            } else {
+                0
+            },
         });
         text.push_str(&s.text);
+    }
+    // Keep the link index in step with the document even when the text is
+    // empty or nothing paints (measure): nodes are numbered by reading order.
+    if let Some(sink) = paint.as_mut() {
+        sink.next_link += links_here;
     }
     if text.is_empty() {
         return Size {
@@ -612,23 +986,91 @@ fn flow_inline(
     let phys = phys_size_px(size_px, scale);
     let max_w = (inner_w.is_finite() && inner_w > 0.0).then(|| inner_w.max(1.0) * sc);
     let rich = shaper.shape_spans(&text, &specs, &ShapeOptions::new(phys).max_width(max_w));
-    if let Some((pd, atlas, origin)) = paint.as_mut() {
-        push_rich_glyphs(
-            pd,
-            shaper,
-            atlas,
-            &rich,
-            phys as u32,
-            scale,
-            Point {
-                x: origin.x + x_off,
-                y: origin.y + y,
-            },
-        );
+    if let Some(sink) = paint.as_mut() {
+        let at = Point {
+            x: sink.origin.x + x_off,
+            y: sink.origin.y + y,
+        };
+        if links_here == 0 {
+            push_rich_glyphs(sink.pd, shaper, sink.atlas, &rich, phys as u32, scale, at);
+        } else {
+            push_with_links(
+                sink,
+                first_link..first_link + links_here,
+                shaper,
+                &rich,
+                phys as u32,
+                scale,
+                at,
+            );
+        }
     }
     Size {
         width: rich.width * inv,
         height: rich.height * inv,
+    }
+}
+
+/// Emits an inline block whose spans include links: link glyphs and underlines
+/// go to their own link's paint, everything else to the node's, and each
+/// link's per-line boxes are recorded for hit testing. A glyph belongs to the
+/// link its span's tag names (`index + 1`).
+#[allow(clippy::too_many_arguments)]
+fn push_with_links(
+    sink: &mut Sink,
+    here: std::ops::Range<usize>,
+    shaper: &mut TextShaper,
+    rich: &RichShapedText,
+    phys_size: u32,
+    scale: f32,
+    origin: Point,
+) {
+    let inv = 1.0 / norm_scale(scale);
+    let Sink {
+        pd, atlas, links, ..
+    } = sink;
+    // The link a tag names, if its node exists.
+    let count = links.len();
+    let owner = |tag: u32| {
+        let index = (tag as usize).checked_sub(1)?;
+        (here.contains(&index) && index < count).then_some(index)
+    };
+    for g in &rich.glyphs {
+        let prims = match owner(g.tag) {
+            Some(i) => &mut links[i].prims,
+            None => &mut pd.primitives,
+        };
+        push_glyph(prims, shaper, atlas, g, phys_size, inv, origin);
+    }
+    for d in &rich.decors {
+        let prims = match owner(d.tag) {
+            Some(i) => &mut links[i].prims,
+            None => &mut pd.primitives,
+        };
+        push_decor(prims, d, inv, origin);
+    }
+    for index in here.clone().filter(|&i| i < count) {
+        let link = &mut links[index];
+        for line in &rich.lines {
+            let start = line.glyph_start as usize;
+            let glyphs = &rich.glyphs[start..start + line.glyph_count as usize];
+            let mut extent: Option<(f32, f32)> = None;
+            for g in glyphs.iter().filter(|g| g.tag as usize == index + 1) {
+                let (l, r) = (g.x, g.x + g.advance);
+                extent = Some(match extent {
+                    Some((s, e)) => (s.min(l), e.max(r)),
+                    None => (l, r),
+                });
+            }
+            if let Some((l, r)) = extent {
+                link.fragments.push(Rect::new(
+                    origin.x + l * inv,
+                    origin.y + line.top * inv,
+                    (r - l) * inv,
+                    line.height * inv,
+                ));
+            }
+        }
     }
 }
 
@@ -683,6 +1125,7 @@ fn flow_code_block(
                 color: [ink.r, ink.g, ink.b, ink.a],
                 underline: false,
                 strikethrough: false,
+                tag: 0,
             });
             text.push_str(&s.text);
         }
@@ -706,17 +1149,18 @@ fn flow_code_block(
     };
     let block_h = content_h + 2.0 * CODE_PAD;
 
-    if let Some((pd, atlas, origin)) = paint.as_mut() {
-        pd.primitives.push(Primitive::SolidRect {
+    if let Some(sink) = paint.as_mut() {
+        let origin = sink.origin;
+        sink.pd.primitives.push(Primitive::SolidRect {
             rect: Rect::new(origin.x, origin.y + y, block_w, block_h),
             color: palette.code_bg,
             corner_radius: 4.0,
         });
         for (rich, line_y) in &shaped {
             push_rich_glyphs(
-                pd,
+                sink.pd,
                 shaper,
-                atlas,
+                sink.atlas,
                 rich,
                 phys as u32,
                 scale,
@@ -747,41 +1191,59 @@ pub(crate) fn push_rich_glyphs(
 ) {
     let inv = 1.0 / norm_scale(scale);
     for g in &rich.glyphs {
-        let key = shaper.glyph_key_in(g.font, g.glyph_id, phys_size);
-        let rg = shaper.rasterize_glyph(key, atlas);
-        if !rg.rect.is_empty() {
-            pd.primitives.push(Primitive::GlyphQuad {
-                rect: Rect::new(
-                    origin.x + (g.x + rg.left as f32) * inv,
-                    origin.y + (g.y - rg.top as f32) * inv,
-                    rg.width as f32 * inv,
-                    rg.height as f32 * inv,
-                ),
-                atlas_uv: Rect::new(
-                    rg.rect.x as f32,
-                    rg.rect.y as f32,
-                    rg.rect.width as f32,
-                    rg.rect.height as f32,
-                ),
-                color: Color::rgba(g.color[0], g.color[1], g.color[2], g.color[3]),
-            });
-        }
+        push_glyph(&mut pd.primitives, shaper, atlas, g, phys_size, inv, origin);
     }
     for d in &rich.decors {
-        let yy = origin.y + d.y * inv;
-        pd.primitives.push(Primitive::Line {
-            from: Point {
-                x: origin.x + d.x * inv,
-                y: yy,
-            },
-            to: Point {
-                x: origin.x + (d.x + d.width) * inv,
-                y: yy,
-            },
-            width: (d.thickness * inv).max(0.75),
-            color: Color::rgba(d.color[0], d.color[1], d.color[2], d.color[3]),
+        push_decor(&mut pd.primitives, d, inv, origin);
+    }
+}
+
+/// One glyph quad (nothing for a glyph with no ink, such as a space).
+fn push_glyph(
+    prims: &mut Vec<Primitive>,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    g: &RichGlyph,
+    phys_size: u32,
+    inv: f32,
+    origin: Point,
+) {
+    let key = shaper.glyph_key_in(g.font, g.glyph_id, phys_size);
+    let rg = shaper.rasterize_glyph(key, atlas);
+    if !rg.rect.is_empty() {
+        prims.push(Primitive::GlyphQuad {
+            rect: Rect::new(
+                origin.x + (g.x + rg.left as f32) * inv,
+                origin.y + (g.y - rg.top as f32) * inv,
+                rg.width as f32 * inv,
+                rg.height as f32 * inv,
+            ),
+            atlas_uv: Rect::new(
+                rg.rect.x as f32,
+                rg.rect.y as f32,
+                rg.rect.width as f32,
+                rg.rect.height as f32,
+            ),
+            color: Color::rgba(g.color[0], g.color[1], g.color[2], g.color[3]),
         });
     }
+}
+
+/// One underline / strikethrough hairline.
+fn push_decor(prims: &mut Vec<Primitive>, d: &RichDecor, inv: f32, origin: Point) {
+    let yy = origin.y + d.y * inv;
+    prims.push(Primitive::Line {
+        from: Point {
+            x: origin.x + d.x * inv,
+            y: yy,
+        },
+        to: Point {
+            x: origin.x + (d.x + d.width) * inv,
+            y: yy,
+        },
+        width: (d.thickness * inv).max(0.75),
+        color: Color::rgba(d.color[0], d.color[1], d.color[2], d.color[3]),
+    });
 }
 
 #[cfg(test)]

@@ -82,6 +82,7 @@ pub fn all() -> Vec<Component> {
         GROUPED_TABS,
         TODO,
         RICH_TEXT,
+        RICH_LINKS,
     ]
 }
 
@@ -1074,6 +1075,63 @@ pub const RICH_TEXT: Component = Component {
     name: "rich_text",
     size: (420, 300),
     mount: rich_text,
+    canonical: None,
+    check: fine,
+};
+
+// --- rich text links ---------------------------------------------------------
+
+fn rich_links(mount: &Mount) -> HeadlessHost {
+    let opened = create_signal("nothing opened");
+    host(
+        move || {
+            let doc = RichDoc::new()
+                .heading(2, ["Links"])
+                .paragraph([
+                    RichSpan::plain("Read the "),
+                    RichSpan::link_to("manual", "x://manual"),
+                    RichSpan::plain(", the "),
+                    RichSpan::link_to("changelog and the long migration guide", "x://changes"),
+                    RichSpan::plain(" or a "),
+                    RichSpan::link("styled-only link"),
+                    RichSpan::plain(" in a paragraph that wraps in a narrow window."),
+                ])
+                .bullet([
+                    RichSpan::plain("item "),
+                    RichSpan::link_to("one", "x://one"),
+                    RichSpan::link_to("two", "x://two"),
+                ])
+                .quote([RichSpan::link_to("quoted", "x://quoted")]);
+            Column::new()
+                .fill()
+                .child(
+                    Scroll::new().fill().child(
+                        Pad::all(12.0)
+                            .child(RichText::new(doc).on_link(move |t| opened.set(link_label(t)))),
+                    ),
+                )
+                .child(
+                    Pad::all(8.0).child(Text::dynamic(move || format!("opened {}", opened.get()))),
+                )
+        },
+        mount,
+    )
+}
+
+fn link_label(target: &str) -> &'static str {
+    match target {
+        "x://manual" => "manual",
+        "x://changes" => "changes",
+        "x://one" => "one",
+        "x://two" => "two",
+        _ => "quoted",
+    }
+}
+
+pub const RICH_LINKS: Component = Component {
+    name: "rich_links",
+    size: (420, 300),
+    mount: rich_links,
     canonical: None,
     check: fine,
 };

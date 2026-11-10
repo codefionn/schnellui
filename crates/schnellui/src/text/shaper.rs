@@ -480,7 +480,13 @@ impl TextShaper {
                 if s.face.italic() {
                     builder.push(StyleProperty::FontStyle(FontStyle::Italic), range.clone());
                 }
-                builder.push(StyleProperty::Brush(s.color), range.clone());
+                builder.push(
+                    StyleProperty::Brush(Brush {
+                        color: s.color,
+                        tag: s.tag,
+                    }),
+                    range.clone(),
+                );
                 if s.underline {
                     builder.push(StyleProperty::Underline(true), range.clone());
                 }
@@ -507,7 +513,8 @@ impl TextShaper {
                 let font =
                     font_id_for_data(run.font(), &mut self.font_ids, &mut self.font_resources);
                 let style = glyph_run.style();
-                let color = style.brush;
+                let color = style.brush.color;
+                let tag = style.brush.tag;
                 let rm = run.metrics();
                 // Decoration offsets are typographic (positive = up from the
                 // baseline); screen y is down, so subtract.
@@ -517,7 +524,8 @@ impl TextShaper {
                         y: glyph_run.baseline() - d.offset.unwrap_or(rm.underline_offset),
                         width: glyph_run.advance(),
                         thickness: d.size.unwrap_or(rm.underline_size).max(0.5),
-                        color: d.brush,
+                        color: d.brush.color,
+                        tag,
                     });
                 }
                 if let Some(d) = &style.strikethrough {
@@ -526,7 +534,8 @@ impl TextShaper {
                         y: glyph_run.baseline() - d.offset.unwrap_or(rm.strikethrough_offset),
                         width: glyph_run.advance(),
                         thickness: d.size.unwrap_or(rm.strikethrough_size).max(0.5),
-                        color: d.brush,
+                        color: d.brush.color,
+                        tag,
                     });
                 }
                 for g in glyph_run.positioned_glyphs() {
@@ -536,6 +545,8 @@ impl TextShaper {
                         y: g.y,
                         font,
                         color,
+                        advance: g.advance,
+                        tag,
                     });
                 }
             }

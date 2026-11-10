@@ -63,4 +63,5 @@ resize_properties!(
     grouped_tabs,
     todo,
     rich_text,
+    rich_links,
 );
