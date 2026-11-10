@@ -814,6 +814,37 @@ pub(crate) fn active_modal_layer(
     })
 }
 
+/// The panel of every mounted dialog, modal or modeless, in mount order.
+pub fn dialog_panels(runtime: &crate::widgets::Runtime) -> Vec<WidgetId> {
+    runtime.with(|runtime| {
+        let runtime = runtime.borrow();
+        runtime
+            .dialog_layer_ids
+            .iter()
+            .filter_map(|&layer| runtime.dialog_layers.get(layer).map(|state| state.panel))
+            .collect()
+    })
+}
+
+/// The panel of the dialog or window `id` sits inside, if any.
+pub fn enclosing_dialog_panel(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    id: WidgetId,
+) -> Option<WidgetId> {
+    runtime.with(|runtime| {
+        let runtime = runtime.borrow();
+        let mut current = Some(id);
+        while let Some(node_id) = current {
+            if runtime.dialog_panels.contains_key(node_id) {
+                return Some(node_id);
+            }
+            current = scene.node(node_id).and_then(|node| node.parent);
+        }
+        None
+    })
+}
+
 /// Whether `id` is the root of, or belongs to, `ancestor`'s retained subtree.
 pub fn is_in_subtree(scene: &Scene, id: WidgetId, ancestor: WidgetId) -> bool {
     let mut current = Some(id);

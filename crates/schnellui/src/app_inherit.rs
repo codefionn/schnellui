@@ -5,7 +5,7 @@ use super::*;
 /// Whether `id` can hold focus in `scene`: it advertises the focus action and
 /// is not disabled. A control rebuilt disabled keeps its counterpart but can
 /// no longer take focus, like a browser's disabled `<button>`.
-fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
+pub(crate) fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
     scene.a11y(id).is_some_and(|a| {
         a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
             && !a11y::StateFlags(a.state).contains(a11y::StateFlags::DISABLED)
@@ -16,15 +16,31 @@ fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
 /// `previous`'s tab order, trying later controls before earlier ones. Only runs
 /// when the focused control has no counterpart, so it costs a remount nothing
 /// in the common case. A counterpart that cannot take focus is skipped.
-fn surviving_neighbour(previous: &App, replacement: &Scene, focused: WidgetId) -> Option<WidgetId> {
+///
+/// When the dialog or window that held `focused` is gone too, its neighbours in
+/// the tab order are the controls of other windows. Focus would land on another
+/// window's Close button, so only controls outside every dialog qualify then.
+fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<WidgetId> {
+    let replacement = &next.scene;
+    let home =
+        schnellui::widgets::enclosing_dialog_panel(&previous.widgets, &previous.scene, focused);
     schnellui::a11y::with_tab_order(&previous.scene, |order| {
         let position = order.iter().position(|id| *id == focused)?;
-        let counterparts =
-            remount::CounterpartMap::new(&previous.scene, replacement, order.iter().copied());
+        let counterparts = remount::CounterpartMap::new(
+            &previous.scene,
+            replacement,
+            order.iter().copied().chain(home),
+        );
+        let home_is_gone = home.is_some_and(|panel| counterparts.get(panel).is_none());
         order[position + 1..]
             .iter()
             .chain(order[..position].iter().rev())
             .filter_map(|id| counterparts.get(*id))
+            .filter(|id| {
+                !home_is_gone
+                    || schnellui::widgets::enclosing_dialog_panel(&next.widgets, replacement, *id)
+                        .is_none()
+            })
             .find(|id| takes_focus(replacement, *id))
     })
 }
@@ -95,10 +111,12 @@ impl App {
         stateful_nodes.extend(changed_controls.iter().copied());
         let previous_drag = schnellui::widgets::content_drag_source(&previous.widgets);
         stateful_nodes.extend(previous_drag);
+        let previous_panels = schnellui::widgets::dialog_panels(&previous.widgets);
         let modal_ids = previous
             .modal_openers
             .iter()
-            .flat_map(|entry| [entry.panel, entry.opener]);
+            .flat_map(|entry| [entry.panel, entry.opener])
+            .chain(previous_panels.iter().copied());
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
             &self.scene,
@@ -151,7 +169,7 @@ impl App {
             })
         });
 
-        // A closed modal returns focus to the control that opened it, when
+        // A closed dialog or window returns focus to the control that opened it, when
         // that control survives.
         let restored = restored.or_else(|| {
             let (opener, ring_visible) = previous.modal_opener_of(previous_focus?.0)?;
@@ -170,7 +188,7 @@ impl App {
         // the old tab order that did: the next one first, then the previous.
         let restored = restored.or_else(|| {
             let (focused, ring_visible) = previous_focus?;
-            let target = surviving_neighbour(previous, &self.scene, focused)?;
+            let target = surviving_neighbour(previous, self, focused)?;
             Some(RemountFocus {
                 target,
                 ring_visible,
@@ -192,7 +210,11 @@ impl App {
         // counterpart of the previous focus.
         let focus_before =
             previous_focus.and_then(|(id, ring)| Some((counterparts.get(id)?, ring)));
-        self.note_opened_modal(focus_before);
+        let known: Vec<_> = previous_panels
+            .iter()
+            .filter_map(|panel| counterparts.get(*panel))
+            .collect();
+        self.note_opened_modal(focus_before, &known);
 
         if let Some(focus) = restored {
             self.restore_focus_after_remount(focus);

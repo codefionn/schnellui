@@ -182,6 +182,10 @@ impl App {
         let focus_before = self
             .focused_widget()
             .map(|id| (id, self.focus_ring_shown()));
+        let known: Vec<_> = schnellui::widgets::dialog_panels(&self.widgets)
+            .into_iter()
+            .filter(|panel| !removed_nodes.contains(panel))
+            .collect();
         let mut displaced_focus = None;
         if let Some(focused) = self
             .focused_widget()
@@ -192,13 +196,27 @@ impl App {
             let opener = self
                 .modal_opener_of(focused)
                 .filter(|(id, _)| !removed_nodes.contains(id));
+            // A window that goes with the branch takes its neighbours with it:
+            // land outside every dialog, not on another window's Close button.
+            let home_is_gone =
+                schnellui::widgets::enclosing_dialog_panel(&self.widgets, &self.scene, focused)
+                    .is_some_and(|panel| removed_nodes.contains(&panel));
             let neighbour = a11y::with_tab_order(&self.scene, |order| {
                 let position = order.iter().position(|id| *id == focused)?;
                 order[position + 1..]
                     .iter()
                     .chain(order[..position].iter().rev())
                     .copied()
-                    .find(|id| !removed_nodes.contains(id))
+                    .filter(|id| !removed_nodes.contains(id))
+                    .find(|id| {
+                        !home_is_gone
+                            || schnellui::widgets::enclosing_dialog_panel(
+                                &self.widgets,
+                                &self.scene,
+                                *id,
+                            )
+                            .is_none()
+                    })
             });
             displaced_focus = Some((reference, opener, neighbour, ring));
             let previous = self.focused_input_semantics();
@@ -256,7 +274,7 @@ impl App {
         }
         self.scene
             .mark_dirty(removed.parent.unwrap_or(new_root), scene::DirtyFlags::ALL);
-        self.note_opened_modal(focus_before);
+        self.note_opened_modal(focus_before, &known);
         if let Some((reference, opener, neighbour, ring)) = displaced_focus {
             let same_identity = reference
                 .and_then(|reference| self.scene.resolve_ref(reference))
@@ -271,6 +289,7 @@ impl App {
                 (None, Some((id, opener_ring))) => (Some(id), opener_ring),
                 (None, None) => (neighbour.filter(|id| self.scene.node(*id).is_some()), ring),
             };
+            let heir = heir.filter(|heir| app_inherit::takes_focus(&self.scene, *heir));
             let blocked = heir.is_none_or(|heir| {
                 schnellui::widgets::active_modal_panel(&self.scene).is_some_and(|panel| {
                     !schnellui::widgets::is_in_subtree(&self.scene, heir, panel)
