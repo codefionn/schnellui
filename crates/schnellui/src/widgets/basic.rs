@@ -299,6 +299,16 @@ pub(crate) fn emit_radio_paint(
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
     let t = theme_for(runtime, id);
+    if row.is_some() {
+        // The row's own top-left corner. The slide that anchors paint to the laid-out box
+        // goes by the first corner of everything painted, so this keeps the mark's offset
+        // inside the row.
+        pd.primitives.push(Primitive::SolidRect {
+            rect: Rect::new(laid.x, laid.y, intrinsic.width, height),
+            color: schnellui::scene::Color::TRANSPARENT,
+            corner_radius: 0.0,
+        });
+    }
     let inner = (rect.width - 2.0 * RADIO_INSET).max(0.0);
     // A radio stays round in every design system, so it never reads as a
     // checkbox: the outer ring in the outline color, the accent once chosen.
