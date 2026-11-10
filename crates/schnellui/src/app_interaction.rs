@@ -33,7 +33,24 @@ impl App {
                 target,
             );
         self.notify_focused_widget_transition(previous);
-        changed
+        // Keyboard, assistive and programmatic focus scroll the control into
+        // view; a pointer press (below) does not, the target is under the
+        // pointer already. Before a layout has run the rect would be stale, so
+        // the reveal then waits for it.
+        let revealed = target
+            .filter(|id| self.focused_widget() == Some(*id))
+            .is_some_and(|id| self.reveal_focused(id));
+        changed | revealed
+    }
+
+    /// Scrolls the enclosing viewports of the focused `id` to show it, now when
+    /// the layout is current and else right after the next layout pass.
+    fn reveal_focused(&mut self, id: scene::WidgetId) -> bool {
+        if self.layout_pending() {
+            schnellui::widgets::request_reveal(&self.widgets, id);
+            return false;
+        }
+        schnellui::widgets::reveal_widget(&self.widgets, &mut self.scene, &mut self.text, id)
     }
 
     /// Moves focus from a pointer press. This preserves the semantic focus used

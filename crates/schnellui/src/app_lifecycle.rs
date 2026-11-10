@@ -504,6 +504,15 @@ impl App {
             }
         }
 
+        // A focus or an edit that waited for layout scrolls its viewports now.
+        if self.laid_out {
+            schnellui::widgets::flush_pending_reveal(
+                &self.widgets,
+                &mut self.scene,
+                &mut self.text,
+            );
+        }
+
         // Layout slides paint to new origins but never resizes a hover wash or
         // focus ring that was sized before it; lay those again where the
         // decorated paint changed size.

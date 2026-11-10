@@ -346,7 +346,10 @@ fn dispatch_edit_key_as(
             .map(|e| e.apply(&key, kind))
             .unwrap_or(Change::None)
     });
-    commit_change(runtime, scene, shaper, atlas, id, change)
+    let committed = commit_change(runtime, scene, shaper, atlas, id, change);
+    // The field stays put when text changes, but the viewports around it may
+    // have been scrolled away from the caret.
+    crate::widgets::reveal_widget(runtime, scene, shaper, id) | committed
 }
 
 /// Returns the currently selected text for an editable, if it has a non-empty

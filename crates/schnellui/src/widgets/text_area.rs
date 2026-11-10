@@ -1483,52 +1483,62 @@ pub(crate) fn dispatch_area_key(
         rt.borrow_mut().areas.insert(id, st);
     });
     let committed = commit_area_change(runtime, scene, shaper, atlas, id, change);
-    match key {
-        EditKey::DocStart { .. } => reveal_doc_edge(runtime, scene, shaper, id, false) | committed,
-        EditKey::DocEnd { .. } => reveal_doc_edge(runtime, scene, shaper, id, true) | committed,
-        _ => committed,
+    // Every key an area takes leaves the caret where the user looks next, so
+    // the enclosing viewports follow it. An edit that changes the area's size
+    // waits for the layout that gives it that size.
+    if scene.layout_dirty().contains(&id) {
+        crate::widgets::request_reveal(runtime, id);
+        committed
+    } else {
+        crate::widgets::reveal_widget(runtime, scene, shaper, id) | committed
     }
 }
 
-/// Scrolls the enclosing viewport so the first (`end == false`) or last row of
-/// the area is visible, padding included: where Ctrl+Home / Ctrl+End put the
-/// caret. The rows sit at fixed offsets inside the area's laid-out box, so no
-/// shaping is needed.
-fn reveal_doc_edge(
+/// The box of the row the primary caret of the area `id` is on, in the area's
+/// layout `rect` (the rows sit at fixed offsets inside it, so only the caret's
+/// row needs finding). The first row reaches up to the top of the area and the
+/// last down to its bottom, so padding comes into view with them. `None` while
+/// the row table is stale or the area has no state.
+pub(crate) fn caret_rect(
     runtime: &crate::widgets::Runtime,
-    scene: &mut Scene,
     shaper: &mut TextShaper,
     id: WidgetId,
-    end: bool,
-) -> bool {
-    let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
-        return false;
-    };
-    let Some(viewport) = crate::widgets::enclosing_scroll(scene, id) else {
-        return false;
-    };
-    let Some(metrics) = crate::widgets::scroll_metrics(scene, viewport) else {
-        return false;
-    };
-    let Some(line_h) = runtime.with(|rt| {
-        rt.borrow_mut()
-            .areas
-            .get_mut(id)
-            .map(|st| st.line_height(shaper))
-    }) else {
-        return false;
-    };
-    let top = if end { rect.bottom() - line_h } else { rect.y };
-    let visible_top = metrics.viewport.y + metrics.offset;
-    let visible_bottom = visible_top + metrics.viewport.height;
-    let delta = if top < visible_top {
-        top - visible_top
-    } else if top + line_h > visible_bottom {
-        top + line_h - visible_bottom
-    } else {
-        return false;
-    };
-    crate::widgets::dispatch_scroll(runtime, scene, viewport, delta)
+    rect: Rect,
+) -> Option<Rect> {
+    runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let st = rt.areas.get_mut(id)?;
+        let wrapping = st.wrap != WrapMode::NoWrap;
+        if wrapping
+            && (!st.cache.usable()
+                || st.cache.rows_stale
+                || st.cache.rows.len() != st.cache.lines.len() + 1)
+        {
+            return None;
+        }
+        let line_h = st.line_height(shaper);
+        let caret = st.caret.min(st.value.len());
+        let line = st.cache.line_of(caret);
+        let sub = if wrapping {
+            st.caret_row_x(caret, shaper).0
+        } else {
+            0
+        };
+        let row = st.cache.row_of(line, wrapping) + sub;
+        let rows = if wrapping {
+            st.cache.rows.last().map_or(1, |&r| r as usize)
+        } else {
+            st.cache.starts.len()
+        };
+        let top = rect.y + AREA_PAD + row as f32 * line_h;
+        let from = if row == 0 { rect.y } else { top };
+        let to = if row + 1 >= rows {
+            rect.bottom()
+        } else {
+            top + line_h
+        };
+        Some(Rect::new(rect.x, from, rect.width, (to - from).max(0.0)))
+    })
 }
 
 /// Places the caret from a pointer position (press), or extends the selection
@@ -3503,6 +3513,9 @@ mod tests {
             id,
             EditKey::Insert(paste),
         );
+        // The edit scrolled the viewport to the caret; the band this compares
+        // is the one the edit emitted, so put the viewport back under it.
+        scene.set_scroll_offset(sv, Point { x: 0.0, y: 0.0 });
         let got = scene.paint(id).unwrap().primitives.clone();
         // force a full rebuild and compare
         runtime.with(|rt| rt.borrow_mut().areas.get_mut(id).unwrap().cache.key = None);

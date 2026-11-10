@@ -646,6 +646,8 @@ mod tests_navigation;
 #[cfg(test)]
 mod tests_remount;
 #[cfg(test)]
+mod tests_reveal;
+#[cfg(test)]
 mod tests_rich_links;
 #[cfg(test)]
 mod tests_window_return;

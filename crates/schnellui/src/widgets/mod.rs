@@ -1322,6 +1322,8 @@ struct WidgetRuntime {
     dialog_layer_ids: Vec<WidgetId>,
     /// Active native scrollbar thumb drag, if any.
     scrollbar_pointer: Option<ScrollbarPointerCapture>,
+    /// A widget to scroll into view once the pending layout has run.
+    pending_reveal: Option<WidgetId>,
     /// Held pointer currently inside an enabled viewport edge.
     edge_auto_scroll: Option<EdgeAutoScrollState>,
     /// Indeterminate progress indicators advanced by [`tick_loading_spinners`].
@@ -1506,6 +1508,7 @@ pub fn reset(runtime: &Runtime) {
         rt.scrolls.clear();
         rt.scroll_ids.clear();
         rt.scrollbar_pointer = None;
+        rt.pending_reveal = None;
         rt.edge_auto_scroll = None;
         rt.spinners.clear();
         rt.spinner_ids.clear();

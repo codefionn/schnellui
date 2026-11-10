@@ -280,6 +280,18 @@ impl App {
             Action::ScrollDown => {
                 schnellui::widgets::dispatch_scroll(&self.widgets, &mut self.scene, id, SCROLL_STEP)
             }
+            // Shows the node where it is, as the platform asked: no focus, no
+            // activation.
+            Action::ScrollIntoView if self.layout_pending() => {
+                schnellui::widgets::request_reveal(&self.widgets, id);
+                false
+            }
+            Action::ScrollIntoView => schnellui::widgets::reveal_widget(
+                &self.widgets,
+                &mut self.scene,
+                &mut self.text,
+                id,
+            ),
             Action::Focus => self.focus(Some(id)),
             Action::Blur => self.focus(None),
             // Increment/Decrement adjust a slider by one step — the same

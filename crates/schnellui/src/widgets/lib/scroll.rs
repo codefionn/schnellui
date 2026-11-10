@@ -744,6 +744,90 @@ pub fn enclosing_scroll(scene: &Scene, from: WidgetId) -> Option<WidgetId> {
     None
 }
 
+/// Scrolls every [`WidgetKind::Scroll`] around `from` the least distance that
+/// shows `rect` (window-space layout coordinates, scroll offsets not applied),
+/// innermost viewport first, as a browser's `scrollIntoView({block: "nearest"})`
+/// does. A rect taller than a viewport keeps its top edge in view. Returns
+/// `true` if any viewport moved.
+///
+/// Each move goes through [`dispatch_scroll`], so `on_scroll`, the scrollbar and
+/// the accessible value follow. Only a real move allocates (that value string);
+/// a target already in view costs a walk up the parents and some float math.
+pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: Rect) -> bool {
+    let (mut top, mut bottom) = (rect.y, rect.bottom());
+    let mut moved = false;
+    let mut cur = enclosing_scroll(scene, from);
+    while let Some(viewport) = cur {
+        if let Some(metrics) = scroll_metrics(scene, viewport) {
+            let visible_top = metrics.viewport.y + metrics.offset;
+            let visible_bottom = visible_top + metrics.viewport.height;
+            let delta = if top < visible_top {
+                top - visible_top
+            } else if bottom > visible_bottom {
+                (bottom - visible_bottom).min(top - visible_top)
+            } else {
+                0.0
+            };
+            if delta != 0.0 {
+                moved |= dispatch_scroll(runtime, scene, viewport, delta);
+            }
+            // What the next viewport out sees is this rect where this viewport
+            // now shows it, cut to the part this viewport lets through.
+            let shift = scene
+                .scroll_offset(viewport)
+                .y
+                .clamp(0.0, metrics.max_offset)
+                - metrics.offset;
+            top = (top - shift).clamp(metrics.viewport.y, metrics.viewport.bottom());
+            bottom = (bottom - shift).clamp(metrics.viewport.y, metrics.viewport.bottom());
+        }
+        cur = enclosing_scroll(scene, viewport);
+    }
+    moved
+}
+
+/// [`reveal_rect`] for the control `id`: its laid-out box, or for the focused
+/// text area the row its caret is on, so typing and arrows keep the caret in
+/// view rather than the whole (possibly very tall) area.
+pub fn reveal_widget(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    id: WidgetId,
+) -> bool {
+    let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
+        return false;
+    };
+    let focused = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
+    let rect = if focused
+        && scene
+            .node(id)
+            .is_some_and(|n| n.kind == WidgetKind::TextArea)
+    {
+        crate::widgets::text_area::caret_rect(runtime, shaper, id, rect).unwrap_or(rect)
+    } else {
+        rect
+    };
+    reveal_rect(runtime, scene, id, rect)
+}
+
+/// Asks for `id` to be revealed once layout has settled: a layout that is still
+/// pending would put its rect in the wrong place. [`flush_pending_reveal`] runs
+/// it after the layout pass.
+pub fn request_reveal(runtime: &Runtime, id: WidgetId) {
+    runtime.with(|rt| rt.borrow_mut().pending_reveal = Some(id));
+}
+
+/// Runs the reveal [`request_reveal`] queued, if its widget is still mounted.
+pub fn flush_pending_reveal(runtime: &Runtime, scene: &mut Scene, shaper: &mut TextShaper) -> bool {
+    let Some(id) = runtime.with(|rt| rt.borrow_mut().pending_reveal.take()) else {
+        return false;
+    };
+    scene.node(id).is_some() && reveal_widget(runtime, scene, shaper, id)
+}
+
 /// The first [`WidgetKind::Scroll`] viewport in tree pre-order (SOUL §6.3) — the
 /// "document" a keyboard scroll falls back to when nothing focused sits inside
 /// one, the way PageDown scrolls a browser page with no focus.
