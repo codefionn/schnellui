@@ -130,6 +130,7 @@ impl App {
             theme_transition_duration: Duration::ZERO,
             theme_transition: None,
             reopen_context_menu: None,
+            modal_openers: Vec::new(),
             redrive_content_drag: None,
             theme_binding: None,
             animations_enabled: true,

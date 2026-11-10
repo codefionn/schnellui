@@ -84,10 +84,14 @@ impl App {
         stateful_nodes.extend(changed_controls.iter().copied());
         let previous_drag = schnellui::widgets::content_drag_source(&previous.widgets);
         stateful_nodes.extend(previous_drag);
+        let modal_ids = previous
+            .modal_openers
+            .iter()
+            .flat_map(|entry| [entry.panel, entry.opener]);
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
             &self.scene,
-            stateful_nodes.iter().copied(),
+            stateful_nodes.iter().copied().chain(modal_ids),
         );
 
         self.inherit_dialog_geometry(previous);
@@ -130,6 +134,16 @@ impl App {
             })
         });
 
+        // A closed modal returns focus to the control that opened it, when
+        // that control survives.
+        let restored = restored.or_else(|| {
+            let (opener, ring_visible) = previous.modal_opener_of(previous_focus?.0)?;
+            Some(RemountFocus {
+                target: counterparts.get(opener)?,
+                ring_visible,
+            })
+        });
+
         // The focused control did not survive. Rather than strand a keyboard
         // user at the top of the page, hand focus to the nearest control of
         // the old tab order that did: the next one first, then the previous.
@@ -141,6 +155,23 @@ impl App {
                 ring_visible,
             })
         });
+
+        self.modal_openers = previous
+            .modal_openers
+            .iter()
+            .filter_map(|entry| {
+                Some(ModalOpener {
+                    panel: counterparts.get(entry.panel)?,
+                    opener: counterparts.get(entry.opener)?,
+                    ring_visible: entry.ring_visible,
+                })
+            })
+            .collect();
+        // A modal that opened with this remount took focus from the
+        // counterpart of the previous focus.
+        let focus_before =
+            previous_focus.and_then(|(id, ring)| Some((counterparts.get(id)?, ring)));
+        self.note_opened_modal(focus_before);
 
         if let Some(focus) = restored {
             self.restore_focus_after_remount(focus);

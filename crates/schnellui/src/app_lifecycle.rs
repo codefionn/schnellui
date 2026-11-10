@@ -179,6 +179,9 @@ impl App {
         // When the focused node goes with the branch, focus should land on the
         // same-identity node of the replacement, else the nearest survivor in
         // the old tab order (next first, then previous), not on nothing.
+        let focus_before = self
+            .focused_widget()
+            .map(|id| (id, self.focus_ring_shown()));
         let mut displaced_focus = None;
         if let Some(focused) = self
             .focused_widget()
@@ -186,6 +189,9 @@ impl App {
         {
             let ring = self.focus_ring_shown();
             let reference = self.scene.component_ref(focused);
+            let opener = self
+                .modal_opener_of(focused)
+                .filter(|(id, _)| !removed_nodes.contains(id));
             let neighbour = a11y::with_tab_order(&self.scene, |order| {
                 let position = order.iter().position(|id| *id == focused)?;
                 order[position + 1..]
@@ -194,7 +200,7 @@ impl App {
                     .copied()
                     .find(|id| !removed_nodes.contains(id))
             });
-            displaced_focus = Some((reference, neighbour, ring));
+            displaced_focus = Some((reference, opener, neighbour, ring));
             let previous = self.focused_input_semantics();
             let _ = schnellui::widgets::dispatch_focus(
                 &self.widgets,
@@ -250,7 +256,8 @@ impl App {
         }
         self.scene
             .mark_dirty(removed.parent.unwrap_or(new_root), scene::DirtyFlags::ALL);
-        if let Some((reference, neighbour, ring)) = displaced_focus {
+        self.note_opened_modal(focus_before);
+        if let Some((reference, opener, neighbour, ring)) = displaced_focus {
             let same_identity = reference
                 .and_then(|reference| self.scene.resolve_ref(reference))
                 .filter(|id| schnellui::widgets::is_in_subtree(&self.scene, *id, new_root))
@@ -259,7 +266,11 @@ impl App {
                         a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
                     })
                 });
-            let heir = same_identity.or(neighbour.filter(|id| self.scene.node(*id).is_some()));
+            let (heir, ring) = match (same_identity, opener) {
+                (Some(id), _) => (Some(id), ring),
+                (None, Some((id, opener_ring))) => (Some(id), opener_ring),
+                (None, None) => (neighbour.filter(|id| self.scene.node(*id).is_some()), ring),
+            };
             let blocked = heir.is_none_or(|heir| {
                 schnellui::widgets::active_modal_panel(&self.scene).is_some_and(|panel| {
                     !schnellui::widgets::is_in_subtree(&self.scene, heir, panel)

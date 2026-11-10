@@ -525,6 +525,10 @@ pub struct App {
     /// menu places itself on laid-out geometry, so it reopens after the
     /// replacement's first layout.
     reopen_context_menu: Option<(scene::WidgetId, scene::Point, bool)>,
+    /// The open modal dialogs, lowest first, each with the control that had
+    /// focus when it opened. Closing a modal returns focus there. Widget ids
+    /// are remapped through the counterpart map on every remount.
+    modal_openers: Vec<ModalOpener>,
     /// A content drag that was moving when the tree was rebuilt: the point
     /// to find its drop target at again after the replacement's first layout.
     redrive_content_drag: Option<scene::Point>,
@@ -570,6 +574,15 @@ struct DialogGeometry {
     height: Option<f32>,
 }
 
+/// A modal dialog panel and the control focused when it opened.
+#[derive(Clone, Copy, Debug)]
+struct ModalOpener {
+    panel: WidgetId,
+    opener: WidgetId,
+    /// Whether the opener wore the keyboard ring when the modal opened.
+    ring_visible: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct RemountFocus {
     target: WidgetId,
@@ -597,6 +610,7 @@ mod app_inherit;
 mod app_input;
 mod app_interaction;
 mod app_lifecycle;
+mod app_modal_return;
 mod app_new;
 mod app_render;
 mod app_theme;
@@ -617,6 +631,8 @@ pub mod accesskit_reexport {
 mod tests_core;
 #[cfg(test)]
 mod tests_decorations;
+#[cfg(test)]
+mod tests_modal_return;
 #[cfg(test)]
 mod tests_navigation;
 #[cfg(test)]
