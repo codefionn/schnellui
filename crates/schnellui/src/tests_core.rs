@@ -1884,3 +1884,42 @@ fn keyboard_navigation_holds_hover_until_the_pointer_moves() {
     // The first move hands hover back.
     assert!(app.update_pointer_proximity(scene::Point { x: 21.0, y: 10.0 }));
 }
+
+/// A dialog stretches its fields to its content width. A field paints across
+/// the box layout gave it from the first frame, not at its intrinsic width
+/// until a click re-emits it.
+#[test]
+fn a_stretched_text_field_paints_across_its_box_before_any_input() {
+    use widgets::{Dialog, Stack, TextInput};
+
+    let frame_width = |app: &App, role: Role| {
+        let id = app.find_widget(role, None).unwrap();
+        let laid = app.scene().layout(id).unwrap().rect.width;
+        let painted = app
+            .scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .find_map(|p| match p {
+                scene::Primitive::SolidRect { rect, .. } => Some(rect.width),
+                _ => None,
+            })
+            .unwrap();
+        (laid, painted)
+    };
+    let dialog = |width: f32| {
+        Stack::new().fill().child(
+            Dialog::new("Note")
+                .modeless()
+                .at(10.0, 10.0)
+                .size(width, 220.0)
+                .child(TextInput::new("draft")),
+        )
+    };
+    let mut app = App::mount_with_size(dialog(300.0), 400, 300);
+    app.frame();
+    let (laid, painted) = frame_width(&app, Role::TextInput);
+    assert!(laid > 200.0, "the dialog stretched the field");
+    assert_eq!(painted, laid, "the field paints as wide as it is laid out");
+}

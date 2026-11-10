@@ -522,6 +522,47 @@ pub fn reposition_paint(runtime: &Runtime, scene: &mut Scene) {
     scene.clear_geometry_changed();
 }
 
+/// Re-emits text fields whose laid-out box no longer matches the box their
+/// paint was emitted for. A field's build-time paint is sized to its intrinsic
+/// width; a container that stretches it (a dialog's content column) gives it a
+/// wider box, and the translate-only [`reposition_node`] cannot widen a frame.
+/// Runs after layout and before [`reposition_paint`], over the nodes whose
+/// geometry changed, so a settled frame does no work here.
+pub fn fit_text_fields(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+) {
+    let mut i = 0;
+    while i < scene.geometry_changed().len() {
+        let id = scene.geometry_changed()[i];
+        i += 1;
+        if scene.node(id).map(|n| n.kind) != Some(WidgetKind::TextInput) {
+            continue;
+        }
+        let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
+            continue;
+        };
+        // The field's frame is its first primitive.
+        let painted = scene.paint(id).and_then(|pd| match pd.primitives.first() {
+            Some(Primitive::SolidRect { rect, .. }) => Some((rect.width, rect.height)),
+            _ => None,
+        });
+        if painted
+            .is_none_or(|(w, h)| (w - rect.width).abs() < 0.01 && (h - rect.height).abs() < 0.01)
+        {
+            continue;
+        }
+        if !runtime.with(|rt| rt.borrow().edits.contains_key(id)) {
+            continue;
+        }
+        crate::widgets::text_edit::emit_text_input_paint(runtime, scene, shaper, atlas, id);
+        redecorate_after_refill(runtime, scene, id);
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+    }
+}
+
 /// Slides a **single** node's paint fragments so their min-origin lands on that node's
 /// laid-out [`LayoutBox`] origin (the per-node core of [`reposition_paint`], SOUL
 /// §8.1). A no-op — and never a heap touch — when the node has no laid-out box yet
