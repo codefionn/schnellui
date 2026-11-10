@@ -1,4 +1,4 @@
-use super::event_handler::{raw_capture_target_survives, remount_allowed};
+use super::event_handler::{raw_capture_target_survives, remount_allowed, EventTail};
 use super::*;
 
 /// What the platform adapter last received, kept to decide the next update.
@@ -805,6 +805,14 @@ impl WindowedApp {
             "scale": self.app.scale(),
             "cursor": point_json(point),
             "cursor_icon": debug_label(self.cursor_icon),
+            "cursor_inside": self.cursor_inside,
+            "pointer": {
+                "left_down": self.left_pointer_down,
+                "raw_captured": self.raw_pointer_capture.len(),
+                "text_drag": self.drag_text.is_some(),
+                "slider_drag": self.drag_slider.is_some(),
+                "scrollbar_drag": self.app.scrollbar_pointer_active(),
+            },
             "focused": focused_json(&self.app),
             "ime_area": self.ime_area.map(|rect| json!({
                 "x": rect.x,
@@ -874,7 +882,20 @@ impl WindowedApp {
         .ok_or_else(|| format!("matched widget {id} is no longer live"))
     }
 
-    pub(super) fn move_debug_pointer(&mut self, point: &DebugPoint) -> Result<bool, String> {
+    /// Moves the pointer through the window's own `CursorMoved` handler, so
+    /// hover, drags, sliders, text selection and dialog moves see the same
+    /// events a real mouse sends. Returns the handler's epilogue request.
+    fn debug_cursor_moved(&mut self, point: Point) -> Result<EventTail, String> {
+        self.check_debug_point(point)?;
+        let scale = f64::from(self.app.scale());
+        self.remount_trigger = "pointer_move";
+        Ok(self.on_cursor_moved(PhysicalPosition::new(
+            f64::from(point.x) * scale,
+            f64::from(point.y) * scale,
+        )))
+    }
+
+    fn check_debug_point(&self, point: Point) -> Result<(), String> {
         if !point.x.is_finite() || !point.y.is_finite() {
             return Err("pointer coordinates must be finite".into());
         }
@@ -885,13 +906,107 @@ impl WindowedApp {
                 point.x, point.y, viewport.width, viewport.height
             ));
         }
-        let scale = self.app.scale();
-        self.cursor = PhysicalPosition::new(f64::from(point.x * scale), f64::from(point.y * scale));
-        self.cursor_inside = true;
-        Ok(self.app.update_pointer_proximity(Point {
+        Ok(())
+    }
+
+    /// What `window_event` runs after a pointer handler: the remount poll the
+    /// handler's tail asks for, then a settled frame.
+    fn finish_debug_pointer(&mut self, tail: EventTail) {
+        if tail == EventTail::Normal {
+            self.poll_remount();
+        }
+        self.settle_debug_command();
+    }
+
+    pub(super) fn move_debug_pointer(&mut self, point: &DebugPoint) -> Result<bool, String> {
+        let tail = self.debug_cursor_moved(Point {
             x: point.x,
             y: point.y,
-        }))
+        })?;
+        self.finish_debug_pointer(tail);
+        Ok(true)
+    }
+
+    fn debug_mouse_button(&mut self, state: winit::event::ElementState, button: DebugButton) {
+        let button = match button {
+            DebugButton::Left => winit::event::MouseButton::Left,
+            DebugButton::Right => winit::event::MouseButton::Right,
+            DebugButton::Middle => winit::event::MouseButton::Middle,
+        };
+        self.remount_trigger = "pointer_button";
+        let tail = self.on_mouse_input(state, button);
+        self.finish_debug_pointer(tail);
+    }
+
+    fn debug_press_point(&mut self, request: &DebugPress) -> Result<(), String> {
+        match (request.x, request.y) {
+            (Some(x), Some(y)) => {
+                let tail = self.debug_cursor_moved(Point { x, y })?;
+                self.finish_debug_pointer(tail);
+                Ok(())
+            }
+            (None, None) => Ok(()),
+            _ => Err("give both x and y, or neither".into()),
+        }
+    }
+
+    fn handle_debug_press(
+        &mut self,
+        request: &DebugPress,
+        state: winit::event::ElementState,
+    ) -> DebugReply {
+        if let Err(error) = self.debug_press_point(request) {
+            return DebugReply::error(422, error);
+        }
+        self.debug_mouse_button(state, request.button);
+        self.debug_pointer_reply()
+    }
+
+    fn handle_debug_drag(&mut self, request: &DebugDrag) -> DebugReply {
+        let steps = request.steps.unwrap_or(8).clamp(1, 1000);
+        let start = Point {
+            x: request.x1,
+            y: request.y1,
+        };
+        let end = Point {
+            x: request.x2,
+            y: request.y2,
+        };
+        // Both ends are checked before anything is pressed; the points
+        // between lie inside the viewport with them.
+        for point in [start, end] {
+            if let Err(error) = self.check_debug_point(point) {
+                return DebugReply::error(422, error);
+            }
+        }
+        let tail = self.debug_cursor_moved(start).expect("checked above");
+        self.finish_debug_pointer(tail);
+        self.debug_mouse_button(winit::event::ElementState::Pressed, request.button);
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            let point = Point {
+                x: start.x + (end.x - start.x) * t,
+                y: start.y + (end.y - start.y) * t,
+            };
+            let tail = self.debug_cursor_moved(point).expect("checked above");
+            self.finish_debug_pointer(tail);
+        }
+        self.debug_mouse_button(winit::event::ElementState::Released, request.button);
+        self.debug_pointer_reply()
+    }
+
+    fn handle_debug_leave(&mut self) -> DebugReply {
+        self.remount_trigger = "pointer_left";
+        let tail = self.on_cursor_left();
+        self.finish_debug_pointer(tail);
+        self.debug_pointer_reply()
+    }
+
+    fn debug_pointer_reply(&self) -> DebugReply {
+        DebugReply::json(
+            200,
+            json!({ "changed": true, "status": self.debug_status() }),
+        )
     }
 
     pub(super) fn handle_debug_action(&mut self, request: DebugAction) -> DebugReply {
@@ -1091,6 +1206,14 @@ impl WindowedApp {
                     json!({ "changed": changed, "status": self.debug_status() }),
                 )
             }
+            DebugCommand::PointerPress(request) => {
+                self.handle_debug_press(&request, winit::event::ElementState::Pressed)
+            }
+            DebugCommand::PointerRelease(request) => {
+                self.handle_debug_press(&request, winit::event::ElementState::Released)
+            }
+            DebugCommand::PointerDrag(request) => self.handle_debug_drag(&request),
+            DebugCommand::PointerLeave => self.handle_debug_leave(),
             DebugCommand::PointerClick(point) => {
                 if let Err(error) = self.move_debug_pointer(&point) {
                     return DebugReply::error(422, error);

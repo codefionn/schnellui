@@ -58,6 +58,37 @@ pub(crate) struct DebugPoint {
     pub(crate) y: f32,
 }
 
+/// A pointer button the debug commands name.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DebugButton {
+    #[default]
+    Left,
+    Right,
+    Middle,
+}
+
+/// A press or release: at `x`, `y` when both are given, else where the pointer is.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugPress {
+    pub(crate) x: Option<f32>,
+    pub(crate) y: Option<f32>,
+    #[serde(default)]
+    pub(crate) button: DebugButton,
+}
+
+/// Press at `x1, y1`, move `steps` times to `x2, y2`, release there.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugDrag {
+    pub(crate) x1: f32,
+    pub(crate) y1: f32,
+    pub(crate) x2: f32,
+    pub(crate) y2: f32,
+    pub(crate) steps: Option<u32>,
+    #[serde(default)]
+    pub(crate) button: DebugButton,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct DebugKey {
     pub(crate) key: String,
@@ -77,6 +108,10 @@ pub(crate) enum DebugCommand {
     Action(DebugAction),
     PointerMove(DebugPoint),
     PointerClick(DebugPoint),
+    PointerPress(DebugPress),
+    PointerRelease(DebugPress),
+    PointerDrag(DebugDrag),
+    PointerLeave,
     Key(DebugKey),
     Quit,
 }
@@ -419,6 +454,10 @@ fn handle_connection(
                     "action": "POST /v1/action",
                     "pointer_move": "POST /v1/pointer/move",
                     "pointer_click": "POST /v1/pointer/click",
+                    "pointer_press": "POST /v1/pointer/press",
+                    "pointer_release": "POST /v1/pointer/release",
+                    "pointer_drag": "POST /v1/pointer/drag",
+                    "pointer_leave": "POST /v1/pointer/leave",
                     "key": "POST /v1/key",
                     "quit": "POST /v1/quit"
                 }
@@ -532,6 +571,10 @@ fn route_request(request: HttpRequest) -> Result<Option<DebugCommand>, DebugRepl
         ("POST", "/v1/action") => DebugCommand::Action(parse_json(&request.body)?),
         ("POST", "/v1/pointer/move") => DebugCommand::PointerMove(parse_json(&request.body)?),
         ("POST", "/v1/pointer/click") => DebugCommand::PointerClick(parse_json(&request.body)?),
+        ("POST", "/v1/pointer/press") => DebugCommand::PointerPress(parse_json(&request.body)?),
+        ("POST", "/v1/pointer/release") => DebugCommand::PointerRelease(parse_json(&request.body)?),
+        ("POST", "/v1/pointer/drag") => DebugCommand::PointerDrag(parse_json(&request.body)?),
+        ("POST", "/v1/pointer/leave") => DebugCommand::PointerLeave,
         ("POST", "/v1/key") => DebugCommand::Key(parse_json(&request.body)?),
         ("POST", "/v1/quit") => DebugCommand::Quit,
         _ => return Err(DebugReply::error(404, "unknown debug endpoint")),

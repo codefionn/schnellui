@@ -53,6 +53,10 @@ cargo run -p schnellui-debug -- click --role button --name increment
 cargo run -p schnellui-debug -- action set_value --role text_input --value 'hello'
 cargo run -p schnellui-debug -- move 120 80
 cargo run -p schnellui-debug -- click-at 120 80
+cargo run -p schnellui-debug -- press 120 80 --button left
+cargo run -p schnellui-debug -- release
+cargo run -p schnellui-debug -- drag 10 80 300 80 --steps 12
+cargo run -p schnellui-debug -- leave
 cargo run -p schnellui-debug -- key tab
 cargo run -p schnellui-debug -- type 'typed into the focused input'
 cargo run -p schnellui-debug -- screenshot /tmp/live.png
@@ -91,7 +95,8 @@ page can reach the endpoint.
 
 The endpoints are `GET /v1/status`, `GET /v1/tree`, `GET /v1/snapshot`,
 `GET /v1/screenshot`, and
-`POST /v1/action`, `/v1/pointer/move`, `/v1/pointer/click`, `/v1/key`, `/v1/quit`.
+`POST /v1/action`, `/v1/pointer/move`, `/v1/pointer/click`, `/v1/pointer/press`,
+`/v1/pointer/release`, `/v1/pointer/drag`, `/v1/pointer/leave`, `/v1/key`, `/v1/quit`.
 Tree nodes include their logical-pixel `rect`. Semantic targets accept either
 `{"id": <tree id>}` or a stable role/name query.
 Supported actions are `click`, `focus`, `blur`, `increment`, `decrement`,

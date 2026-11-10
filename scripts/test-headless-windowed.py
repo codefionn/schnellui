@@ -126,9 +126,14 @@ def run(binaries, directory):
         counter.command("move", str(x), str(y))
         counter.command("click-at", str(x), str(y))
         counter.command("wait", "--role", "status", "--value", "2")
+        # The window's own press path: a plain button clicks on press.
+        counter.command("press", str(x), str(y))
+        counter.command("release")
+        counter.command("wait", "--role", "status", "--value", "3")
+        counter.command("leave")
         counter.command("action", "focus", "--role", "button", "--name", "increment")
         counter.command("key", "enter")
-        counter.command("wait", "--role", "status", "--value", "3")
+        counter.command("wait", "--role", "status", "--value", "4")
         counter.screenshot("counter.png", (400, 200))
         other.screenshot("scaled-counter.png", (800, 400))
 

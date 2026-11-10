@@ -29,8 +29,8 @@ use super::{
     Shortcut, UiKey,
 };
 use crate::debug_server::{
-    DebugAction, DebugCommand, DebugKey, DebugPoint, DebugReply, DebugRequest, DebugServer,
-    DebugTarget,
+    DebugAction, DebugButton, DebugCommand, DebugDrag, DebugKey, DebugPoint, DebugPress,
+    DebugReply, DebugRequest, DebugServer, DebugTarget,
 };
 use crate::interaction_debug::InteractionRecorder;
 use crate::{Remount, SubtreeReplacement, WindowUpdate};

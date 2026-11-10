@@ -98,6 +98,37 @@ enum Command {
     Move { x: f32, y: f32 },
     /// Click the widget hit at logical coordinates.
     ClickAt { x: f32, y: f32 },
+    /// Press a pointer button, first moving to X Y when given.
+    Press {
+        #[arg(requires = "y")]
+        x: Option<f32>,
+        #[arg(requires = "x")]
+        y: Option<f32>,
+        #[arg(long, value_enum, default_value_t = Button::Left)]
+        button: Button,
+    },
+    /// Release a pointer button, first moving to X Y when given.
+    Release {
+        #[arg(requires = "y")]
+        x: Option<f32>,
+        #[arg(requires = "x")]
+        y: Option<f32>,
+        #[arg(long, value_enum, default_value_t = Button::Left)]
+        button: Button,
+    },
+    /// Press at X1 Y1, move the pointer STEPS times to X2 Y2, release there.
+    Drag {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        #[arg(long)]
+        steps: Option<u32>,
+        #[arg(long, value_enum, default_value_t = Button::Left)]
+        button: Button,
+    },
+    /// Tell the app the pointer left its window.
+    Leave,
     /// Send one framework-neutral key press.
     Key {
         key: String,
@@ -112,6 +143,23 @@ enum Command {
     Type { text: String },
     /// Ask the application to close cleanly.
     Quit,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum Button {
+    Left,
+    Right,
+    Middle,
+}
+
+impl Button {
+    fn name(self) -> &'static str {
+        match self {
+            Button::Left => "left",
+            Button::Right => "right",
+            Button::Middle => "middle",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -282,6 +330,43 @@ fn run_connected(
             "POST",
             "/v1/pointer/click",
             Some(json!({ "x": x, "y": y }).to_string()),
+            Output::Stdout,
+        ),
+        Command::Press { x, y, button } => (
+            "POST",
+            "/v1/pointer/press",
+            Some(json!({ "x": x, "y": y, "button": button.name() }).to_string()),
+            Output::Stdout,
+        ),
+        Command::Release { x, y, button } => (
+            "POST",
+            "/v1/pointer/release",
+            Some(json!({ "x": x, "y": y, "button": button.name() }).to_string()),
+            Output::Stdout,
+        ),
+        Command::Drag {
+            x1,
+            y1,
+            x2,
+            y2,
+            steps,
+            button,
+        } => (
+            "POST",
+            "/v1/pointer/drag",
+            Some(
+                json!({
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "steps": steps, "button": button.name(),
+                })
+                .to_string(),
+            ),
+            Output::Stdout,
+        ),
+        Command::Leave => (
+            "POST",
+            "/v1/pointer/leave",
+            Some("{}".into()),
             Output::Stdout,
         ),
         Command::Key {
@@ -1350,6 +1435,35 @@ mod tests {
         assert_eq!(role.as_deref(), Some("text_input"));
         assert_eq!(name.as_deref(), Some("User name"));
         assert_eq!(value.as_deref(), Some("Ada Lovelace"));
+    }
+
+    #[test]
+    fn pointer_commands_parse() {
+        let parse = |line: &str| {
+            ScriptInvocation::try_parse_from(shell_words::split(line).unwrap()).unwrap()
+        };
+        assert!(matches!(
+            parse("press 10 20 --button right").command,
+            Command::Press {
+                x: Some(_),
+                y: Some(_),
+                button: Button::Right
+            }
+        ));
+        assert!(matches!(
+            parse("release").command,
+            Command::Release {
+                x: None,
+                y: None,
+                button: Button::Left
+            }
+        ));
+        assert!(matches!(
+            parse("drag 1 2 3 4 --steps 5").command,
+            Command::Drag { steps: Some(5), .. }
+        ));
+        assert!(matches!(parse("leave").command, Command::Leave));
+        assert!(ScriptInvocation::try_parse_from(["press", "10"]).is_err());
     }
 
     fn sample_tree() -> Value {

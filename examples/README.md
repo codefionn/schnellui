@@ -92,6 +92,13 @@ file, and log are removed when the shell exits. Use separate session directories
 and `--info` paths when running several apps. A unique default endpoint is also
 available through `schnellui-debug list` and `--pid`.
 
+Pointer input goes through the window's own handlers. Besides `move X Y` and
+`click-at X Y`, `press [X Y] [--button left|right|middle]`,
+`release [X Y] [--button ...]`, `drag X1 Y1 X2 Y2 [--steps N] [--button ...]` and
+`leave` send a press, a release, a whole drag or a pointer exit, so slider
+scrubs, text selection, dialog moves and press-leave-release orders can be
+checked live. Each prints the status JSON `move` prints.
+
 The viewport stays at `--width` and `--height`; `--scale` sets PNG pixel size.
 The process exits on `schnellui-debug quit` or `SCHNELLUI_AUTOCLOSE_MS`.
 One-shot output remains the default, and the two live-mode flags conflict.

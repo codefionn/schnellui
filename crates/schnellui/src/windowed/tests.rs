@@ -1666,3 +1666,225 @@ fn tree_rects_follow_list_rows_and_a_text_area_in_a_scroll() {
     app.frame();
     assert_three_rects_agree(&app, "text area page");
 }
+
+/// The debug server's pointer commands reach the window's own press, release,
+/// move and leave handlers, so a press, a drag and a release arrive in the
+/// orders a real mouse produces them.
+mod debug_pointer {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::super::WindowedApp;
+    use super::windowed_host;
+    use crate::a11y::Role;
+    use crate::debug_server::{
+        DebugButton, DebugCommand, DebugDrag, DebugKey, DebugPoint, DebugPress,
+    };
+    use crate::widgets::{Button, Column, Slider, TextInput};
+    use crate::App;
+
+    struct Rig {
+        host: WindowedApp,
+        clicks: Rc<Cell<u32>>,
+        held_clicks: Rc<Cell<u32>>,
+        slider: Rc<Cell<f32>>,
+    }
+
+    fn rig() -> Rig {
+        let clicks = Rc::new(Cell::new(0));
+        let held_clicks = Rc::new(Cell::new(0));
+        let slider = Rc::new(Cell::new(0.0));
+        let (c, h, s) = (clicks.clone(), held_clicks.clone(), slider.clone());
+        let mut app = App::mount_with_size(
+            Column::new()
+                .gap(20.0)
+                .child(Button::new("Go").on_click(move || c.set(c.get() + 1)))
+                .child(
+                    Button::new("Held")
+                        .on_drag_start(|| {})
+                        .on_click(move || h.set(h.get() + 1)),
+                )
+                .child(
+                    Slider::new(0.0, 0.0, 100.0)
+                        .name("Level")
+                        .on_change(move |v| s.set(v)),
+                )
+                .child(TextInput::new("hello world")),
+            400,
+            500,
+        );
+        app.frame();
+        Rig {
+            host: windowed_host(app, None),
+            clicks,
+            held_clicks,
+            slider,
+        }
+    }
+
+    fn rect(host: &WindowedApp, role: Role, name: Option<&str>) -> crate::scene::Rect {
+        let id = host.app.find_widget(role, name).unwrap();
+        host.app.scene().layout(id).unwrap().rect
+    }
+
+    fn centre(r: crate::scene::Rect) -> (f32, f32) {
+        (r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    fn press(x: Option<f32>, y: Option<f32>, button: DebugButton) -> DebugCommand {
+        DebugCommand::PointerPress(DebugPress { x, y, button })
+    }
+
+    fn release(x: Option<f32>, y: Option<f32>, button: DebugButton) -> DebugCommand {
+        DebugCommand::PointerRelease(DebugPress { x, y, button })
+    }
+
+    fn run(host: &mut WindowedApp, command: DebugCommand) -> serde_json::Value {
+        let reply = host.handle_debug_command(None, command);
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        serde_json::from_slice(&reply.body).unwrap()
+    }
+
+    #[test]
+    fn press_then_release_clicks_a_button() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Go")));
+        let status = run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+        assert_eq!(status["status"]["cursor"]["x"].as_f64().unwrap() as f32, x);
+        run(&mut rig.host, release(None, None, DebugButton::Left));
+        assert_eq!(rig.clicks.get(), 1);
+    }
+
+    #[test]
+    fn a_plain_button_clicks_on_press() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Go")));
+        run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+        assert_eq!(rig.clicks.get(), 1);
+    }
+
+    #[test]
+    fn a_plain_button_does_not_click_again_on_release_elsewhere() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Go")));
+        run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+        run(
+            &mut rig.host,
+            DebugCommand::PointerMove(DebugPoint { x: 390.0, y: 490.0 }),
+        );
+        let status = run(&mut rig.host, release(None, None, DebugButton::Left));
+        assert_eq!(rig.clicks.get(), 1);
+        assert_eq!(status["status"]["pointer"]["left_down"], false);
+    }
+
+    #[test]
+    fn press_then_release_clicks_a_drag_source_button() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Held")));
+        run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+        assert_eq!(rig.held_clicks.get(), 0);
+        run(&mut rig.host, release(None, None, DebugButton::Left));
+        assert_eq!(rig.held_clicks.get(), 1);
+    }
+
+    #[test]
+    fn press_leave_release_ends_the_press() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Slider, Some("Level")));
+        let status = run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+        assert_eq!(status["status"]["pointer"]["slider_drag"], true);
+        let status = run(&mut rig.host, DebugCommand::PointerLeave);
+        assert_eq!(status["status"]["cursor_inside"], false);
+        let status = run(&mut rig.host, release(None, None, DebugButton::Left));
+        assert_eq!(status["status"]["pointer"]["left_down"], false);
+        assert_eq!(status["status"]["pointer"]["slider_drag"], false);
+    }
+
+    #[test]
+    fn drag_scrubs_a_slider() {
+        let mut rig = rig();
+        let r = rect(&rig.host, Role::Slider, Some("Level"));
+        let y = r.y + r.height / 2.0;
+        let status = run(
+            &mut rig.host,
+            DebugCommand::PointerDrag(DebugDrag {
+                x1: r.x + 2.0,
+                y1: y,
+                x2: r.x + r.width - 2.0,
+                y2: y,
+                steps: Some(5),
+                button: DebugButton::Left,
+            }),
+        );
+        assert!(status["status"]["cursor"]["x"].is_number());
+        assert!(rig.slider.get() > 90.0, "value {}", rig.slider.get());
+    }
+
+    #[test]
+    fn drag_across_text_selects_it() {
+        let mut rig = rig();
+        let r = rect(&rig.host, Role::TextInput, None);
+        let y = r.y + r.height / 2.0;
+        run(
+            &mut rig.host,
+            DebugCommand::PointerDrag(DebugDrag {
+                x1: r.x + 3.0,
+                y1: y,
+                x2: r.x + r.width - 3.0,
+                y2: y,
+                steps: None,
+                button: DebugButton::Left,
+            }),
+        );
+        let key = DebugKey {
+            key: "text".into(),
+            shift: false,
+            ctrl: false,
+            text: Some("X".into()),
+        };
+        rig.host.handle_debug_key(key);
+        let input = rig.host.app.find_widget(Role::TextInput, None).unwrap();
+        let value = rig.host.app.scene().a11y(input).unwrap().value.clone();
+        assert_eq!(value.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn presses_close_in_app_time_double_click() {
+        let mut rig = rig();
+        let t0 = std::time::Instant::now();
+        rig.host.app.set_clock(Some(t0));
+        let r = rect(&rig.host, Role::TextInput, None);
+        let (x, y) = (r.x + 6.0, r.y + r.height / 2.0);
+        for _ in 0..2 {
+            run(&mut rig.host, press(Some(x), Some(y), DebugButton::Left));
+            run(&mut rig.host, release(None, None, DebugButton::Left));
+        }
+        let key = DebugKey {
+            key: "text".into(),
+            shift: false,
+            ctrl: false,
+            text: Some("X".into()),
+        };
+        rig.host.handle_debug_key(key);
+        let input = rig.host.app.find_widget(Role::TextInput, None).unwrap();
+        let value = rig.host.app.scene().a11y(input).unwrap().value.clone();
+        assert_eq!(value.as_deref(), Some("X world"));
+    }
+
+    #[test]
+    fn right_press_opens_the_context_menu() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::TextInput, None));
+        run(&mut rig.host, press(Some(x), Some(y), DebugButton::Right));
+        assert!(rig
+            .host
+            .app
+            .find_widget(Role::MenuItem, Some("Copy"))
+            .is_some());
+    }
+}

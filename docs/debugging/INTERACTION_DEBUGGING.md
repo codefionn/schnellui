@@ -86,3 +86,28 @@ jq -c 'select(.event == "pointer_move" or .event == "cursor_changed") |
 
 Semantic names and editable values are included because they are needed to
 identify routing mistakes. Treat traces as application data when sharing them.
+
+## Drive the pointer from a debug session
+
+`schnellui-debug` can press, release, drag and leave through the window's own
+`CursorMoved`, `MouseInput` and `CursorLeft` handlers, so a headless session
+sees what a real mouse produces (and the trace above records it):
+
+```sh
+schnellui-debug move 120 80                  # hover
+schnellui-debug press 120 80                 # move there, press left
+schnellui-debug press --button right         # press where the pointer is
+schnellui-debug release 200 80               # move, then release left
+schnellui-debug drag 10 80 300 80 --steps 12 # press, 12 moves, release
+schnellui-debug leave                        # pointer leaves the window
+```
+
+`press` and `release` take an optional `X Y` (both or neither) and
+`--button left|right|middle` (default left). `drag` takes `X1 Y1 X2 Y2`,
+`--steps N` (default 8, at most 1000) and `--button`. Each command settles a
+frame and prints the same status JSON as `move`, with `cursor`,
+`cursor_inside`, `hit_path`, `focused` and a `pointer` object
+(`left_down`, `raw_captured`, `text_drag`, `slider_drag`, `scrollbar_drag`).
+Presses close together in app time at one spot count as double and triple
+clicks, as they do with a mouse. A press on a plain button clicks at once, as
+the window does; only drag-source widgets wait for the release.
