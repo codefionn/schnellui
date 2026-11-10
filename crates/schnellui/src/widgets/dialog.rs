@@ -654,6 +654,19 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
             divider_height,
         )
     });
+    // The window's content never paints or takes hits outside its frame, so a
+    // window shrunk below its content clips it like a scroll viewport does. The
+    // clip is a composite property (layout space), so layout is untouched and
+    // growing the window back reveals the content again. Descendant paint,
+    // focus rings and hit tests all inherit it.
+    let content = scene
+        .node(id)
+        .and_then(|node| node.children.first().copied());
+    if let Some(content) = content {
+        let mut properties = scene.composite_properties(content);
+        properties.clip = Some(inner);
+        scene.set_composite_properties(content, properties);
+    }
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
     // A dialog floats over the page: a hard block in a design with one, a
@@ -1922,5 +1935,176 @@ mod tests {
         let after = scene.layout(panel).unwrap().rect;
         assert_eq!(after.width, rect.width);
         assert_eq!(after.height, rect.height + 40.0);
+    }
+
+    fn settle(runtime: &crate::widgets::Runtime, scene: &mut Scene, layout: &mut LayoutEngine) {
+        let root = scene.root().unwrap();
+        let size = Size {
+            width: 640.0,
+            height: 480.0,
+        };
+        layout.sync_tree(scene, root);
+        layout.compute(scene, root, size);
+        reposition_paint(runtime, scene);
+    }
+
+    fn center(rect: Rect) -> Point {
+        Point {
+            x: rect.x + rect.width / 2.0,
+            y: rect.y + rect.height / 2.0,
+        }
+    }
+
+    /// Shrinking a window below its content must not let the content paint or
+    /// take pointer hits outside the frame, and growing it back restores it.
+    #[test]
+    fn a_window_shrunk_below_its_content_clips_paint_and_hits_to_the_frame() {
+        for decorated in [true, false] {
+            let runtime = crate::widgets::Runtime::new();
+            let mut column = Column::new();
+            for n in 0..8 {
+                column = column.child(Button::new(format!("Row {n}")).height(40.0));
+            }
+            let mut dialog = Dialog::new("Issue board")
+                .modeless()
+                .non_fixed()
+                .movable()
+                .resizable()
+                .at(100.0, 60.0)
+                .size(360.0, 400.0)
+                .min_size(220.0, 120.0)
+                .child(column);
+            if !decorated {
+                dialog = dialog.undecorated();
+            }
+            let (mut scene, mut layout, root) = build_with_layout(
+                &runtime,
+                dialog,
+                Size {
+                    width: 640.0,
+                    height: 480.0,
+                },
+            );
+            let panel = find_kind(&scene, root, WidgetKind::Dialog).unwrap();
+            let rect = scene.layout(panel).unwrap().rect;
+            let mut buttons = Vec::new();
+            fn collect(scene: &Scene, id: WidgetId, out: &mut Vec<WidgetId>) {
+                if scene.node(id).unwrap().kind == WidgetKind::Button {
+                    out.push(id);
+                }
+                for &c in &scene.node(id).unwrap().children {
+                    collect(scene, c, out);
+                }
+            }
+            collect(&scene, panel, &mut buttons);
+            let last = *buttons.last().unwrap();
+            let last_point = center(scene.layout(last).unwrap().rect);
+            assert_eq!(hit_test(&runtime, &scene, last_point), Some(last));
+
+            let grip = Point {
+                x: rect.right() - 2.0,
+                y: rect.bottom() - 2.0,
+            };
+            assert!(begin_dialog_pointer(&runtime, &scene, grip));
+            update_dialog_pointer(
+                &runtime,
+                &scene,
+                &mut layout,
+                Point {
+                    x: grip.x - 400.0,
+                    y: grip.y - 400.0,
+                },
+            );
+            end_dialog_pointer(&runtime);
+            settle(&runtime, &mut scene, &mut layout);
+            let small = scene.layout(panel).unwrap().rect;
+            assert_eq!((small.width, small.height), (220.0, 120.0));
+
+            let outside = scene.layout(last).unwrap().rect;
+            assert!(outside.y > small.bottom(), "{outside:?} vs {small:?}");
+            let p = center(outside);
+            assert_ne!(
+                hit_test(&runtime, &scene, p),
+                Some(last),
+                "decorated={decorated}"
+            );
+            assert!(
+                scene.composited_rect(last).is_empty(),
+                "painted outside the frame: {:?}",
+                scene.composited_rect(last)
+            );
+            assert!(scene.accessibility_rect(last).is_empty());
+            // Every control keeps its own paint inside the frame.
+            for &b in &buttons {
+                let r = scene.composited_rect(b);
+                assert!(
+                    r.is_empty() || (r.y >= small.y && r.bottom() <= small.bottom()),
+                    "{r:?} escapes {small:?}"
+                );
+            }
+
+            // Growing the window back brings the control back.
+            let grip = Point {
+                x: small.right() - 2.0,
+                y: small.bottom() - 2.0,
+            };
+            assert!(begin_dialog_pointer(&runtime, &scene, grip));
+            update_dialog_pointer(
+                &runtime,
+                &scene,
+                &mut layout,
+                Point {
+                    x: grip.x + 400.0,
+                    y: grip.y + 400.0,
+                },
+            );
+            end_dialog_pointer(&runtime);
+            settle(&runtime, &mut scene, &mut layout);
+            let p = center(scene.layout(last).unwrap().rect);
+            assert_eq!(
+                hit_test(&runtime, &scene, p),
+                Some(last),
+                "decorated={decorated}"
+            );
+        }
+    }
+
+    /// A fixed modal dialog shrunk to a small viewport keeps tall content
+    /// inside its frame too.
+    #[test]
+    fn a_fixed_dialog_shrunk_to_the_viewport_clips_content_that_no_longer_fits() {
+        let runtime = crate::widgets::Runtime::new();
+        let mut column = Column::new();
+        for n in 0..10 {
+            column = column.child(Button::new(format!("Row {n}")).height(40.0));
+        }
+        let (scene, root) = build(
+            &runtime,
+            Dialog::new("Quick command")
+                .size(300.0, 900.0)
+                .child(column),
+            Size {
+                width: 444.0,
+                height: 428.0,
+            },
+        );
+        let panel = find_kind(&scene, root, WidgetKind::Dialog).unwrap();
+        let frame = scene.layout(panel).unwrap().rect;
+        let last = {
+            let mut found = None;
+            let mut stack = vec![panel];
+            while let Some(id) = stack.pop() {
+                let node = scene.node(id).unwrap();
+                if node.kind == WidgetKind::Button {
+                    found = Some(id);
+                }
+                stack.extend(node.children.iter().rev().copied());
+            }
+            found.unwrap()
+        };
+        let rect = scene.layout(last).unwrap().rect;
+        assert!(rect.bottom() > frame.bottom(), "content must overflow");
+        assert_ne!(hit_test(&runtime, &scene, center(rect)), Some(last));
+        assert!(scene.composited_rect(last).is_empty());
     }
 }
