@@ -76,6 +76,9 @@ const QUOTE_INDENT: f32 = 12.0;
 /// List indentation per nesting depth / marker column width, logical px.
 const LIST_DEPTH_INDENT: f32 = 18.0;
 const LIST_MARKER_COL: f32 = 22.0;
+/// How far a bullet drops, as a fraction of the body size, to centre it on the
+/// x-height instead of riding above it.
+const BULLET_DROP: f32 = 0.15;
 
 // ---------------------------------------------------------------------------
 // the retained per-widget state (SOUL §3.3 registry)
@@ -430,7 +433,9 @@ fn flow_doc(
                     inner,
                     x,
                     y,
-                    palette.muted,
+                    // body ink: the italic and the bar mark a quote; grey text
+                    // would read as disabled
+                    palette.ink,
                     palette,
                     false,
                     true,
@@ -440,7 +445,7 @@ fn flow_doc(
                 if let Some((pd, _, origin)) = paint.as_mut() {
                     pd.primitives.push(Primitive::SolidRect {
                         rect: Rect::new(origin.x, origin.y + y, QUOTE_BAR_W, sz.height),
-                        color: palette.separator,
+                        color: palette.muted,
                         corner_radius: 1.0,
                     });
                 }
@@ -459,6 +464,12 @@ fn flow_doc(
                     ListMarker::Bullet => RichSpan::plain("•"),
                     ListMarker::Number(n) => RichSpan::plain(format!("{n}.")),
                 };
+                // The bullet glyph sits above the x-height centre; drop it onto
+                // the lowercase letters beside it. Numbers sit on the baseline.
+                let marker_drop = match marker {
+                    ListMarker::Bullet => (base_px * BULLET_DROP).round(),
+                    ListMarker::Number(_) => 0.0,
+                };
                 let m = flow_inline(
                     shaper,
                     paint,
@@ -467,7 +478,7 @@ fn flow_doc(
                     scale,
                     f32::INFINITY,
                     indent,
-                    y,
+                    y + marker_drop,
                     palette.ink,
                     palette,
                     false,
@@ -953,9 +964,9 @@ mod tests {
         assert!(prims
             .iter()
             .any(|p| matches!(p, Primitive::SolidRect { color, .. } if *color == palette.code_bg)));
-        assert!(prims.iter().any(
-            |p| matches!(p, Primitive::SolidRect { color, .. } if *color == palette.separator)
-        ));
+        assert!(prims
+            .iter()
+            .any(|p| matches!(p, Primitive::SolidRect { color, .. } if *color == palette.muted)));
         // underline (link) + rule hairlines
         let lines = prims
             .iter()

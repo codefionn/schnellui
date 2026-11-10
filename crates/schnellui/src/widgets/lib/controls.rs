@@ -330,6 +330,7 @@ impl View for Button {
                 intrinsic,
                 ctx.scale,
             );
+            crate::widgets::elevate_tooltip_host(ctx.scene, id);
         }
         ctx.layout
             .set_measure(id, Box::new(move |_avail| intrinsic));
@@ -537,6 +538,7 @@ pub struct TextInput {
     pub(crate) value: String,
     pub(crate) placeholder: Cow<'static, str>,
     pub(crate) on_input: Option<InputHandler>,
+    pub(crate) on_submit: Option<ClickHandler>,
     pub(crate) context_menu: Option<ContextMenu>,
     pub(crate) width: Option<f32>,
     pub(crate) password: bool,
@@ -551,6 +553,7 @@ impl TextInput {
             value: value.into(),
             placeholder: Cow::Borrowed(""),
             on_input: None,
+            on_submit: None,
             context_menu: None,
             width: None,
             password: false,
@@ -597,6 +600,12 @@ impl TextInput {
     }
     pub fn on_input(mut self, f: impl FnMut(&str) + 'static) -> TextInput {
         self.on_input = Some(Box::new(f));
+        self
+    }
+    /// Runs `f` when Enter is pressed while the field has focus, the way a
+    /// browser submits a one-field form. Without it Enter does nothing.
+    pub fn on_submit(mut self, f: impl FnMut() + 'static) -> TextInput {
+        self.on_submit = Some(Box::new(f));
         self
     }
     /// Sets the painted width of the field, at least the field's minimum. A
@@ -678,6 +687,9 @@ impl View for TextInput {
         if let Some(i) = this.on_input {
             with_handlers(&ctx.runtime, id, |h| h.input = Some(i));
         }
+        if let Some(s) = this.on_submit {
+            with_handlers(&ctx.runtime, id, |h| h.submit = Some(s));
+        }
         id
     }
 }
@@ -712,6 +724,10 @@ impl PasswordInput {
     pub fn on_input(mut self, f: impl FnMut(&str) + 'static) -> PasswordInput {
         self.0.on_input = Some(Box::new(f));
         self
+    }
+    /// Runs `f` when Enter is pressed in the field, as [`TextInput::on_submit`] does.
+    pub fn on_submit(self, f: impl FnMut() + 'static) -> PasswordInput {
+        PasswordInput(self.0.on_submit(f))
     }
     /// Sets the logical size of the value, as [`TextInput::text_size`] does.
     pub fn text_size(self, size: f32) -> PasswordInput {

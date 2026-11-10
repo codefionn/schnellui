@@ -321,13 +321,16 @@ fn emit_line(
                 &ShapeOptions::new(m.phys)
                     .max_width(m.max_w)
                     .wrap(m.wrap)
-                    .face(FontFace::Mono),
+                    .face(FontFace::Mono)
+                    .line_height(Some(super::AREA_LINE_HEIGHT)),
             )
         } else {
             shaper.shape_spans(
                 line,
                 &specs,
-                &ShapeOptions::new(m.phys).wrap(WrapMode::NoWrap),
+                &ShapeOptions::new(m.phys)
+                    .wrap(WrapMode::NoWrap)
+                    .line_height(Some(super::AREA_LINE_HEIGHT)),
             )
         };
         crate::widgets::rich::push_rich_glyphs(

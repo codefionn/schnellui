@@ -176,6 +176,8 @@ struct OpenItem {
 
 #[derive(Clone)]
 struct OpenMenu {
+    /// The widget whose menu this is.
+    source: WidgetId,
     root: WidgetId,
     parent: WidgetId,
     items: Vec<WidgetId>,
@@ -568,8 +570,12 @@ pub fn open_context_menu(
         item_ids.push(id);
     }
     scene.mark_dirty(parent, DirtyFlags::A11Y);
+    // The menu answers the hover that opened it: the control's tooltip would
+    // be drawn over the open menu.
+    let _ = crate::widgets::hide_hover_tooltip(runtime, scene, source);
     runtime.context_menu.with(|state| {
         state.borrow_mut().open = Some(OpenMenu {
+            source,
             root,
             parent,
             items: item_ids,
@@ -601,6 +607,17 @@ fn fire_custom(runtime: &crate::widgets::Runtime, source: WidgetId, index: usize
             }
         });
     }
+}
+
+/// Whether `id`'s own menu is the one open.
+pub(crate) fn context_menu_open_for(runtime: &crate::widgets::Runtime, id: WidgetId) -> bool {
+    runtime.context_menu.with(|state| {
+        state
+            .borrow()
+            .open
+            .as_ref()
+            .is_some_and(|open| open.source == id)
+    })
 }
 
 pub fn context_menu_is_open(runtime: &crate::widgets::Runtime) -> bool {

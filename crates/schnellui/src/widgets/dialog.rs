@@ -14,7 +14,10 @@ use schnellui::layout::{
 };
 use schnellui::scene::{Color, Point, Primitive, Rect, Scene, Size, WidgetId, WidgetKind};
 
-use crate::widgets::{theme, theme_for, AnyView, BuildCtx, ClickHandler, Divider, Text, View};
+use crate::widgets::{
+    theme, theme_for, AnyView, BuildCtx, Button, ButtonAppearance, ClickHandler, Divider, Flex,
+    Row, Text, View,
+};
 
 const MODELESS_OVERLAY_LEVEL: u8 = 10;
 const MODAL_OVERLAY_LEVEL: u8 = 20;
@@ -492,7 +495,34 @@ impl View for Dialog {
         content_style.align = Align::Stretch;
         ctx.layout.set_container(content, content_style);
         let chrome = if this.decoration == DialogDecoration::Decorated && !title.is_empty() {
-            let title = Box::new(Text::new(title).size(18.0).bold()).build(ctx, Some(content));
+            let heading = Text::new(title.clone()).size(18.0).bold();
+            // A dialog that Escape can close also shows a close button in its
+            // title bar, so a pointer user need not hunt for the way out.
+            let closable = this.on_dismiss.is_some() && this.dismiss_on_escape;
+            let title = if closable {
+                let runtime = ctx.runtime.clone();
+                let close = Button::new(format!("Close {title}"))
+                    .display("×")
+                    .appearance(ButtonAppearance::Ghost)
+                    .text_size(24.0)
+                    .width(36.0)
+                    .height(36.0)
+                    .tooltip(format!("Close {title}"))
+                    .on_click(move || {
+                        fire_layer_dismiss(&runtime, layer, false);
+                    });
+                Box::new(
+                    Row::new()
+                        .align(Align::Center)
+                        .gap(8.0)
+                        .child(heading)
+                        .child(Flex::new().grow(1.0))
+                        .child(close),
+                )
+                .build(ctx, Some(content))
+            } else {
+                Box::new(heading).build(ctx, Some(content))
+            };
             let divider = Box::new(Divider::new()).build(ctx, Some(content));
             Some((title, divider))
         } else {
@@ -876,9 +906,44 @@ pub(crate) fn cursor_for_hit(
 ) -> Option<crate::widgets::CursorIcon> {
     let layer = dialog_layer_for_widget(scene, hit)?;
     let (_, mode) = pointer_mode_for_layer(runtime, scene, layer, point)?;
+    if mode == DialogPointerMode::Move
+        && scene
+            .node(hit)
+            .is_some_and(|node| node.kind == WidgetKind::Button)
+    {
+        return None;
+    }
     Some(match mode {
         DialogPointerMode::Move => crate::widgets::CursorIcon::Grab,
         DialogPointerMode::Resize => crate::widgets::CursorIcon::NwseResize,
+    })
+}
+
+/// Whether `id` sits in a decorated dialog's title bar, like its close
+/// button. Opening a dialog focuses its content before its chrome.
+pub fn is_dialog_chrome_control(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    id: WidgetId,
+) -> bool {
+    let Some(row) = scene.node(id).and_then(|node| node.parent) else {
+        return false;
+    };
+    let Some(panel) = scene
+        .node(row)
+        .and_then(|node| node.parent)
+        .and_then(|content| scene.node(content))
+        .and_then(|content| content.parent)
+    else {
+        return false;
+    };
+    runtime.with(|runtime| {
+        runtime
+            .borrow()
+            .dialog_panels
+            .get(panel)
+            .and_then(|state| state.chrome)
+            .is_some_and(|(title, _)| title == row)
     })
 }
 
@@ -922,6 +987,14 @@ pub fn begin_dialog_pointer(
     let Some((panel, mode)) = pointer_mode_for_layer(runtime, scene, layer, point) else {
         return false;
     };
+    // A button in the title bar, such as close, takes its own press.
+    if mode == DialogPointerMode::Move
+        && scene
+            .node(hit)
+            .is_some_and(|node| node.kind == WidgetKind::Button)
+    {
+        return false;
+    }
     let Some(rect) = scene.layout(panel).map(|layout| layout.rect) else {
         return false;
     };
@@ -1059,6 +1132,14 @@ fn fire_dismiss(
     layer: WidgetId,
     backdrop: bool,
 ) -> bool {
+    // The callback may only set a signal; the host remount removes the dialog.
+    let _ = scene;
+    fire_layer_dismiss(runtime, layer, backdrop)
+}
+
+/// Runs a dialog layer's dismiss handler when the backdrop (`backdrop`) or
+/// Escape and the title-bar close button may dismiss it.
+fn fire_layer_dismiss(runtime: &crate::widgets::Runtime, layer: WidgetId, backdrop: bool) -> bool {
     let callback = runtime.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
         let state = runtime.dialog_layers.get_mut(layer)?;
@@ -1078,8 +1159,6 @@ fn fire_dismiss(
             state.on_dismiss = Some(callback);
         }
     });
-    // The callback may only set a signal; the host remount removes the dialog.
-    let _ = scene;
     true
 }
 

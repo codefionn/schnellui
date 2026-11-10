@@ -159,10 +159,14 @@ impl App {
             // focus, as in browsers: arrows and paging already scroll the
             // viewport around the focused control.
             let is_stop = |id: WidgetId| match roving_group(scene, id) {
+                // A viewport with nothing to scroll has nothing for the
+                // keyboard to do there either.
                 None if scene.node(id).is_some_and(|n| n.kind == WidgetKind::Scroll) => {
-                    !order.iter().any(|&other| {
-                        other != id && schnellui::widgets::is_in_subtree(scene, other, id)
-                    })
+                    schnellui::widgets::scroll_metrics(scene, id)
+                        .is_some_and(|metrics| metrics.max_offset > 0.0)
+                        && !order.iter().any(|&other| {
+                            other != id && schnellui::widgets::is_in_subtree(scene, other, id)
+                        })
                 }
                 None => true,
                 Some(group) if Some(group) == current_group => false,
@@ -311,6 +315,14 @@ impl App {
             // A focused editable consumes its keys (browser: keys in a field
             // never scroll the page); PageUp/PageDown fall through below.
             Some(WidgetKind::TextInput) | Some(WidgetKind::TextArea) => {
+                if key == UiKey::Enter && focused_kind == Some(WidgetKind::TextInput) {
+                    let id = focused.expect("focused text input");
+                    if let Some(changed) =
+                        schnellui::widgets::dispatch_submit(&self.widgets, &self.scene, id)
+                    {
+                        return focus_visible | changed;
+                    }
+                }
                 let edit = match key {
                     UiKey::Char(t) => Some(EditKey::Insert(t)),
                     UiKey::Space { .. } => Some(EditKey::Insert(" ")),
@@ -367,6 +379,20 @@ impl App {
             | Some(WidgetKind::ListItem)
             | Some(WidgetKind::TableRow)
             | Some(WidgetKind::DropdownOption) => {
+                // Left and Right fold and unfold a tree branch row.
+                if let (Some(WidgetKind::Tab), UiKey::Left { .. } | UiKey::Right { .. }) =
+                    (focused_kind, key)
+                {
+                    let expand = matches!(key, UiKey::Right { .. });
+                    if let Some(changed) = schnellui::widgets::dispatch_branch_fold(
+                        &self.widgets,
+                        &mut self.scene,
+                        focused.expect("focused tab"),
+                        expand,
+                    ) {
+                        return focus_visible | changed;
+                    }
+                }
                 let step = match key {
                     UiKey::Right { .. } | UiKey::Down { .. } => Some(RovingStep::By(1)),
                     UiKey::Left { .. } | UiKey::Up { .. } => Some(RovingStep::By(-1)),
@@ -1050,17 +1076,18 @@ fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<scene::Widg
         | WidgetKind::TableRow
         | WidgetKind::DropdownOption => Some(parent),
         WidgetKind::Tab => {
-            // A closable tab sits in a wrapper row inside the tab list.
+            // A closable tab sits in a wrapper row inside the tab list; a
+            // grouped list's rows sit in several levels of group and branch
+            // columns, all one roving group.
             let mut ancestor = Some(parent);
-            for _ in 0..3 {
-                let node = ancestor?;
+            while let Some(node) = ancestor {
                 if scene
                     .a11y(node)
                     .is_some_and(|a| a11y::Role::from_u16(a.role) == a11y::Role::TabList)
                 {
                     return Some(node);
                 }
-                ancestor = scene.node(node)?.parent;
+                ancestor = scene.node(node).and_then(|n| n.parent);
             }
             Some(parent)
         }

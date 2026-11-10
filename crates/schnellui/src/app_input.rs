@@ -122,6 +122,17 @@ impl App {
         self.continuous_redraw = enabled;
     }
 
+    /// Makes Escape close the native window when no context menu or dialog
+    /// takes it. Off by default: Escape then reaches the focused widget like
+    /// any other key.
+    pub fn set_escape_exits(&mut self, enabled: bool) {
+        self.escape_exits = enabled;
+    }
+
+    pub(crate) fn escape_exits(&self) -> bool {
+        self.escape_exits
+    }
+
     /// Requests periodic native redraws at a bounded cadence. Unlike continuous
     /// redraw this lets the event loop sleep between frames.
     pub fn set_redraw_interval(&mut self, interval: Option<Duration>) {

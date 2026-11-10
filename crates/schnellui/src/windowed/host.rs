@@ -893,14 +893,9 @@ impl WindowedApp {
 
     pub(super) fn handle_debug_key(&mut self, request: DebugKey) -> DebugReply {
         let name = request.key.to_ascii_lowercase().replace('-', "_");
-        // As the windowed host does: keys that move a highlight take hover
-        // from the resting pointer.
-        if matches!(
-            name.as_str(),
-            "tab" | "up" | "down" | "home" | "end" | "page_up" | "page_down"
-        ) {
-            let _ = self.app.hold_pointer_hover();
-        }
+        // As the windowed host does: a key takes hover from the resting
+        // pointer until the pointer moves again.
+        let _ = self.app.hold_pointer_hover();
         // As the windowed host does: a raw surface with its own key handler
         // (a terminal grid) gets the key first.
         if let Some(raw) = debug_raw_key(&name, &request) {
@@ -953,7 +948,22 @@ impl WindowedApp {
                 let Some(text) = request.text.as_deref() else {
                     return DebugReply::error(400, "text key requires text");
                 };
-                self.app.dispatch_key(UiKey::Char(text))
+                // One typed character reaches application shortcuts first,
+                // as a real key press does in the windowed host.
+                let mut chars = text.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None)
+                        if self.app.dispatch_shortcut(crate::Shortcut::new(
+                            c,
+                            request.ctrl,
+                            request.shift,
+                            false,
+                        )) =>
+                    {
+                        true
+                    }
+                    _ => self.app.dispatch_key(UiKey::Char(text)),
+                }
             }
             _ => return DebugReply::error(422, format!("unsupported key {:?}", request.key)),
         };

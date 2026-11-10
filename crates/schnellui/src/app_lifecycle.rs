@@ -410,6 +410,7 @@ impl App {
                 &mut self.text,
                 &mut self.atlas,
             );
+            schnellui::widgets::set_window_size(&self.widgets, self.size);
             schnellui::widgets::reposition_paint(&self.widgets, &mut self.scene);
             self.laid_out = true;
             layout_changed = true;

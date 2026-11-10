@@ -503,6 +503,7 @@ impl View for Svg {
                 intrinsic,
                 ctx.scale,
             );
+            crate::widgets::elevate_media_tooltip_host(ctx.scene, id, intrinsic);
         }
         ctx.layout
             .set_measure(id, Box::new(move |_avail| intrinsic));

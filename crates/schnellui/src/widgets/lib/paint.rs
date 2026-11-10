@@ -386,7 +386,7 @@ const DISABLED_FRAME_SHARE: f32 = 0.5;
 
 /// How far a disabled button's label fades from the muted text color toward
 /// the disabled fill.
-const DISABLED_LABEL_FADE: f32 = 0.2;
+const DISABLED_LABEL_FADE: f32 = 0.1;
 
 /// Height of capital letters as a share of the font size, close to that of
 /// the bundled sans faces.

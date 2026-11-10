@@ -570,7 +570,7 @@ pub const DEFAULT_THEME: Theme = Theme {
         // Hover lays a faint neutral ink wash over a row, well below the
         // accent selection fill; press a stronger one. Neither borrows the
         // focus ring's outline.
-        hover: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x1c)),
+        hover: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x26)),
         focus: InteractionStyle::border(Color::rgb(0x2e, 0x63, 0xd4)),
         active: InteractionStyle::background(Color::rgba(0x1d, 0x24, 0x2e, 0x38)),
     },
@@ -589,7 +589,7 @@ pub const DEFAULT_THEME: Theme = Theme {
         }),
         ..ComponentInteractions::NONE
     },
-    text_selection: Color::rgb(0xb7, 0xd2, 0xf8),
+    text_selection: Color::rgb(0xcb, 0xdd, 0xfa),
     disabled: Color::rgb(0xdd, 0xe2, 0xea),
     positive: Color::rgb(0x17, 0x87, 0x45),
     attention: Color::rgb(0xc4, 0x37, 0x37),

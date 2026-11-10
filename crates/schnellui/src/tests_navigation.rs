@@ -1037,3 +1037,159 @@ fn radio_arrows_move_and_select_within_the_group() {
     assert_eq!(app.focused_widget(), Some(radios[2]));
     assert!(checked(&app, radios[2]));
 }
+
+/// Arrows walk a grouped tab list's rows across groups and depths; they move
+/// focus only, as in a tab bar. Left and Right fold and unfold branches.
+#[test]
+fn grouped_tab_list_arrows_walk_rows_across_groups_and_fold_branches() {
+    use schnellui::widgets::{GroupedTabList, TabGroup, TabNode};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let asked = Rc::new(Cell::new(None::<bool>));
+    let record = asked.clone();
+    let mut app = App::mount_with_size(
+        GroupedTabList::new()
+            .tree()
+            .group(
+                TabGroup::new("One").tab(
+                    TabNode::new("Branch")
+                        .selected(true)
+                        .on_toggle(move |next| record.set(Some(next)))
+                        .child(TabNode::new("Child")),
+                ),
+            )
+            .group(TabGroup::new("Two").tab(TabNode::new("Other"))),
+        400,
+        300,
+    );
+    app.frame();
+    let id = |app: &App, name: &str| app.find_widget(Role::Tab, Some(name)).unwrap();
+    let (branch, child, other) = (id(&app, "Branch"), id(&app, "Child"), id(&app, "Other"));
+    app.focus(Some(branch));
+    let key = |app: &mut App, key| {
+        assert!(app.dispatch_key(key));
+    };
+    key(&mut app, UiKey::Down { shift: false });
+    assert_eq!(app.focused_widget(), Some(child));
+    key(&mut app, UiKey::Down { shift: false });
+    assert_eq!(app.focused_widget(), Some(other), "across groups");
+    key(&mut app, UiKey::Up { shift: false });
+    assert_eq!(app.focused_widget(), Some(child));
+    key(&mut app, UiKey::Home { shift: false });
+    assert_eq!(app.focused_widget(), Some(branch));
+    key(&mut app, UiKey::End { shift: false });
+    assert_eq!(app.focused_widget(), Some(other));
+    let selected = |app: &App, id| {
+        schnellui::a11y::StateFlags(app.scene().a11y(id).unwrap().state)
+            .contains(schnellui::a11y::StateFlags::SELECTED)
+    };
+    assert!(selected(&app, branch), "arrows leave selection alone");
+    assert!(!selected(&app, other));
+
+    app.focus(Some(branch));
+    key(
+        &mut app,
+        UiKey::Left {
+            shift: false,
+            ctrl: false,
+        },
+    );
+    assert_eq!(asked.get(), Some(false), "Left folds the open branch");
+}
+
+/// A scroll viewport is a Tab stop only when it can scroll; its ring steps in
+/// from the viewport edge.
+#[test]
+fn only_an_overflowing_scroll_viewport_takes_tab_focus() {
+    use schnellui::widgets::{Column, Scroll, Text};
+
+    for (rows, stop) in [(2, false), (40, true)] {
+        let mut col = Column::new();
+        for i in 0..rows {
+            col = col.child(Text::new(format!("Row {i}")));
+        }
+        let mut app = App::mount_with_size(Scroll::new().size(320.0, 220.0).child(col), 400, 300);
+        app.frame();
+        let sv = app.find_widget(Role::ScrollView, None).unwrap();
+        app.focus_step(false);
+        assert_eq!(app.focused_widget() == Some(sv), stop, "{rows} rows");
+        if stop {
+            let viewport = app.scene().layout(sv).unwrap().rect;
+            fn ring(scene: &scene::Scene, id: scene::WidgetId) -> Option<scene::Rect> {
+                let own = scene.paint(id).and_then(|paint| {
+                    paint.primitives.iter().find_map(|p| match *p {
+                        scene::Primitive::StrokeRect { rect, width, .. }
+                            if width == schnellui::widgets::FOCUS_RING_W =>
+                        {
+                            Some(rect)
+                        }
+                        _ => None,
+                    })
+                });
+                own.or_else(|| {
+                    scene
+                        .node(id)?
+                        .children
+                        .iter()
+                        .find_map(|&child| ring(scene, child))
+                })
+            }
+            let rect = ring(app.scene(), sv).expect("focus ring");
+            assert_eq!(rect.x, viewport.x + 2.0);
+        }
+    }
+}
+
+/// A root laid out wider than the window (a non-fill Row holding wide content)
+/// must not carry a tooltip past the window's right edge: tooltips are bounded
+/// by the window, not by the root's box.
+#[test]
+fn a_tooltip_stays_in_the_window_when_the_root_overflows_it() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Button, Column, Row, Text};
+    let mut app = App::mount_with_size(
+        Column::new().child(Text::new("Inbox")).child(
+            Row::new()
+                .gap(8.0)
+                .child(Text::new("Long label"))
+                .child(Button::new("Archive").tooltip("Archive it")),
+        ),
+        520,
+        320,
+    );
+    app.frame();
+    app.resize(120.0, 90.0);
+    app.frame();
+    let id = app.find_widget(Role::Button, Some("Archive")).unwrap();
+    let r = app.scene().layout(id).unwrap().rect;
+    assert!(
+        r.x < 110.0 && r.right() > 120.0,
+        "the button straddles the edge: {r:?}"
+    );
+    app.update_pointer_proximity(Point {
+        x: r.x + 4.0,
+        y: r.y + r.height * 0.5,
+    });
+    app.frame();
+    let tooltip = app
+        .scene()
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .filter_map(|p| match p {
+            Primitive::SolidRect { rect, color, .. }
+                if color.a > 0 && (rect.bottom() <= r.y || rect.y >= r.bottom()) =>
+            {
+                Some(*rect)
+            }
+            _ => None,
+        })
+        .last()
+        .expect("the tooltip shows above or below the button");
+    assert!(
+        tooltip.x >= 0.0 && tooltip.right() <= 120.0,
+        "tooltip {tooltip:?} leaves a 120px window"
+    );
+}

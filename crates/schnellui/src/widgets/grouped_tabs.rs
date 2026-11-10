@@ -41,7 +41,7 @@ use std::borrow::Cow;
 
 use schnellui::a11y::{Role, StateFlags};
 use schnellui::layout::{Align, Container, ContainerStyle, EdgeInsets, FlexChild};
-use schnellui::scene::{WidgetId, WidgetKind};
+use schnellui::scene::{Scene, WidgetId, WidgetKind};
 
 use crate::widgets::{BuildCtx, Tab, TabAppearance, Text, View};
 
@@ -326,6 +326,7 @@ pub struct GroupedTabList {
     group_gap: f32,
     tab_gap: f32,
     indent: f32,
+    flat_indent: f32,
     show_group_labels: bool,
     group_label_size: f32,
     min_tab_width: Option<f32>,
@@ -337,6 +338,7 @@ pub struct GroupedTabList {
 struct GroupedTabStyle {
     tab_gap: f32,
     indent: f32,
+    flat_indent: f32,
     min_tab_width: Option<f32>,
     appearance: TabAppearance,
     action_gap: f32,
@@ -351,6 +353,7 @@ impl GroupedTabList {
             group_gap: 12.0,
             tab_gap: 2.0,
             indent: 16.0,
+            flat_indent: 0.0,
             show_group_labels: true,
             group_label_size: 12.0,
             min_tab_width: None,
@@ -409,6 +412,14 @@ impl GroupedTabList {
     /// Sets the logical-pixel indentation added at each tree depth.
     pub fn indent(mut self, indent: f32) -> GroupedTabList {
         self.indent = indent.max(0.0);
+        self
+    }
+
+    /// In [`GroupedTabMode::Flat`], moves each nested row's label this many
+    /// logical pixels further in per depth (default `0`). Rows stay full width
+    /// and in one list; the label inset keeps the hierarchy readable.
+    pub fn flat_indent(mut self, indent: f32) -> GroupedTabList {
+        self.flat_indent = indent.max(0.0);
         self
     }
 
@@ -491,6 +502,7 @@ impl View for GroupedTabList {
         let tab_style = GroupedTabStyle {
             tab_gap: this.tab_gap,
             indent: this.indent,
+            flat_indent: this.flat_indent,
             min_tab_width: this.min_tab_width,
             appearance: this.tab_appearance,
             action_gap: this.action_gap,
@@ -542,7 +554,7 @@ fn build_group(
     match mode {
         GroupedTabMode::Flat => {
             for node in group.tabs {
-                build_flat_node(ctx, tabs_id, node, tab_style);
+                build_flat_node(ctx, tabs_id, node, tab_style, 0);
             }
         }
         GroupedTabMode::Tree => {
@@ -630,7 +642,9 @@ fn build_tab_row_with_trigger(
         },
     );
     for action in actions {
-        action.build(ctx, Some(row_id));
+        let action_root = action.build(ctx, Some(row_id));
+        // The rows above and below are other rows: a tooltip goes beside.
+        crate::widgets::place_tooltips_beside(&ctx.runtime, ctx.scene, action_root);
     }
     if let Some(label) = trigger_label.take() {
         let label_owned: String = label.into_owned();
@@ -657,21 +671,39 @@ fn build_tab_row_with_trigger(
     tab_id
 }
 
-fn build_flat_node(ctx: &mut BuildCtx, parent: WidgetId, node: TabNode, style: GroupedTabStyle) {
+/// Room between a flat navigation row's selection rail and its label.
+const FLAT_NAVIGATION_LEAD: f32 = 8.0;
+
+fn build_flat_node(
+    ctx: &mut BuildCtx,
+    parent: WidgetId,
+    node: TabNode,
+    style: GroupedTabStyle,
+    depth: usize,
+) {
     if node.separator {
         Box::new(crate::widgets::Divider::new()).build(ctx, Some(parent));
         for child in node.children {
-            build_flat_node(ctx, parent, child, style);
+            build_flat_node(ctx, parent, child, style, depth);
         }
         return;
     }
     let TabNode {
-        tab,
+        mut tab,
         children,
         actions,
         context_menu_trigger,
         ..
     } = node;
+    // A navigation row's selection rail sits at its leading edge; without the
+    // tree's disclosure gutter the label would touch it.
+    if style.appearance == TabAppearance::Navigation && tab.style.lead == 0.0 {
+        tab = tab.lead(FLAT_NAVIGATION_LEAD);
+    }
+    if depth > 0 && style.flat_indent > 0.0 {
+        let lead = tab.style.lead + depth as f32 * style.flat_indent;
+        tab = tab.lead(lead);
+    }
     build_tab_row_with_trigger(
         ctx,
         parent,
@@ -682,7 +714,7 @@ fn build_flat_node(ctx: &mut BuildCtx, parent: WidgetId, node: TabNode, style: G
         context_menu_trigger,
     );
     for child in children {
-        build_flat_node(ctx, parent, child, style);
+        build_flat_node(ctx, parent, child, style, depth + 1);
     }
 }
 
@@ -724,17 +756,6 @@ fn build_tree_node(
         .map(|width| (width - accumulated_indent).max(0.0));
     let has_children = !children.is_empty();
     tab = tab.tree_disclosure(has_children.then_some(expanded));
-    if has_children {
-        if let Some(mut toggle) = on_toggle.take() {
-            let mut select = tab.on_select.take();
-            tab.on_select = Some(Box::new(move || {
-                if let Some(select) = select.as_mut() {
-                    select();
-                }
-                toggle(!expanded);
-            }));
-        }
-    }
     let tab_id = build_tab_row_with_trigger(
         ctx,
         node_id,
@@ -745,6 +766,12 @@ fn build_tree_node(
         context_menu_trigger,
     );
     if has_children {
+        // The fold request is the branch's own handler, not part of its
+        // `on_select`: whether a click folds depends on the selection at click
+        // time, which only dispatch can see.
+        if let Some(toggle) = on_toggle.take() {
+            crate::widgets::with_handlers(&ctx.runtime, tab_id, |h| h.toggle = Some(toggle));
+        }
         let a11y = ctx.scene.a11y_mut(tab_id);
         let mut state = StateFlags(a11y.state);
         state.insert(StateFlags::COLLAPSIBLE);
@@ -774,6 +801,64 @@ fn build_tree_node(
             build_tree_node(ctx, children_id, child, style, depth + 1);
         }
     }
+}
+
+/// Asks a branch row's `on_toggle` for `next`, if it has one.
+fn request_branch_state(runtime: &crate::widgets::Runtime, id: WidgetId, next: bool) -> bool {
+    let toggle = runtime.with(|rt| {
+        rt.borrow_mut()
+            .handlers
+            .get_mut(id)
+            .and_then(|h| h.toggle.take())
+    });
+    let Some(mut toggle) = toggle else {
+        return false;
+    };
+    toggle(next);
+    runtime.with(|rt| {
+        if let Some(h) = rt.borrow_mut().handlers.get_mut(id) {
+            h.toggle = Some(toggle);
+        }
+    });
+    true
+}
+
+/// A click or Enter/Space on a branch row, after its selection settled.
+/// Activating a row that was not selected selects it and unfolds it if folded,
+/// never folding; activating the selected row folds or unfolds it. `was_selected`
+/// is the state before this activation, `expanded` the row's live state.
+pub(crate) fn activate_branch(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    id: WidgetId,
+    was_selected: bool,
+) {
+    let state = StateFlags(scene.a11y(id).map_or(0, |a| a.state));
+    if !state.contains(StateFlags::COLLAPSIBLE) {
+        return;
+    }
+    let expanded = state.contains(StateFlags::EXPANDED);
+    if was_selected {
+        request_branch_state(runtime, id, !expanded);
+    } else if !expanded {
+        request_branch_state(runtime, id, true);
+    }
+}
+
+/// Left or Right on a focused branch row: folds an unfolded branch or unfolds
+/// a folded one. `None` when the row is not a branch that can take that key,
+/// so the key moves focus as it does in any tab list.
+pub fn dispatch_branch_fold(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+    expand: bool,
+) -> Option<bool> {
+    let state = StateFlags(scene.a11y(id)?.state);
+    if !state.contains(StateFlags::COLLAPSIBLE) || state.contains(StateFlags::EXPANDED) == expand {
+        return None;
+    }
+    request_branch_state(runtime, id, expand).then_some(true)
 }
 
 /// Short alias for callers that prefer the component name without “List”.
@@ -1040,9 +1125,167 @@ mod tests {
         );
         let editor = tab_named(&scene, root, "Editor");
 
+        // An unselected branch is selected; it is already open, so nothing
+        // is asked of it. Never folds on that first click.
         assert!(dispatch_click(runtime, &mut scene, editor));
-        assert_eq!(requested.get(), Some(false));
+        assert_eq!(requested.get(), None);
         assert!(StateFlags(scene.a11y(editor).unwrap().state).contains(StateFlags::SELECTED));
+        // The selected branch folds on the next click.
+        dispatch_click(runtime, &mut scene, editor);
+        assert_eq!(requested.get(), Some(false));
+    }
+
+    #[test]
+    fn clicking_an_unselected_folded_branch_selects_and_unfolds_it() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let requested = create_signal(None::<bool>);
+        let (mut scene, _layout, _text, _atlas, root) = build_one(
+            runtime,
+            GroupedTabList::new().tree().group(
+                TabGroup::new("Workspace").tab(
+                    TabNode::new("Editor")
+                        .expanded(false)
+                        .on_toggle(move |next| requested.set(Some(next)))
+                        .child(TabNode::new("Outline")),
+                ),
+            ),
+        );
+        let editor = tab_named(&scene, root, "Editor");
+        assert!(dispatch_click(runtime, &mut scene, editor));
+        assert_eq!(requested.get(), Some(true));
+        // Selected and folded: the next click unfolds, never a stale fold.
+        requested.set(None);
+        dispatch_click(runtime, &mut scene, editor);
+        assert_eq!(requested.get(), Some(true));
+    }
+
+    #[test]
+    fn branch_row_fill_spans_the_row_under_its_actions() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let (mut scene, mut layout, _text, _atlas, root) = build_one(
+            runtime,
+            GroupedTabList::new().min_tab_width(180.0).group(
+                TabGroup::new("Workspace").tab(
+                    TabNode::new("Editor")
+                        .selected(true)
+                        .action(Button::new("Refresh")),
+                ),
+            ),
+        );
+        layout.sync_tree(&scene, root);
+        layout.compute(
+            &mut scene,
+            root,
+            Size {
+                width: 400.0,
+                height: 200.0,
+            },
+        );
+        crate::widgets::reposition_paint(runtime, &mut scene);
+        let editor = tab_named(&scene, root, "Editor");
+        let row = scene.node(editor).unwrap().parent.unwrap();
+        let row_rect = scene.layout(row).unwrap().rect;
+        let schnellui::scene::Primitive::SolidRect { rect, .. } =
+            scene.paint(editor).unwrap().primitives[0]
+        else {
+            panic!("tab surface");
+        };
+        assert_eq!(rect.right(), row_rect.right());
+    }
+
+    #[test]
+    fn a_row_actions_tooltip_sits_beside_it_not_over_the_rows_above_or_below() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let (mut scene, mut layout, _text, _atlas, root) = build_one(
+            runtime,
+            GroupedTabList::new().min_tab_width(220.0).group(
+                TabGroup::new("Workspace")
+                    .tab(TabNode::new("First"))
+                    .tab(
+                        TabNode::new("Second")
+                            .action(Button::new("Archive").tooltip("Archive this item")),
+                    )
+                    .tab(TabNode::new("Third")),
+            ),
+        );
+        layout.sync_tree(&scene, root);
+        layout.compute(
+            &mut scene,
+            root,
+            Size {
+                width: 400.0,
+                height: 300.0,
+            },
+        );
+        crate::widgets::reposition_paint(runtime, &mut scene);
+        let mut buttons = Vec::new();
+        collect_role(&scene, root, Role::Button, &mut buttons);
+        let button = buttons[0];
+        let host = scene.layout(button).unwrap().rect;
+        let tooltip = runtime
+            .with(|rt| rt.borrow().hover_tooltips.get(button).copied())
+            .unwrap();
+        let schnellui::scene::Primitive::SolidRect { rect, .. } =
+            scene.paint(button).unwrap().primitives[tooltip.background]
+        else {
+            panic!("tooltip surface");
+        };
+        assert!(
+            rect.right() <= host.x,
+            "left of the control: {rect:?} vs {host:?}"
+        );
+        assert!(
+            rect.y >= host.y - 0.5 && rect.bottom() <= host.bottom() + tooltip.size.height,
+            "level with its own row: {rect:?} vs {host:?}"
+        );
+    }
+
+    #[test]
+    fn fold_keys_ask_branches_to_open_and_close() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let requested = create_signal(None::<bool>);
+        let (mut scene, _layout, _text, _atlas, root) = build_one(
+            runtime,
+            GroupedTabList::new().tree().group(
+                TabGroup::new("Workspace")
+                    .tab(
+                        TabNode::new("Open")
+                            .on_toggle(move |next| requested.set(Some(next)))
+                            .child(TabNode::new("Child")),
+                    )
+                    .tab(
+                        TabNode::new("Shut")
+                            .expanded(false)
+                            .on_toggle(move |next| requested.set(Some(next)))
+                            .child(TabNode::new("Hidden")),
+                    )
+                    .tab(TabNode::new("Leaf")),
+            ),
+        );
+        let (open, shut, leaf) = (
+            tab_named(&scene, root, "Open"),
+            tab_named(&scene, root, "Shut"),
+            tab_named(&scene, root, "Leaf"),
+        );
+        assert_eq!(dispatch_branch_fold(runtime, &mut scene, open, true), None);
+        assert_eq!(dispatch_branch_fold(runtime, &mut scene, shut, false), None);
+        assert_eq!(dispatch_branch_fold(runtime, &mut scene, leaf, true), None);
+        assert_eq!(requested.get(), None);
+        assert_eq!(
+            dispatch_branch_fold(runtime, &mut scene, open, false),
+            Some(true)
+        );
+        assert_eq!(requested.get(), Some(false));
+        assert_eq!(
+            dispatch_branch_fold(runtime, &mut scene, shut, true),
+            Some(true)
+        );
+        assert_eq!(requested.get(), Some(true));
+        assert!(!StateFlags(scene.a11y(shut).unwrap().state).contains(StateFlags::SELECTED));
     }
 
     #[test]

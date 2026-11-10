@@ -633,6 +633,52 @@ fn recolor_foreground(
     }
 }
 
+/// The least contrast a state's label colour needs against a button's fill
+/// before the state may recolour the label.
+const MIN_STATE_LABEL_CONTRAST: f32 = 4.5;
+
+/// The opaque fill a button's label sits on: the last opaque rectangle
+/// painted before its first glyph.
+fn button_fill(scene: &Scene, id: WidgetId) -> Option<Color> {
+    let paint = scene.paint(id)?;
+    paint
+        .primitives
+        .iter()
+        .take_while(|p| !matches!(p, Primitive::GlyphQuad { .. }))
+        .filter_map(|p| match *p {
+            Primitive::SolidRect { color, .. } if color.a == 255 => Some(color),
+            _ => None,
+        })
+        .last()
+}
+
+/// The body of a solid button that paints a block shadow: the layout box
+/// without the shadow's offset strip. `None` for anything else.
+fn shadowed_button_body(scene: &Scene, id: WidgetId) -> Option<Rect> {
+    let node = scene.node(id)?;
+    if node.kind != WidgetKind::Button {
+        return None;
+    }
+    let layout = scene.layout(id)?.rect;
+    let paint = scene.paint(id)?;
+    // The shadow is the first primitive, the body's size, pushed down and
+    // right of the layout origin by the shadow depth.
+    let Some(Primitive::SolidRect { rect: shadow, .. }) = paint.primitives.first() else {
+        return None;
+    };
+    let dx = shadow.x - layout.x;
+    let dy = shadow.y - layout.y;
+    let is_shadow = dx > 0.5
+        && (dx - dy).abs() < 0.01
+        && (shadow.width + dx - layout.width).abs() < 0.5
+        && (shadow.height + dy - layout.height).abs() < 0.5;
+    is_shadow.then(|| Rect::new(layout.x, layout.y, shadow.width, shadow.height))
+}
+
+/// Room a link's hover wash and focus ring leave around its glyphs.
+const LINK_DECORATION_PAD_X: f32 = 4.0;
+const LINK_DECORATION_PAD_Y: f32 = 2.0;
+
 fn apply_interaction_style(
     runtime: &Runtime,
     scene: &mut Scene,
@@ -643,9 +689,21 @@ fn apply_interaction_style(
     if style == InteractionStyle::NONE {
         return None;
     }
-    let (rect, owner) = decoration_geometry(runtime, scene, id)?;
+    let (geometry, owner) = decoration_geometry(runtime, scene, id)?;
     let component = interaction_component(scene, id);
     let kind = scene.node(id).map(|node| node.kind);
+    // A button with a block shadow is washed and ringed around its body. The
+    // shadow is the ground it stands on, not part of the face.
+    let mut rect = shadowed_button_body(scene, id).unwrap_or(geometry);
+    // A link's box is its glyphs; its wash and ring get room around them.
+    if kind == Some(WidgetKind::Link) {
+        rect = Rect::new(
+            rect.x - LINK_DECORATION_PAD_X,
+            rect.y - LINK_DECORATION_PAD_Y,
+            rect.width + 2.0 * LINK_DECORATION_PAD_X,
+            rect.height + 2.0 * LINK_DECORATION_PAD_Y,
+        );
+    }
 
     let background = style.background.map(|color| {
         let shape = theme_for(runtime, id).shape;
@@ -665,7 +723,14 @@ fn apply_interaction_style(
             };
             (wash, radius)
         } else {
-            (rect, shape.radius(3.0, rect.height))
+            let radius = shadowed_button_body(scene, id)
+                .and_then(|_| scene.paint(id))
+                .and_then(|paint| match paint.primitives.first() {
+                    Some(Primitive::SolidRect { corner_radius, .. }) => Some(*corner_radius),
+                    _ => None,
+                })
+                .unwrap_or_else(|| shape.radius(3.0, rect.height));
+            (rect, radius)
         };
         // A row that paints nothing itself (a table row: its cells paint) is
         // washed on top of its last painted cell, since a wash under the
@@ -746,7 +811,15 @@ fn apply_interaction_style(
     });
 
     let mut foreground = Vec::new();
-    if let Some(next) = style.foreground {
+    // A button keeps its label colour when the state's ink would sink into
+    // its fill: a theme's dark hover ink suits a light row, not a dark key.
+    let keeps_label = kind == Some(WidgetKind::Button)
+        && style.foreground.is_some_and(|next| {
+            button_fill(scene, id).is_some_and(|fill| {
+                crate::widgets::theme::contrast_ratio(next, fill) < MIN_STATE_LABEL_CONTRAST
+            })
+        });
+    if let Some(next) = style.foreground.filter(|_| !keeps_label) {
         foreground = runtime
             .with(|rt| rt.borrow_mut().restore_pool.pop())
             .unwrap_or_default();
@@ -767,6 +840,10 @@ fn apply_interaction_style(
             ) || kind == Some(WidgetKind::Link));
         let inset = if outset {
             -(FOCUS_RING_W + FOCUS_RING_GAP)
+        } else if kind == Some(WidgetKind::Scroll) && border_width == FOCUS_RING_W {
+            // A viewport's content runs to its edge: the ring steps in so it
+            // does not cut through the content's outermost pixels.
+            FOCUS_RING_W
         } else {
             0.0
         };
@@ -789,8 +866,14 @@ fn apply_interaction_style(
         } else {
             None
         };
+        // A viewport is ringed at its own edge, not around whatever its
+        // content happens to paint.
+        let viewport = (kind == Some(WidgetKind::Scroll))
+            .then(|| scene.layout(id).map(|layout| layout.rect))
+            .flatten();
         let (rect, radius) = match thumb {
             Some(thumb) => thumb,
+            None if viewport.is_some() => (viewport.unwrap_or(rect), 0.0),
             None if kind == Some(WidgetKind::Link) => (rect, LINK_RING_RADIUS),
             None => (rect, surface_radius(runtime, scene, owner)),
         };
@@ -821,7 +904,7 @@ fn apply_interaction_style(
         border_width,
         foreground,
         background,
-        bounds: rect,
+        bounds: geometry,
     })
 }
 
@@ -1465,11 +1548,28 @@ pub fn update_pointer_proximity_held(
             let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
                 continue;
             };
-            changed |= show_tooltip(scene, id, tooltip, !held && rect.contains(point));
+            let own_menu_open = crate::widgets::context_menu::context_menu_open_for(runtime, id);
+            changed |= show_tooltip(
+                scene,
+                id,
+                tooltip,
+                !held && !own_menu_open && rect.contains(point),
+            );
         }
         changed
     });
     control_changed | proximity_changed
+}
+
+/// Hides `id`'s hover tooltip, if it has one. Returns whether paint changed.
+pub fn hide_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
+    runtime.with(|registry| {
+        registry
+            .borrow_mut()
+            .hover_tooltips
+            .get_mut(id)
+            .is_some_and(|tooltip| show_tooltip(scene, id, tooltip, false))
+    })
 }
 
 /// Hides every shown hover tooltip. Returns whether paint changed.
@@ -1508,6 +1608,13 @@ fn show_tooltip(
         };
     }
     let pd = scene.paint_mut(id);
+    for (index, shown) in tooltip.highlights.iter().flatten() {
+        if let Some(Primitive::SolidRect { color, .. } | Primitive::StrokeRect { color, .. }) =
+            pd.primitives.get_mut(*index)
+        {
+            *color = if visible { *shown } else { Color::TRANSPARENT };
+        }
+    }
     for primitive in &mut pd.primitives[tooltip.glyph_start..tooltip.glyph_end] {
         if let Primitive::GlyphQuad { color, .. } = primitive {
             *color = if visible {

@@ -556,6 +556,9 @@ pub(crate) fn dispatch_click_selection(
             }
         });
     }
+    if kind == WidgetKind::Tab {
+        crate::widgets::activate_branch(runtime, scene, id, was_selected);
+    }
     fired || !was_selected
 }
 

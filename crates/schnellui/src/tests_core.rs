@@ -943,6 +943,12 @@ fn modal_dialog_traps_focus_blocks_background_actions_and_takes_escape() {
     assert_eq!(app.focused_widget(), Some(cancel));
     assert!(app.focus_step(false));
     assert_eq!(app.focused_widget(), Some(continue_button));
+    // The title bar's close button is the stop before the content.
+    let close = app
+        .find_widget(Role::Button, Some("Close Confirm"))
+        .unwrap();
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(close));
     assert!(app.focus_step(false));
     assert_eq!(app.focused_widget(), Some(cancel));
 
@@ -1048,6 +1054,12 @@ fn highest_modal_owns_focus_accessibility_and_input_above_dialog_peers() {
     assert_eq!(app.focused_widget(), Some(top_cancel));
     assert!(app.focus_step(false));
     assert_eq!(app.focused_widget(), Some(top_continue));
+    // The title bar's close button is the stop before the content.
+    let top_close = app
+        .find_widget(Role::Button, Some("Close Top confirmation"))
+        .unwrap();
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(top_close));
     assert!(app.focus_step(false));
     assert_eq!(app.focused_widget(), Some(top_cancel));
 

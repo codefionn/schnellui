@@ -473,9 +473,74 @@ struct HoverTooltipState {
     background_color: Color,
     text_color: Color,
     visible: bool,
+    /// Sits beside the host, not above it: set for controls inside a stack of
+    /// rows, where above or below would cover a neighbouring row.
+    beside: bool,
+    /// Primitives in the host's own paint (before `base_primitive_end`) that show
+    /// only with the tooltip, each with its shown colour: a chart tints the
+    /// hovered mark this way. See [`set_tooltip_highlights`].
+    highlights: [Option<(usize, Color)>; 2],
 }
 
-fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect) -> Point {
+/// Makes primitives `indices` of `id`'s own paint show only while its hover
+/// tooltip shows, in the given colours. They should be built transparent. Call
+/// after [`register_hover_tooltip`]; a host without a tooltip is left alone.
+pub(crate) fn set_tooltip_highlights(
+    runtime: &Runtime,
+    id: WidgetId,
+    highlights: [Option<(usize, Color)>; 2],
+) {
+    runtime.with(|registry| {
+        if let Some(tooltip) = registry.borrow_mut().hover_tooltips.get_mut(id) {
+            tooltip.highlights = highlights;
+        }
+    });
+}
+
+/// Makes the hover tooltips on `root` and its descendants sit to the left of
+/// their control, level with it, when there is room. For small controls in a
+/// row of a list, whose neighbours above and below are other rows.
+/// Records the host window's logical size, which bounds where hover tooltips
+/// go. The next [`reposition_paint`] re-places every tooltip when it changed.
+pub fn set_window_size(runtime: &Runtime, size: Size) {
+    runtime.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        if registry.window != Some(size) {
+            registry.window = Some(size);
+            registry.window_resized = true;
+        }
+    });
+}
+
+/// Takes the "window changed size" flag that [`set_window_size`] raised.
+pub(crate) fn take_window_resized(runtime: &Runtime) -> bool {
+    runtime.with(|registry| std::mem::take(&mut registry.borrow_mut().window_resized))
+}
+
+pub(crate) fn place_tooltips_beside(runtime: &Runtime, scene: &Scene, root: WidgetId) {
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        runtime.with(|registry| {
+            if let Some(tooltip) = registry.borrow_mut().hover_tooltips.get_mut(id) {
+                tooltip.beside = true;
+            }
+        });
+        if let Some(node) = scene.node(id) {
+            stack.extend(node.children.iter().copied());
+        }
+    }
+}
+
+fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, beside: bool) -> Point {
+    if beside {
+        let x = target.x - TOOLTIP_GAP - tooltip.width;
+        let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
+        let bottom = (viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN - tooltip.height).max(top);
+        if x >= viewport.x + TOOLTIP_VIEWPORT_MARGIN {
+            let y = (target.y + (target.height - tooltip.height) * 0.5).clamp(top, bottom);
+            return Point { x, y };
+        }
+    }
     let left = viewport.x + TOOLTIP_VIEWPORT_MARGIN;
     let right = (viewport.right() - TOOLTIP_VIEWPORT_MARGIN - tooltip.width).max(left);
     let x = (target.right() - tooltip.width).clamp(left, right);
@@ -499,11 +564,22 @@ fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect) -> Point {
 /// known. The preferred placement remains right-aligned above the target, but
 /// edge controls clamp horizontally and flip below when the top edge is tight.
 fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
-    let tooltip = runtime.with(|registry| registry.borrow().hover_tooltips.get(id).copied());
+    let (tooltip, window) = runtime.with(|registry| {
+        let registry = registry.borrow();
+        (registry.hover_tooltips.get(id).copied(), registry.window)
+    });
     let Some(tooltip) = tooltip else { return };
-    let Some(root) = scene.root() else { return };
-    let Some(viewport) = scene.layout(root).map(|layout| layout.rect) else {
-        return;
+    // The window bounds placement when the host has told us its size; the root's
+    // box is the fallback, and can be larger than the window.
+    let viewport = match window {
+        Some(size) => Rect::new(0.0, 0.0, size.width, size.height),
+        None => {
+            let Some(root) = scene.root() else { return };
+            let Some(rect) = scene.layout(root).map(|layout| layout.rect) else {
+                return;
+            };
+            rect
+        }
     };
     let Some(target) = scene.layout(id).map(|layout| layout.rect) else {
         return;
@@ -514,7 +590,7 @@ fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     else {
         return;
     };
-    let origin = hover_tooltip_origin(target, tooltip.size, viewport);
+    let origin = hover_tooltip_origin(target, tooltip.size, viewport, tooltip.beside);
     let dx = origin.x - rect.x;
     let dy = origin.y - rect.y;
     if dx.abs() < 0.001 && dy.abs() < 0.001 {
@@ -603,6 +679,8 @@ fn emit_hover_tooltip(
         background_color: theme.text,
         text_color: theme.surface,
         visible: false,
+        beside: false,
+        highlights: [None; 2],
     }
 }
 
@@ -631,13 +709,31 @@ pub(crate) fn register_hover_tooltip(
             registry.tooltip_ids.push(id);
         }
     });
-    // Hover tooltips extend beyond their button's layout box and must
-    // remain visible when the button sits at a panel edge (e.g. the
-    // settings sidebar's trailing edge next to a second sidebar).
-    // Painting the host widget as an overlay keeps the pre-rasterized
-    // tooltip tail above sibling panels without a separate tooltip
-    // layer or per-frame allocation.
+}
+
+/// Paints a control that carries a hover tooltip as an overlay. Its tooltip
+/// extends beyond the control's layout box and must remain visible when the
+/// control sits at a panel edge (e.g. the settings sidebar's trailing edge
+/// next to a second sidebar). Painting the host widget as an overlay keeps
+/// the pre-rasterized tooltip tail above sibling panels without a separate
+/// tooltip layer or per-frame allocation.
+///
+/// Only small controls opt in: an image elevated this way would paint over
+/// the content laid out on top of it, such as text over a backdrop picture.
+pub(crate) fn elevate_tooltip_host(scene: &mut Scene, id: WidgetId) {
     scene.set_overlay_level(id, TOOLTIP_OVERLAY_LEVEL);
+}
+
+/// The largest media, on either axis, whose alt-text tooltip host is painted
+/// as an overlay. An icon-sized image behaves like a control; a larger one is
+/// content that other widgets may sit on.
+const TOOLTIP_HOST_MEDIA_MAX: f32 = 96.0;
+
+/// [`elevate_tooltip_host`] for an image or vector graphic of `size`.
+pub(crate) fn elevate_media_tooltip_host(scene: &mut Scene, id: WidgetId, size: Size) {
+    if size.width <= TOOLTIP_HOST_MEDIA_MAX && size.height <= TOOLTIP_HOST_MEDIA_MAX {
+        elevate_tooltip_host(scene, id);
+    }
 }
 
 /// A checkbox's intrinsic box under the ambient shape tokens: the classic edge
@@ -865,6 +961,8 @@ pub(crate) struct Handlers {
     toggle: Option<Box<dyn FnMut(bool) + 'static>>,
     change: Option<Box<dyn FnMut(f32) + 'static>>,
     input: Option<InputHandler>,
+    /// Fired when Enter is pressed in a focused single-line text input.
+    submit: Option<ClickHandler>,
     /// Pointer-drag lifecycle for dockable/reorderable content. Drag input is
     /// deliberately separate from `click`: a short press still activates the
     /// widget, while crossing the movement threshold starts capture.
@@ -1200,6 +1298,12 @@ struct WidgetRuntime {
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
     tooltip_ids: Vec<WidgetId>,
+    /// The host window's logical size, which bounds tooltip placement: a root
+    /// laid out wider or taller than the window must not carry tooltips off it.
+    /// Host configuration, so [`reset`] keeps it.
+    window: Option<Size>,
+    /// Set when `window` changes, until the next paint pass re-places tooltips.
+    window_resized: bool,
     /// The widget currently wearing the generic keyboard **focus ring** (SOUL §6.3)
     /// — `None` when nothing currently matches the browser-style
     /// `:focus-visible` modality.

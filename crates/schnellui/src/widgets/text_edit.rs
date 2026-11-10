@@ -48,8 +48,9 @@ pub(crate) const MIN_FIELD_W: f32 = 120.0;
 /// [`accent`](crate::widgets::Theme::accent) focused), shared with
 /// [`text_area`](crate::widgets::text_area) so both editables read as one family.
 pub(crate) const INPUT_BORDER_W: f32 = 1.0;
-/// Caret stroke width, logical px.
-pub(crate) const CARET_W: f32 = 1.0;
+/// Caret stroke width, logical px. Two pixels in the text ink: a one-pixel line
+/// at a fractional x antialiases to a pale grey that is hard to find.
+pub(crate) const CARET_W: f32 = 2.0;
 /// A floated Material-style label is one typography step below the input value.
 const FLOAT_LABEL_SIZE_RATIO: f32 = 0.8;
 /// How long a floating label takes to move fully between rest and floating.

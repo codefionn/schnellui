@@ -51,7 +51,7 @@ pub const DARK: Theme = Theme {
     accent: Color::rgb(0x5c, 0x8c, 0xe6),
     on_accent: Color::rgb(0x10, 0x14, 0x1c),
     selection: Color::rgb(0x30, 0x46, 0x70),
-    interactions: states(Color::WHITE, 0x1c, 0x34, Color::rgb(0x5c, 0x8c, 0xe6)),
+    interactions: states(Color::WHITE, 0x24, 0x38, Color::rgb(0x5c, 0x8c, 0xe6)),
     component_interactions: field_states(
         Color::WHITE,
         Color::rgb(0xbc, 0xc1, 0xc7),
@@ -79,7 +79,7 @@ pub const FOREST: Theme = Theme {
     selection: Color::rgb(0xb0, 0xd2, 0xbd),
     interactions: states(
         Color::rgb(0x1d, 0x2a, 0x22),
-        0x1c,
+        0x26,
         0x38,
         Color::rgb(0x2e, 0x7d, 0x4f),
     ),

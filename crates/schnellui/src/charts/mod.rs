@@ -15,15 +15,34 @@
 //! and the agent loop (SOUL §6.5) — can read *what the chart is* without scraping
 //! pixels.
 //!
+//! ## Reading values
+//!
+//! By default a chart is bare marks on a baseline, as it always was. Three opt-in
+//! builders make it readable:
+//! - `.axes(true)` adds a value axis: gridlines at 1-2-5 ticks, tick labels in the left
+//!   gutter, and a zero line drawn *over* the bars. Add `.labels(..)` for category
+//!   labels under the marks (thinned so they never overlap) and `.gutter(px)` to give
+//!   several charts the same plot width.
+//! - `.tooltips(true)` makes every bar or point a hover target that shows
+//!   `"Label: value unit"` (see `.unit(..)`). The chart then builds as a fixed-size
+//!   `Stack` holding the `Chart` leaf and one invisible hit node per mark; each hit
+//!   node is also an accessible `Group` named with the same text.
+//! - Text is real shaped text (tick and category labels, `text_muted`), painted through
+//!   the same glyph path as `Text`. A visible *title* is still composed as a `Text`
+//!   above the chart; `.title()` sets the accessible name.
+//!
 //! ## Design rules (the project data-viz standard)
 //!
 //! These are encoded as constants below, not scattered magic numbers:
 //! - a single validated colorblind-safe categorical palette, [`SERIES`], in **fixed
-//!   order** — never reordered, never cycled;
-//! - a recessive [`AXIS`] hairline for the zero baseline (1px); **no gridlines in v1**
-//!   (keep marks dominant, chrome recessive);
-//! - **no text of any kind is painted by charts in v1** — `.title()` sets *only* the
-//!   accessible name; a visible title is composed as a `Text` above the chart.
+//!   order** — never reordered, never cycled. Every entry is at least 3:1 against both
+//!   white and the default page (WCAG 1.4.11, non-text contrast);
+//! - a baseline / zero line in [`AXIS`] (the theme's `outline`, 3:1) at
+//!   [`AXIS_WIDTH`] px, with `separator` gridlines under the marks;
+//! - negative bars take their own color ([`BarChart::negative_color`], red by default)
+//!   so sign never relies on position alone;
+//! - line markers are round and the plot is inset by the marker radius, so a point on
+//!   the minimum never sits half outside the plot.
 //!
 //! ## Determinism (SOUL §7.3)
 //!
@@ -37,14 +56,21 @@
 //!
 //! Like the built-in leaves, a chart emits its primitives at a **provisional local
 //! origin** (`node_rect` returns an origin box before layout has run); the widgets
-//! crate's `reposition_paint` pass then slides the whole primitive set — bars, lines
-//! *and* line endpoints — onto the node's laid-out origin.
+//! crate's `reposition_paint` pass then slides the whole primitive set — bars, lines,
+//! labels *and* line endpoints — onto the node's laid-out origin. With axes on, a
+//! transparent full-box rect is emitted first so the slide anchors on the box corner
+//! rather than on the first label.
 
 use std::borrow::Cow;
 
 use schnellui::a11y::Role;
-use schnellui::scene::{Color, Point, Primitive, Rect, Size, WidgetId, WidgetKind};
-use schnellui::widgets::{node_rect, BuildCtx, View};
+use schnellui::layout::{Container, ContainerStyle};
+use schnellui::scene::{Color, PaintData, Point, Primitive, Rect, Size, WidgetId, WidgetKind};
+use schnellui::text::{GlyphAtlas, ShapedText, TextShaper};
+use schnellui::widgets::{node_rect, rasterize_and_push, BuildCtx, View};
+
+mod axis;
+use axis::{format_tick, format_value, nice_axis, with_unit};
 
 // ---------------------------------------------------------------------------
 // the data-viz standard, encoded as constants (SOUL §6.1)
@@ -56,29 +82,53 @@ use schnellui::widgets::{node_rect, BuildCtx, View};
 /// assigns distinct series colors *by entity in fixed order* — the same entity keeps
 /// the same hue across every chart on the page.
 ///
-/// Order: `#2a78d6` blue, `#1baf7a` aqua, `#eda100` yellow, `#008300` green,
-/// `#4a3aa7` violet, `#e34948` red, `#e87ba4` magenta, `#eb6834` orange.
+/// Every entry has at least 3:1 contrast against white and against the default page
+/// (`#e9ecf1`), the WCAG 1.4.11 minimum for graphics.
+///
+/// Order: `#2a78d6` blue, `#0e8a68` teal, `#b87400` amber, `#008300` green,
+/// `#4a3aa7` violet, `#d53f3e` red, `#c8467f` magenta, `#d1531f` orange.
 pub const SERIES: [Color; 8] = [
     Color::rgb(0x2a, 0x78, 0xd6), // 1 blue
-    Color::rgb(0x1b, 0xaf, 0x7a), // 2 aqua
-    Color::rgb(0xed, 0xa1, 0x00), // 3 yellow
+    Color::rgb(0x0e, 0x8a, 0x68), // 2 teal
+    Color::rgb(0xb8, 0x74, 0x00), // 3 amber
     Color::rgb(0x00, 0x83, 0x00), // 4 green
     Color::rgb(0x4a, 0x3a, 0xa7), // 5 violet
-    Color::rgb(0xe3, 0x49, 0x48), // 6 red
-    Color::rgb(0xe8, 0x7b, 0xa4), // 7 magenta
-    Color::rgb(0xeb, 0x68, 0x34), // 8 orange
+    Color::rgb(0xd5, 0x3f, 0x3e), // 6 red
+    Color::rgb(0xc8, 0x46, 0x7f), // 7 magenta
+    Color::rgb(0xd1, 0x53, 0x1f), // 8 orange
 ];
 
-/// The baseline / axis hairline color (`#c3c2b7`). Recessive chrome so the marks stay
-/// dominant (the data-viz standard). **Gridlines are intentionally not drawn in v1.**
-pub const AXIS: Color = Color::rgb(0xc3, 0xc2, 0xb7);
+/// The baseline / zero-line color (`#7a8699`, 3.7:1 on white): the default theme's
+/// `outline`. Charts take the ambient theme's `outline` at build, so this constant is
+/// the light-theme value and the documented fallback.
+pub const AXIS: Color = Color::rgb(0x7a, 0x86, 0x99);
 
-/// Baseline / axis hairline stroke width (logical px).
-const AXIS_WIDTH: f32 = 1.0;
+/// Baseline / zero-line stroke width (logical px).
+const AXIS_WIDTH: f32 = 1.5;
+/// Gridline stroke width (logical px).
+const GRID_WIDTH: f32 = 1.0;
 /// Minimum gap between adjacent bars (logical px) — `≥ 2` per the data-viz standard.
 const BAR_GAP: f32 = 2.0;
-/// Per-point marker square edge (logical px) for [`LineChart`] markers.
-const MARKER_SIZE: f32 = 8.0;
+/// Share of a category slot a bar fills when axes are on (the rest is the gap).
+const BAR_FILL: f32 = 0.72;
+/// Per-point marker diameter (logical px) for [`LineChart`] markers (round).
+const MARKER_SIZE: f32 = 9.0;
+/// Edge of a line point's hover target (logical px).
+const HIT_SIZE: f32 = 16.0;
+/// A hovered point grows from the 4.5px marker to this radius, ringed by a halo of
+/// [`HOVER_HALO`] px in the page colour so it lifts off the line.
+const HOVER_POINT_RADIUS: f32 = 6.0;
+const HOVER_HALO: f32 = 2.0;
+/// Laid over a hovered bar: darkens it about 22% so it stands out from its row.
+const MARK_HOVER_SHADE: Color = Color::rgba(0, 0, 0, 0x38);
+/// Shortest a bar's hover target is, so a near-zero bar can still be reached.
+const HIT_MIN: f32 = 10.0;
+/// Tick and category label size (logical px).
+const LABEL_SIZE: f32 = 12.0;
+/// Gap between tick labels and the plot, and between the plot and category labels.
+const LABEL_GAP: f32 = 6.0;
+/// Space the tallest tick should take (logical px), which sets the tick count.
+const TICK_SPACING: f32 = 34.0;
 /// Default bar/line chart size.
 const DEFAULT_SIZE: Size = Size {
     width: 240.0,
@@ -91,8 +141,10 @@ const SPARK_SIZE: Size = Size {
 };
 /// Default [`LineChart`] stroke width (logical px).
 const LINE_STROKE: f32 = 2.0;
-/// Fixed [`Sparkline`] stroke width (logical px) — minimal, no builder.
-const SPARK_STROKE: f32 = 1.5;
+/// Default [`Sparkline`] stroke width (logical px).
+const SPARK_STROKE: f32 = 2.0;
+/// Radius of a [`Sparkline`]'s end dot (logical px).
+const END_DOT_RADIUS: f32 = 3.5;
 
 // ---------------------------------------------------------------------------
 // value normalization (pure, deterministic — SOUL §7.3; unit-tested directly)
@@ -146,6 +198,13 @@ fn map_x(i: usize, n: usize, plot: Rect) -> f32 {
     }
 }
 
+/// `r` shrunk by `by` on every side, never below one logical pixel.
+fn inset(r: Rect, by: f32) -> Rect {
+    let w = (r.width - 2.0 * by).max(1.0);
+    let h = (r.height - 2.0 * by).max(1.0);
+    Rect::new(r.x + (r.width - w) * 0.5, r.y + (r.height - h) * 0.5, w, h)
+}
+
 /// The deterministic accessible summary of a series (SOUL §6.1). EXACT format
 /// `"n={count} min={min} max={max} last={last}"` — each numeric field via
 /// `format!("{v}")` on the `f32` — or `"n=0"` alone for empty data. `min`/`max` are
@@ -178,38 +237,71 @@ pub fn summary(values: &[f32]) -> String {
 // primitive builders (pure — SOUL §3.2; unit-tested directly)
 // ---------------------------------------------------------------------------
 
-/// Builds a bar chart's primitives within `plot` (SOUL §3.2). Bars anchor to the zero
-/// baseline (`lo = min(data_min, 0)`, `hi = max(data_max, 0)`); negative values hang
-/// *below* the baseline; corners are sharp (`corner_radius 0`); adjacent bars keep a
-/// `≥ BAR_GAP` gap (`bar_w = ((plot_w - gap*(n-1)) / n).max(1.0)`). The optional axis
-/// hairline is emitted **first** so the bars sit atop it. Empty data yields only the
-/// baseline (if enabled) — still a valid box (SOUL §7.3).
-fn bar_primitives(plot: Rect, values: &[f32], color: Color, baseline: bool) -> Vec<Primitive> {
-    let (lo, hi) = value_range(values, true);
+/// How a bar chart lays its bars across the plot: `(x of bar 0, bar width, slot pitch)`.
+/// Plain mode packs bars edge to edge with a `BAR_GAP` gap (`bar_w = ((plot_w -
+/// gap*(n-1)) / n).max(1.0)`); `spaced` (axes on) gives each bar a centered share of an
+/// equal slot, so a category label centers under its bar.
+fn bar_layout(plot: Rect, n: usize, spaced: bool) -> (f32, f32, f32) {
+    let n = n.max(1) as f32;
+    if spaced {
+        let slot = plot.width / n;
+        let bar_w = (slot * BAR_FILL).max(1.0);
+        (plot.x + (slot - bar_w) * 0.5, bar_w, slot)
+    } else {
+        let bar_w = ((plot.width - BAR_GAP * (n - 1.0)) / n).max(1.0);
+        (plot.x, bar_w, bar_w + BAR_GAP)
+    }
+}
+
+/// The colors a chart paints with, resolved once from the ambient theme at build.
+#[derive(Clone, Copy)]
+struct Palette {
+    /// zero line / baseline.
+    axis: Color,
+    /// gridlines.
+    grid: Color,
+    /// tick and category labels.
+    label: Color,
+    /// the page colour, ringing a hovered point.
+    halo: Color,
+}
+
+fn hline(plot: Rect, y: f32, width: f32, color: Color) -> Primitive {
+    Primitive::Line {
+        from: Point { x: plot.x, y },
+        to: Point { x: plot.right(), y },
+        width,
+        color,
+    }
+}
+
+/// Builds a bar chart's primitives within `plot` over the value range `[lo, hi]`
+/// (SOUL §3.2). Bars anchor to the zero baseline; negative values hang *below* it in
+/// `negative`; corners are sharp (`corner_radius 0`); adjacent bars keep a `≥ BAR_GAP`
+/// gap. The optional baseline is emitted **after** the bars so it stays visible across
+/// them. Empty data yields only the baseline (if enabled) — still a valid box (SOUL
+/// §7.3).
+#[allow(clippy::too_many_arguments)]
+fn bar_primitives(
+    plot: Rect,
+    values: &[f32],
+    (lo, hi): (f32, f32),
+    color: Color,
+    negative: Color,
+    baseline: bool,
+    spaced: bool,
+    pal: Palette,
+) -> Vec<Primitive> {
     let baseline_y = map_y(0.0, lo, hi, plot);
     let mut prims = Vec::new();
-    if baseline {
-        prims.push(Primitive::Line {
-            from: Point {
-                x: plot.x,
-                y: baseline_y,
-            },
-            to: Point {
-                x: plot.right(),
-                y: baseline_y,
-            },
-            width: AXIS_WIDTH,
-            color: AXIS,
-        });
-    }
     let n = values.len();
     if n > 0 {
-        let bar_w = ((plot.width - BAR_GAP * (n as f32 - 1.0)) / n as f32).max(1.0);
+        let (x0, bar_w, slot) = bar_layout(plot, n, spaced);
         for (i, &v) in values.iter().enumerate() {
             if !v.is_finite() {
                 continue;
             }
-            let x = plot.x + i as f32 * (bar_w + BAR_GAP);
+            let x = x0 + i as f32 * slot;
             let val_y = map_y(v, lo, hi, plot);
             // The bar spans from the baseline to the value: positive above, negative
             // below. `top`/`height` handle both signs without a branch.
@@ -217,102 +309,584 @@ fn bar_primitives(plot: Rect, values: &[f32], color: Color, baseline: bool) -> V
             let height = (baseline_y - val_y).abs();
             prims.push(Primitive::SolidRect {
                 rect: Rect::new(x, top, bar_w, height),
-                color,
+                color: if v < 0.0 { negative } else { color },
                 corner_radius: 0.0,
             });
         }
     }
+    if baseline {
+        prims.push(hline(plot, baseline_y, AXIS_WIDTH, pal.axis));
+    }
     prims
 }
 
-/// Builds a line chart's primitives within `plot` (SOUL §3.2): the optional zero
-/// baseline hairline first, then `finite-1` [`Primitive::Line`] segments joining
-/// consecutive **finite** points (non-finite points are skipped, so a gap just widens a
-/// segment — SOUL §7.3), then one square marker per finite point when `markers` is set.
-/// `x` is evenly spaced by *original* index (skipping preserves spacing); `y` maps the
-/// plain `[data_min, data_max]` range.
+/// The finite points of a line, evenly spaced by *original* index (skipping a
+/// non-finite value widens a segment instead of compressing the rest — SOUL §7.3).
+/// Each point keeps its source index for labels and tooltips.
+fn line_points(data: Rect, values: &[f32], (lo, hi): (f32, f32)) -> Vec<(usize, Point)> {
+    let n = values.len();
+    values
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_finite())
+        .map(|(i, &v)| {
+            (
+                i,
+                Point {
+                    x: map_x(i, n, data),
+                    y: map_y(v, lo, hi, data),
+                },
+            )
+        })
+        .collect()
+}
+
+/// Builds a line chart's primitives (SOUL §3.2): the optional zero baseline first, then
+/// `finite-1` [`Primitive::Line`] segments joining consecutive points, then one round
+/// marker per point when `markers` is set. Points map into `data`, the plot inset by the
+/// marker radius, so a marker on the extreme never leaves the plot.
+#[allow(clippy::too_many_arguments)]
 fn line_primitives(
     plot: Rect,
+    data: Rect,
     values: &[f32],
+    range: (f32, f32),
     color: Color,
     stroke_width: f32,
     markers: bool,
     baseline: bool,
+    pal: Palette,
 ) -> Vec<Primitive> {
-    let (lo, hi) = value_range(values, false);
     let mut prims = Vec::new();
     if baseline {
-        let baseline_y = map_y(0.0, lo, hi, plot);
-        prims.push(Primitive::Line {
-            from: Point {
-                x: plot.x,
-                y: baseline_y,
-            },
-            to: Point {
-                x: plot.right(),
-                y: baseline_y,
-            },
-            width: AXIS_WIDTH,
-            color: AXIS,
-        });
+        prims.push(hline(
+            plot,
+            map_y(0.0, range.0, range.1, data),
+            AXIS_WIDTH,
+            pal.axis,
+        ));
     }
-    // Collect finite points, keeping index-based x so a skipped point widens the join.
-    let n = values.len();
-    let mut pts: Vec<Point> = Vec::new();
-    for (i, &v) in values.iter().enumerate() {
-        if v.is_finite() {
-            pts.push(Point {
-                x: map_x(i, n, plot),
-                y: map_y(v, lo, hi, plot),
-            });
-        }
-    }
+    let pts = line_points(data, values, range);
     for seg in pts.windows(2) {
         prims.push(Primitive::Line {
-            from: seg[0],
-            to: seg[1],
+            from: seg[0].1,
+            to: seg[1].1,
             width: stroke_width,
             color,
         });
     }
     if markers {
-        let half = MARKER_SIZE * 0.5;
-        for p in &pts {
-            prims.push(Primitive::SolidRect {
-                rect: Rect::new(p.x - half, p.y - half, MARKER_SIZE, MARKER_SIZE),
-                color,
-                corner_radius: 0.0,
-            });
+        for (_, p) in &pts {
+            prims.push(dot(*p, MARKER_SIZE * 0.5, color));
         }
     }
     prims
 }
 
-/// Inserts a `Chart` leaf, writes its first-class a11y surface (SOUL §6.1 — role
-/// `Chart`, name = title, value = [`summary`]), registers the fixed-size intrinsic
-/// measure (SOUL §8.1), and returns the node id plus its **provisional** plot rect
-/// (`node_rect`: origin `(0,0)` at mount, later slid onto the laid-out origin by
-/// `reposition_paint`). Shared by all three chart leaves so the semantic + measure
-/// contract is written in exactly one place.
-fn scaffold(
-    ctx: &mut BuildCtx,
-    parent: Option<WidgetId>,
+/// A filled circle of radius `r` centered on `p`.
+fn dot(p: Point, r: f32, color: Color) -> Primitive {
+    Primitive::SolidRect {
+        rect: Rect::new(p.x - r, p.y - r, 2.0 * r, 2.0 * r),
+        color,
+        corner_radius: r,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// shared build path
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Bars,
+    Line,
+    Spark,
+}
+
+/// Everything a chart view carries into [`build_chart`]; the three public types are
+/// thin builders over this one description.
+struct Spec {
+    kind: Kind,
+    values: Vec<f32>,
+    title: Option<Cow<'static, str>>,
     size: Size,
-    name: Option<String>,
-    values: &[f32],
-) -> (WidgetId, Rect) {
-    let id = ctx.scene.insert(WidgetKind::Chart, parent);
+    color: Color,
+    negative: Color,
+    stroke: f32,
+    markers: bool,
+    baseline: bool,
+    axes: bool,
+    labels: Vec<Cow<'static, str>>,
+    unit: Option<Cow<'static, str>>,
+    prefix: Option<Cow<'static, str>>,
+    tooltips: bool,
+    gutter: f32,
+    end_dot: bool,
+}
+
+impl Spec {
+    fn new(kind: Kind, values: Vec<f32>, size: Size, stroke: f32) -> Spec {
+        Spec {
+            kind,
+            values,
+            title: None,
+            size,
+            color: SERIES[0],
+            negative: SERIES[5],
+            stroke,
+            markers: false,
+            baseline: kind != Kind::Spark,
+            axes: false,
+            labels: Vec::new(),
+            unit: None,
+            prefix: None,
+            tooltips: false,
+            gutter: 0.0,
+            end_dot: false,
+        }
+    }
+}
+
+/// Shapes `text` at the label size, returning the run and its logical width.
+fn shape_label(text: &mut TextShaper, s: &str, scale: f32) -> (ShapedText, f32) {
+    let phys = (LABEL_SIZE * scale).round().max(1.0);
+    let shaped = text.shape(s, phys, None);
+    let w = shaped.width / scale;
+    (shaped, w)
+}
+
+/// Paints `shaped` with its left edge at `x` and its vertical center at `cy`.
+#[allow(clippy::too_many_arguments)]
+fn push_label(
+    pd: &mut PaintData,
+    text: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    shaped: &ShapedText,
+    color: Color,
+    scale: f32,
+    x: f32,
+    cy: f32,
+) {
+    let phys = (LABEL_SIZE * scale).round().max(1.0);
+    let h = shaped.height / scale;
+    rasterize_and_push(
+        pd,
+        text,
+        atlas,
+        shaped,
+        phys as u32,
+        color,
+        scale,
+        Point { x, y: cy - h * 0.5 },
+    );
+}
+
+/// Inserts one invisible hover target at `rect` (chart-local, relative to the stack
+/// root) that shows `label` as a tooltip. The node is a `Group` named with the same
+/// text, so the readout is also in the accessibility tree.
+/// Adds one hover target over a mark. `highlights` (at most two, in mark-local
+/// coordinates and their shown colours) paint only while the tooltip shows, so the
+/// hovered bar or point stands out from its neighbours.
+fn add_mark(
+    ctx: &mut BuildCtx,
+    stack: WidgetId,
+    rect: Rect,
+    label: &str,
+    highlights: [Option<Primitive>; 2],
+) {
+    let id = ctx.scene.insert(WidgetKind::Stack, Some(stack));
+    ctx.scene.a11y_mut(id).role = Role::Group.as_u16();
+    ctx.scene.a11y_mut(id).name = Some(label.to_string());
+    let size = Size {
+        width: rect.width.max(1.0),
+        height: rect.height.max(1.0),
+    };
+    let mut style = ContainerStyle::new(Container::Stack);
+    style.fixed_size = Some(size);
+    style.anchor = Some(Point {
+        x: rect.x,
+        y: rect.y,
+    });
+    ctx.layout.set_container(id, style);
+    // One transparent rect: the node's ordinary paint, which anchors the tooltip
+    // fragment appended after it and gives the repositioning pass an origin.
+    ctx.scene.replace_primitives(
+        id,
+        [Primitive::SolidRect {
+            rect: Rect::new(0.0, 0.0, size.width, size.height),
+            color: Color::TRANSPARENT,
+            corner_radius: 0.0,
+        }],
+    );
+    let mut shown = [None; 2];
+    for (slot, highlight) in shown.iter_mut().zip(highlights) {
+        let Some(mut primitive) = highlight else {
+            continue;
+        };
+        let color = match &mut primitive {
+            Primitive::SolidRect { color, .. } | Primitive::StrokeRect { color, .. } => {
+                std::mem::replace(color, Color::TRANSPARENT)
+            }
+            _ => continue,
+        };
+        let pd = ctx.scene.paint_mut(id);
+        *slot = Some((pd.primitives.len(), color));
+        pd.primitives.push(primitive);
+    }
+    schnellui::widgets::register_hover_tooltip(
+        &ctx.runtime,
+        ctx.scene,
+        ctx.text,
+        ctx.atlas,
+        id,
+        label,
+        size,
+        ctx.scale,
+    );
+    schnellui::widgets::set_tooltip_highlights(&ctx.runtime, id, shown);
+    schnellui::widgets::elevate_tooltip_host(ctx.scene, id);
+}
+
+/// The smallest gap between two shown category labels, in logical px.
+const CATEGORY_LABEL_MIN_GAP: f32 = 8.0;
+
+/// How many category labels to step over so the shown ones keep
+/// [`CATEGORY_LABEL_MIN_GAP`] between them: `1` shows every label, `2` every other
+/// one. Counting runs back from the last label, so the latest category always shows.
+/// `spans` holds each label's left edge and width, left to right.
+fn category_label_stride(spans: &[(f32, f32)]) -> usize {
+    let n = spans.len();
+    (1..n.max(1))
+        .find(|&k| {
+            let shown: Vec<&(f32, f32)> = spans.iter().rev().step_by(k).collect();
+            shown
+                .windows(2)
+                .all(|pair| pair[0].0 >= pair[1].0 + pair[1].1 + CATEGORY_LABEL_MIN_GAP)
+        })
+        .unwrap_or(n.max(1))
+}
+
+/// Builds one chart: the `Chart` leaf with its a11y surface and primitives, and — with
+/// tooltips on — a fixed-size `Stack` root around it plus one hover node per mark.
+/// Returns the node to attach to the parent.
+fn build_chart(ctx: &mut BuildCtx, parent: Option<WidgetId>, spec: Spec) -> WidgetId {
+    let Spec {
+        kind,
+        values,
+        title,
+        size,
+        color,
+        negative,
+        stroke,
+        markers,
+        baseline,
+        axes,
+        labels,
+        unit,
+        prefix,
+        tooltips,
+        gutter,
+        end_dot,
+    } = spec;
+    let n = values.len();
+    let scale = if ctx.scale.is_finite() && ctx.scale > 0.0 {
+        ctx.scale
+    } else {
+        1.0
+    };
+
+    // Structure. With tooltips the leaf is pinned inside a fixed-size stack, next to
+    // the hover nodes; otherwise the leaf alone is the chart, as it always was.
+    let root = if tooltips {
+        let stack = ctx.scene.insert(WidgetKind::Stack, parent);
+        ctx.scene.a11y_mut(stack).role = Role::Group.as_u16();
+        let mut style = ContainerStyle::new(Container::Stack);
+        style.fixed_size = Some(size);
+        ctx.layout.set_container(stack, style);
+        Some(stack)
+    } else {
+        None
+    };
+    let id = ctx.scene.insert(WidgetKind::Chart, root.or(parent));
     {
         // Semantic before visual (SOUL §6.1): a figure with a deterministic summary.
         let a = ctx.scene.a11y_mut(id);
         a.role = Role::Chart.as_u16();
-        a.name = name;
-        a.value = Some(summary(values));
+        a.name = title.map(|c| c.into_owned());
+        a.value = Some(summary(&values));
     }
     // A chart is a fixed-size box; layout positions it, the chart never resizes itself.
     ctx.layout.set_measure(id, Box::new(move |_avail| size));
-    let plot = node_rect(ctx.scene, id, size);
-    (id, plot)
+    let area = node_rect(ctx.scene, id, size);
+
+    let pal = {
+        let t = schnellui::widgets::theme_for(&ctx.runtime, id);
+        Palette {
+            axis: t.outline,
+            grid: t.separator,
+            label: t.text_muted,
+            halo: t.surface,
+        }
+    };
+
+    // Value range, extended to whole ticks when axes are on.
+    let raw = value_range(&values, kind == Kind::Bars);
+    let target = (((size.height - 2.0 * LABEL_SIZE) / TICK_SPACING).round() as i32).clamp(2, 6);
+    let nice = axes.then(|| nice_axis(raw.0, raw.1, target as usize));
+    let range = nice.as_ref().map_or(raw, |a| (a.lo, a.hi));
+
+    // Label runs, shaped up front: their widths set the gutters.
+    let tick_labels: Vec<(ShapedText, f32)> = nice
+        .iter()
+        .flat_map(|a| a.ticks.iter().map(|&t| format_tick(t, a.step)))
+        .map(|s| shape_label(ctx.text, &s, scale))
+        .collect();
+    let cat_labels: Vec<(ShapedText, f32)> = if axes {
+        labels
+            .iter()
+            .take(n)
+            .map(|s| shape_label(ctx.text, s, scale))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let text_h = tick_labels
+        .first()
+        .or(cat_labels.first())
+        .map_or(LABEL_SIZE, |(s, _)| s.height / scale);
+
+    // Plot rect: the whole box in plain mode; with axes the gutters make room for the
+    // tick labels (left, shared via `.gutter`) and the category labels (bottom).
+    let (left, top, bottom, right) = if axes {
+        let tick_w = tick_labels.iter().fold(0.0f32, |m, (_, w)| m.max(*w));
+        let left = (tick_w + LABEL_GAP).max(gutter);
+        // The last category label is centered on its mark; keep what hangs past the
+        // mark's own half-extent inside the box.
+        let clearance = match kind {
+            Kind::Bars => (area.width - left) / n.max(1) as f32 * 0.5,
+            _ if markers => MARKER_SIZE * 0.5,
+            _ => stroke * 0.5,
+        };
+        let right = cat_labels
+            .last()
+            .map_or(0.0, |(_, w)| (w * 0.5 - clearance).max(0.0).ceil());
+        (
+            left,
+            (text_h * 0.5).ceil(),
+            if cat_labels.is_empty() {
+                (text_h * 0.5).ceil()
+            } else {
+                (text_h + LABEL_GAP).ceil()
+            },
+            right,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0)
+    };
+    let plot = Rect::new(
+        area.x + left,
+        area.y + top,
+        (area.width - left - right).max(1.0),
+        (area.height - top - bottom).max(1.0),
+    );
+    // Lines map their points into the plot shrunk by the marker (or end dot, or half
+    // stroke) radius, so nothing sits half outside it.
+    let data = match kind {
+        Kind::Bars => plot,
+        Kind::Line if markers => inset(plot, MARKER_SIZE * 0.5),
+        Kind::Line if axes => inset(plot, stroke * 0.5),
+        Kind::Spark if end_dot => inset(plot, END_DOT_RADIUS.max(stroke * 0.5)),
+        _ => plot,
+    };
+
+    let mut prims: Vec<Primitive> = Vec::new();
+    if axes {
+        // Anchor: the min-origin slide lands on the box corner, not on a label.
+        prims.push(Primitive::SolidRect {
+            rect: area,
+            color: Color::TRANSPARENT,
+            corner_radius: 0.0,
+        });
+        if let Some(a) = &nice {
+            for &t in &a.ticks {
+                // The zero line is drawn separately (and above the marks).
+                let zero = t == 0.0 && baseline;
+                let at_floor = t == a.lo && !(a.lo <= 0.0 && a.hi >= 0.0 && baseline);
+                if zero {
+                    continue;
+                }
+                let (w, c) = if at_floor {
+                    (AXIS_WIDTH, pal.axis)
+                } else {
+                    (GRID_WIDTH, pal.grid)
+                };
+                prims.push(hline(plot, map_y(t, a.lo, a.hi, data), w, c));
+            }
+        }
+    }
+    // Zero line: over the bars, under the line; only where zero is in range once axes
+    // pick the range (plain mode keeps the old clamp-to-edge behaviour).
+    let zero_in_range = range.0 <= 0.0 && range.1 >= 0.0;
+    let show_zero = baseline && (!axes || zero_in_range);
+    match kind {
+        Kind::Bars => prims.extend(bar_primitives(
+            plot, &values, range, color, negative, show_zero, axes, pal,
+        )),
+        Kind::Line | Kind::Spark => {
+            prims.extend(line_primitives(
+                plot,
+                data,
+                &values,
+                range,
+                color,
+                stroke,
+                markers && kind == Kind::Line,
+                show_zero,
+                pal,
+            ));
+            if kind == Kind::Spark && end_dot {
+                if let Some((_, p)) = line_points(data, &values, range).last() {
+                    prims.push(dot(*p, END_DOT_RADIUS, color));
+                }
+            }
+        }
+    }
+    ctx.scene.replace_primitives(id, prims);
+
+    // Text: tick labels right-aligned against the plot, category labels centered under
+    // their marks and thinned left to right so neighbours never touch.
+    if axes {
+        let pd = ctx.scene.paint_mut(id);
+        if let Some(a) = &nice {
+            for (&t, (shaped, w)) in a.ticks.iter().zip(&tick_labels) {
+                let y = map_y(t, a.lo, a.hi, data);
+                push_label(
+                    pd,
+                    ctx.text,
+                    ctx.atlas,
+                    shaped,
+                    pal.label,
+                    scale,
+                    plot.x - LABEL_GAP - w,
+                    y,
+                );
+            }
+        }
+        let (bar_x0, bar_w, slot) = bar_layout(plot, n, true);
+        let spans: Vec<(f32, f32)> = cat_labels
+            .iter()
+            .enumerate()
+            .map(|(i, (_, w))| {
+                let cx = match kind {
+                    Kind::Bars => bar_x0 + i as f32 * slot + bar_w * 0.5,
+                    _ => map_x(i, n, data),
+                };
+                (
+                    (cx - w * 0.5).clamp(area.x, (area.right() - w).max(area.x)),
+                    *w,
+                )
+            })
+            .collect();
+        let stride = category_label_stride(&spans);
+        let last = spans.len().saturating_sub(1);
+        for (i, ((shaped, _), &(x, _))) in cat_labels.iter().zip(&spans).enumerate() {
+            if !(last - i).is_multiple_of(stride) {
+                continue;
+            }
+            push_label(
+                pd,
+                ctx.text,
+                ctx.atlas,
+                shaped,
+                pal.label,
+                scale,
+                x,
+                plot.bottom() + LABEL_GAP + text_h * 0.5,
+            );
+        }
+    }
+
+    // Hover targets, one per finite mark, in chart-local coordinates.
+    if let Some(stack) = root {
+        let text_for = |i: usize, v: f32| {
+            let value = with_unit(&format_value(v), prefix.as_deref(), unit.as_deref());
+            match labels.get(i) {
+                Some(l) => format!("{l}: {value}"),
+                None => value,
+            }
+        };
+        let local = |r: Rect| Rect::new(r.x - area.x, r.y - area.y, r.width, r.height);
+        match kind {
+            Kind::Bars => {
+                let (x0, bar_w, slot) = bar_layout(plot, n, axes);
+                let baseline_y = map_y(0.0, range.0, range.1, plot);
+                for (i, &v) in values.iter().enumerate() {
+                    if !v.is_finite() {
+                        continue;
+                    }
+                    let vy = map_y(v, range.0, range.1, plot);
+                    let (mut top, mut h) = (baseline_y.min(vy), (baseline_y - vy).abs());
+                    if h < HIT_MIN {
+                        // grow away from the baseline so the target stays reachable
+                        if v < 0.0 {
+                            h = HIT_MIN;
+                        } else {
+                            top -= HIT_MIN - h;
+                            h = HIT_MIN;
+                        }
+                    }
+                    let x = x0 + i as f32 * slot - (slot - bar_w) * 0.5;
+                    // The bar itself, in mark-local coordinates, darkened.
+                    let bar = Rect::new(
+                        (slot - bar_w) * 0.5,
+                        baseline_y.min(vy) - top,
+                        bar_w,
+                        (baseline_y - vy).abs(),
+                    );
+                    add_mark(
+                        ctx,
+                        stack,
+                        local(Rect::new(x, top, slot, h)),
+                        &text_for(i, v),
+                        [
+                            Some(Primitive::SolidRect {
+                                rect: bar,
+                                color: MARK_HOVER_SHADE,
+                                corner_radius: 0.0,
+                            }),
+                            None,
+                        ],
+                    );
+                }
+            }
+            _ => {
+                for (i, p) in line_points(data, &values, range) {
+                    let r = Rect::new(
+                        p.x - HIT_SIZE * 0.5,
+                        p.y - HIT_SIZE * 0.5,
+                        HIT_SIZE,
+                        HIT_SIZE,
+                    );
+                    // A larger point with a halo in the page colour, centred on the mark.
+                    let c = Point {
+                        x: HIT_SIZE * 0.5,
+                        y: HIT_SIZE * 0.5,
+                    };
+                    add_mark(
+                        ctx,
+                        stack,
+                        local(r),
+                        &text_for(i, values[i]),
+                        [
+                            Some(dot(c, HOVER_POINT_RADIUS + HOVER_HALO, pal.halo)),
+                            Some(dot(c, HOVER_POINT_RADIUS, color)),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+    root.unwrap_or(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -320,38 +894,33 @@ fn scaffold(
 // ---------------------------------------------------------------------------
 
 /// A single-series bar chart leaf (SOUL §8.1). Bars anchor to the zero baseline;
-/// negative values hang below it. `.title()` sets **only** the accessible name (SOUL
-/// §6.1) — it is *not* painted; compose a `Text` above the chart for a visible title.
+/// negative values hang below it in their own color. `.title()` sets **only** the
+/// accessible name (SOUL §6.1) — it is *not* painted; compose a `Text` above the chart
+/// for a visible title. `.axes(true)`, `.labels(..)` and `.tooltips(true)` make the
+/// values readable (see the module docs).
 pub struct BarChart {
-    values: Vec<f32>,
-    title: Option<Cow<'static, str>>,
-    size: Size,
-    color: Color,
-    baseline: bool,
+    spec: Spec,
 }
 
 impl BarChart {
-    /// A bar chart over `values` (default size 240×140, color `SERIES[0]`, baseline on).
+    /// A bar chart over `values` (default size 240×140, color `SERIES[0]`, negatives
+    /// `SERIES[5]`, baseline on, no axes, no tooltips).
     pub fn new(values: impl Into<Vec<f32>>) -> BarChart {
         BarChart {
-            values: values.into(),
-            title: None,
-            size: DEFAULT_SIZE,
-            color: SERIES[0],
-            baseline: true,
+            spec: Spec::new(Kind::Bars, values.into(), DEFAULT_SIZE, 0.0),
         }
     }
 
     /// Sets the **accessible name** (SOUL §6.1). Not painted — compose a `Text` title
     /// above the chart for a visible one.
     pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> BarChart {
-        self.title = Some(title.into());
+        self.spec.title = Some(title.into());
         self
     }
 
     /// Sets the chart's fixed size in logical px (default 240×140).
     pub fn size(mut self, w: f32, h: f32) -> BarChart {
-        self.size = Size {
+        self.spec.size = Size {
             width: w,
             height: h,
         };
@@ -360,13 +929,62 @@ impl BarChart {
 
     /// Sets the bar fill color (default `SERIES[0]`).
     pub fn color(mut self, color: Color) -> BarChart {
-        self.color = color;
+        self.spec.color = color;
         self
     }
 
-    /// Toggles the zero-line [`AXIS`] hairline (default `true`).
+    /// Sets the fill of bars below zero (default `SERIES[5]`, red), so a negative reads
+    /// as one without comparing positions.
+    pub fn negative_color(mut self, color: Color) -> BarChart {
+        self.spec.negative = color;
+        self
+    }
+
+    /// Toggles the zero-line [`AXIS`] (default `true`), drawn over the bars.
     pub fn baseline(mut self, baseline: bool) -> BarChart {
-        self.baseline = baseline;
+        self.spec.baseline = baseline;
+        self
+    }
+
+    /// Adds a value axis: gridlines, tick labels and centered bars (default `false`).
+    pub fn axes(mut self, axes: bool) -> BarChart {
+        self.spec.axes = axes;
+        self
+    }
+
+    /// Category labels, one per bar, shown under the bars (needs `.axes(true)`) and in
+    /// the tooltips. Labels that would overlap are skipped.
+    pub fn labels<S: Into<Cow<'static, str>>>(
+        mut self,
+        labels: impl IntoIterator<Item = S>,
+    ) -> BarChart {
+        self.spec.labels = labels.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The unit appended to tooltip values, such as `"ms"`, `"%"` or `"k users"`.
+    pub fn unit(mut self, unit: impl Into<Cow<'static, str>>) -> BarChart {
+        self.spec.unit = Some(unit.into());
+        self
+    }
+
+    /// Text put before tooltip values, such as `"$"`, so `.prefix("$").unit("k")`
+    /// reads `Feb: $7k`.
+    pub fn prefix(mut self, prefix: impl Into<Cow<'static, str>>) -> BarChart {
+        self.spec.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Makes each bar a hover target showing `"Label: value unit"` (default `false`).
+    pub fn tooltips(mut self, tooltips: bool) -> BarChart {
+        self.spec.tooltips = tooltips;
+        self
+    }
+
+    /// Minimum width of the tick-label gutter in px, so charts with different tick
+    /// labels still share one plot width (needs `.axes(true)`).
+    pub fn gutter(mut self, gutter: f32) -> BarChart {
+        self.spec.gutter = gutter.max(0.0);
         self
     }
 
@@ -383,12 +1001,7 @@ impl BarChart {
 
 impl View for BarChart {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
-        let this = *self;
-        let name = this.title.map(|c| c.into_owned());
-        let (id, plot) = scaffold(ctx, parent, this.size, name, &this.values);
-        let prims = bar_primitives(plot, &this.values, this.color, this.baseline);
-        ctx.scene.replace_primitives(id, prims);
-        id
+        build_chart(ctx, parent, self.spec)
     }
 }
 
@@ -397,42 +1010,31 @@ impl View for BarChart {
 // ---------------------------------------------------------------------------
 
 /// A single-series line chart leaf (SOUL §8.1): `n-1` [`Primitive::Line`] segments
-/// joining consecutive points, an optional zero baseline, and optional per-point
-/// markers. `.title()` sets **only** the accessible name (SOUL §6.1).
+/// joining consecutive points, an optional zero baseline, and optional round per-point
+/// markers. `.title()` sets **only** the accessible name (SOUL §6.1). Axes, category
+/// labels and tooltips are opt-in exactly as on [`BarChart`].
 pub struct LineChart {
-    values: Vec<f32>,
-    title: Option<Cow<'static, str>>,
-    size: Size,
-    color: Color,
-    stroke_width: f32,
-    markers: bool,
-    baseline: bool,
+    spec: Spec,
 }
 
 impl LineChart {
     /// A line chart over `values` (default size 240×140, color `SERIES[0]`, stroke 2.0,
-    /// no markers, baseline on).
+    /// no markers, baseline on, no axes, no tooltips).
     pub fn new(values: impl Into<Vec<f32>>) -> LineChart {
         LineChart {
-            values: values.into(),
-            title: None,
-            size: DEFAULT_SIZE,
-            color: SERIES[0],
-            stroke_width: LINE_STROKE,
-            markers: false,
-            baseline: true,
+            spec: Spec::new(Kind::Line, values.into(), DEFAULT_SIZE, LINE_STROKE),
         }
     }
 
     /// Sets the **accessible name** (SOUL §6.1). Not painted.
     pub fn title(mut self, title: impl Into<Cow<'static, str>>) -> LineChart {
-        self.title = Some(title.into());
+        self.spec.title = Some(title.into());
         self
     }
 
     /// Sets the chart's fixed size in logical px (default 240×140).
     pub fn size(mut self, w: f32, h: f32) -> LineChart {
-        self.size = Size {
+        self.spec.size = Size {
             width: w,
             height: h,
         };
@@ -441,25 +1043,68 @@ impl LineChart {
 
     /// Sets the line color (default `SERIES[0]`).
     pub fn color(mut self, color: Color) -> LineChart {
-        self.color = color;
+        self.spec.color = color;
         self
     }
 
     /// Sets the line stroke width in logical px (default 2.0).
     pub fn stroke_width(mut self, width: f32) -> LineChart {
-        self.stroke_width = width;
+        self.spec.stroke = width;
         self
     }
 
-    /// Toggles 8×8 logical-px per-point square markers (default `false`).
+    /// Toggles round 9 px per-point markers (default `false`). The plot is inset by the
+    /// marker radius so edge points stay inside it.
     pub fn markers(mut self, markers: bool) -> LineChart {
-        self.markers = markers;
+        self.spec.markers = markers;
         self
     }
 
-    /// Toggles the zero-line [`AXIS`] hairline (default `true`).
+    /// Toggles the zero-line [`AXIS`] (default `true`).
     pub fn baseline(mut self, baseline: bool) -> LineChart {
-        self.baseline = baseline;
+        self.spec.baseline = baseline;
+        self
+    }
+
+    /// Adds a value axis: gridlines and tick labels (default `false`).
+    pub fn axes(mut self, axes: bool) -> LineChart {
+        self.spec.axes = axes;
+        self
+    }
+
+    /// Category labels, one per point, shown under the plot (needs `.axes(true)`) and in
+    /// the tooltips. Labels that would overlap are skipped.
+    pub fn labels<S: Into<Cow<'static, str>>>(
+        mut self,
+        labels: impl IntoIterator<Item = S>,
+    ) -> LineChart {
+        self.spec.labels = labels.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The unit appended to tooltip values, such as `"ms"`, `"%"` or `"k users"`.
+    pub fn unit(mut self, unit: impl Into<Cow<'static, str>>) -> LineChart {
+        self.spec.unit = Some(unit.into());
+        self
+    }
+
+    /// Text put before tooltip values, such as `"$"`, so `.prefix("$").unit("k")`
+    /// reads `Feb: $7k`.
+    pub fn prefix(mut self, prefix: impl Into<Cow<'static, str>>) -> LineChart {
+        self.spec.prefix = Some(prefix.into());
+        self
+    }
+
+    /// Makes each point a hover target showing `"Label: value unit"` (default `false`).
+    pub fn tooltips(mut self, tooltips: bool) -> LineChart {
+        self.spec.tooltips = tooltips;
+        self
+    }
+
+    /// Minimum width of the tick-label gutter in px, so charts with different tick
+    /// labels still share one plot width (needs `.axes(true)`).
+    pub fn gutter(mut self, gutter: f32) -> LineChart {
+        self.spec.gutter = gutter.max(0.0);
         self
     }
 
@@ -476,19 +1121,7 @@ impl LineChart {
 
 impl View for LineChart {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
-        let this = *self;
-        let name = this.title.map(|c| c.into_owned());
-        let (id, plot) = scaffold(ctx, parent, this.size, name, &this.values);
-        let prims = line_primitives(
-            plot,
-            &this.values,
-            this.color,
-            this.stroke_width,
-            this.markers,
-            this.baseline,
-        );
-        ctx.scene.replace_primitives(id, prims);
-        id
+        build_chart(ctx, parent, self.spec)
     }
 }
 
@@ -497,36 +1130,52 @@ impl View for LineChart {
 // ---------------------------------------------------------------------------
 
 /// A minimal single-series sparkline leaf (SOUL §8.1): line segments only — no
-/// baseline, no markers, stroke 1.5, default size 80×20. Still carries the first-class
-/// a11y summary (SOUL §6.1) like every chart.
+/// baseline, no markers, stroke 2, default size 80×20 — and an optional end dot on the
+/// latest value. Still carries the first-class a11y summary (SOUL §6.1) like every
+/// chart. Pair it with a `Text` for the value it ends on.
 pub struct Sparkline {
-    values: Vec<f32>,
-    size: Size,
-    color: Color,
+    spec: Spec,
 }
 
 impl Sparkline {
     /// A sparkline over `values` (default size 80×20, color `SERIES[0]`).
     pub fn new(values: impl Into<Vec<f32>>) -> Sparkline {
         Sparkline {
-            values: values.into(),
-            size: SPARK_SIZE,
-            color: SERIES[0],
+            spec: Spec::new(Kind::Spark, values.into(), SPARK_SIZE, SPARK_STROKE),
         }
     }
 
     /// Sets the line color (default `SERIES[0]`).
     pub fn color(mut self, color: Color) -> Sparkline {
-        self.color = color;
+        self.spec.color = color;
         self
     }
 
     /// Sets the sparkline's fixed size in logical px (default 80×20).
     pub fn size(mut self, w: f32, h: f32) -> Sparkline {
-        self.size = Size {
+        self.spec.size = Size {
             width: w,
             height: h,
         };
+        self
+    }
+
+    /// Sets the line stroke width in logical px (default 2.0).
+    pub fn stroke_width(mut self, width: f32) -> Sparkline {
+        self.spec.stroke = width;
+        self
+    }
+
+    /// Marks the latest point with a dot (default `false`).
+    pub fn end_dot(mut self, end_dot: bool) -> Sparkline {
+        self.spec.end_dot = end_dot;
+        self
+    }
+
+    /// Draws the zero line under the trend, pinned to the bottom edge when every value
+    /// is above zero (default `false`). It gives the trend a floor to read against.
+    pub fn baseline(mut self, baseline: bool) -> Sparkline {
+        self.spec.baseline = baseline;
         self
     }
 
@@ -543,15 +1192,13 @@ impl Sparkline {
 
 impl View for Sparkline {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
-        let this = *self;
         // No title builder — a sparkline is nameless (minimal), value = summary only.
-        let (id, plot) = scaffold(ctx, parent, this.size, None, &this.values);
-        // Reuse the line path with baseline + markers off (SOUL §8.1): segments only.
-        let prims = line_primitives(plot, &this.values, this.color, SPARK_STROKE, false, false);
-        ctx.scene.replace_primitives(id, prims);
-        id
+        build_chart(ctx, parent, self.spec)
     }
 }
+
+#[cfg(test)]
+mod tests_axes;
 
 #[cfg(test)]
 mod tests {
@@ -623,8 +1270,8 @@ mod tests {
         assert_eq!(SERIES[0], Color::rgb(0x2a, 0x78, 0xd6));
         // A couple of later slots to pin the fixed order.
         assert_eq!(SERIES[3], Color::rgb(0x00, 0x83, 0x00)); // green
-        assert_eq!(SERIES[7], Color::rgb(0xeb, 0x68, 0x34)); // orange
-        assert_eq!(AXIS, Color::rgb(0xc3, 0xc2, 0xb7));
+        assert_eq!(SERIES[7], Color::rgb(0xd1, 0x53, 0x1f)); // orange
+        assert_eq!(AXIS, Color::rgb(0x7a, 0x86, 0x99));
     }
 
     // --- value normalization (SOUL §7.3; tested directly) ---

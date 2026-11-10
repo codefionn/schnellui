@@ -132,6 +132,7 @@ impl App {
             theme_binding: None,
             animations_enabled: true,
             continuous_redraw: false,
+            escape_exits: false,
             redraw_interval: None,
             redraw_signal: RedrawSignal::default(),
             window_title_provider: None,
@@ -330,8 +331,33 @@ impl App {
         // `focus_step` is already scoped to the highest modal in a stack. A
         // content-only dialog has no tab stop, so AccessKit falls back to the
         // dialog itself as the temporary accessibility-tree root.
-        if schnellui::widgets::active_modal_panel(&self.scene).is_some() {
-            let _ = self.focus_step(false);
+        if let Some(panel) = schnellui::widgets::active_modal_panel(&self.scene) {
+            // Content first: a title bar's close button is a later stop.
+            let content = schnellui::a11y::with_tab_order(&self.scene, |order| {
+                order.iter().copied().find(|&id| {
+                    schnellui::widgets::is_in_subtree(&self.scene, id, panel)
+                        && !schnellui::widgets::is_dialog_chrome_control(
+                            &self.widgets,
+                            &self.scene,
+                            id,
+                        )
+                })
+            });
+            let starts_in_content = content.is_some_and(|id| {
+                schnellui::a11y::with_tab_order(&self.scene, |order| {
+                    order
+                        .iter()
+                        .find(|&&other| {
+                            schnellui::widgets::is_in_subtree(&self.scene, other, panel)
+                        })
+                        .is_some_and(|&first| first != id)
+                })
+            });
+            if starts_in_content {
+                let _ = self.focus(content);
+            } else {
+                let _ = self.focus_step(false);
+            }
         }
     }
 }

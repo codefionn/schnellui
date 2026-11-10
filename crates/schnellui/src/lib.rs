@@ -525,6 +525,10 @@ pub struct App {
     /// surfaces such as terminals use this to present data arriving on worker
     /// threads without coupling those threads to winit.
     continuous_redraw: bool,
+    /// Whether Escape closes the native window when no context menu or dialog
+    /// takes it. Off by default, so applications see the key; the examples
+    /// turn it on with [`App::set_escape_exits`].
+    escape_exits: bool,
     /// Optional paced native redraw used by embedders that need periodic polling
     /// without presenting at the monitor refresh rate while idle.
     redraw_interval: Option<Duration>,

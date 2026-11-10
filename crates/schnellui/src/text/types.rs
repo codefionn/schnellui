@@ -279,6 +279,10 @@ pub struct ShapeOptions {
     /// The typeface the whole run is shaped in ([`FontFace::Sans`] by default —
     /// rich text picks emphasis/mono faces per span via [`SpanSpec`] instead).
     pub face: FontFace,
+    /// Line height as a multiple of the font size. `None` keeps the default:
+    /// tight for a single line, reading leading once text can wrap. A text area
+    /// sets one value so wrapped rows and single lines share a stride.
+    pub line_height: Option<f32>,
 }
 
 impl ShapeOptions {
@@ -291,6 +295,7 @@ impl ShapeOptions {
             wrap: WrapMode::default(),
             align: TextAlign::default(),
             face: FontFace::default(),
+            line_height: None,
         }
     }
     #[inline]
@@ -311,6 +316,11 @@ impl ShapeOptions {
     #[inline]
     pub fn face(mut self, face: FontFace) -> ShapeOptions {
         self.face = face;
+        self
+    }
+    #[inline]
+    pub fn line_height(mut self, line_height: Option<f32>) -> ShapeOptions {
+        self.line_height = line_height;
         self
     }
 }

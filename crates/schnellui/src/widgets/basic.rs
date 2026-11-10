@@ -31,6 +31,8 @@ const PROGRESS_WIDTH: f32 = 160.0;
 const PROGRESS_HEIGHT: f32 = 6.0;
 /// The rounded-rect radius shared by the progress track + fill.
 const PROGRESS_RADIUS: f32 = 3.0;
+/// How far a progress track fades from the media grey toward the page.
+const PROGRESS_TRACK_FADE: f32 = 0.45;
 /// Default loading-spinner edge and number of radial strokes.
 const SPINNER_SIZE: f32 = 24.0;
 const SPINNER_SEGMENTS: usize = 12;
@@ -109,9 +111,12 @@ fn emit_progress_paint(
     pd.primitives.clear();
     let t = theme_for(runtime, id);
     let radius = t.shape.radius(PROGRESS_RADIUS, rect.height);
+    // A lighter track than a slider's: the fill carries the value (it meets 3:1
+    // against the page on its own), and the pale track keeps a progress bar
+    // from reading as a slider without its thumb.
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        color: t.track_color(),
+        color: crate::widgets::theme::mix_color(t.media, t.page, PROGRESS_TRACK_FADE),
         corner_radius: radius,
     });
     pd.primitives.push(Primitive::SolidRect {

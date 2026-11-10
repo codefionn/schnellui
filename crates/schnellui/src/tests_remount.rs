@@ -843,3 +843,15 @@ fn full_atlas_is_not_carried_into_a_remount() {
     assert!(!fresh.adopt_text_engine(&mut donor));
     assert_eq!(fresh.atlas.id(), before);
 }
+
+#[test]
+fn escape_exits_is_off_by_default_and_survives_a_host_remount() {
+    use schnellui::widgets::Button;
+
+    let mut previous = App::mount_with_size(Button::new("Run"), 200, 100);
+    assert!(!previous.escape_exits());
+    previous.set_escape_exits(true);
+    let mut replacement = App::mount_with_size(Button::new("Run"), 200, 100);
+    replacement.inherit_host_configuration(&mut previous);
+    assert!(replacement.escape_exits());
+}

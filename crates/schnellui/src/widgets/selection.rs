@@ -44,9 +44,11 @@ mod tests;
 /// The selected tab's bottom indicator bar thickness.
 const TAB_INDICATOR: f32 = 2.0;
 /// Horizontal space reserved for a tree disclosure chevron.
-const TAB_DISCLOSURE_SPACE: f32 = 14.0;
-const TAB_DISCLOSURE_HALF: f32 = 3.0;
-const TAB_DISCLOSURE_STROKE: f32 = 1.5;
+const TAB_DISCLOSURE_SPACE: f32 = 18.0;
+const TAB_DISCLOSURE_HALF: f32 = 4.0;
+const TAB_DISCLOSURE_STROKE: f32 = 1.75;
+/// How far the chevron's arms spread from its centre line.
+const TAB_DISCLOSURE_SPREAD: f32 = 2.0;
 const TAB_CLOSE_HALF: f32 = 3.5;
 const TAB_CLOSE_STROKE: f32 = 1.5;
 
@@ -376,23 +378,29 @@ fn emit_selectable_paint(
             [
                 Point {
                     x: cx - TAB_DISCLOSURE_HALF,
-                    y: cy - 1.5,
+                    y: cy - TAB_DISCLOSURE_SPREAD,
                 },
-                Point { x: cx, y: cy + 1.5 },
+                Point {
+                    x: cx,
+                    y: cy + TAB_DISCLOSURE_SPREAD,
+                },
                 Point {
                     x: cx + TAB_DISCLOSURE_HALF,
-                    y: cy - 1.5,
+                    y: cy - TAB_DISCLOSURE_SPREAD,
                 },
             ]
         } else {
             [
                 Point {
-                    x: cx - 1.5,
+                    x: cx - TAB_DISCLOSURE_SPREAD,
                     y: cy - TAB_DISCLOSURE_HALF,
                 },
-                Point { x: cx + 1.5, y: cy },
                 Point {
-                    x: cx - 1.5,
+                    x: cx + TAB_DISCLOSURE_SPREAD,
+                    y: cy,
+                },
+                Point {
+                    x: cx - TAB_DISCLOSURE_SPREAD,
                     y: cy + TAB_DISCLOSURE_HALF,
                 },
             ]
@@ -505,6 +513,24 @@ pub(crate) fn resize_tab_surface(
         TabAppearance::Navigation | TabAppearance::Underline
     ) {
         return;
+    }
+    // A row with trailing actions (a grouped list's) fills under them: the
+    // actions are drawn on top, so the selection and hover fill reads as the
+    // full row.
+    if close.is_none() {
+        let row_right = scene
+            .node(id)
+            .and_then(|node| node.parent)
+            .filter(|&parent| {
+                scene
+                    .node(parent)
+                    .is_some_and(|node| node.kind == WidgetKind::Row)
+            })
+            .and_then(|parent| scene.layout(parent))
+            .map(|layout| layout.rect.right());
+        if let Some(right) = row_right {
+            rect.width = rect.width.max(right - rect.x);
+        }
     }
     if tab_appearance(runtime, id) == TabAppearance::Underline {
         let thickness = tab_style(runtime, id)

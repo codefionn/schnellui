@@ -49,11 +49,11 @@ const AREA_TEXT_SIZE: f32 = 14.0;
 const MIN_AREA_W: f32 = 260.0;
 const MIN_ROWS: u32 = 3;
 /// Inner padding between the border and the text.
-const AREA_PAD: f32 = 8.0;
+const AREA_PAD: f32 = 12.0;
 /// Trailing wash width marking a selected newline.
 const NEWLINE_SEL_W: f32 = 5.0;
 /// Separation between the line-number gutter and source text.
-const GUTTER_GAP: f32 = 8.0;
+const GUTTER_GAP: f32 = 14.0;
 
 /// The implementor-supplied highlighter: the whole value in, one styled span
 /// list **per line** out (line texts must concatenate back to each source
@@ -833,9 +833,14 @@ fn shape_area_line(shaper: &mut TextShaper, line: &str, phys: f32) -> schnellui:
         line,
         &ShapeOptions::new(phys)
             .wrap(WrapMode::NoWrap)
-            .face(FontFace::Mono),
+            .face(FontFace::Mono)
+            .line_height(Some(AREA_LINE_HEIGHT)),
     )
 }
+
+/// Every source line, wrapped or not and plain or highlighted, is set at this
+/// multiple of the font size, so rows keep one stride down the whole area.
+pub(crate) const AREA_LINE_HEIGHT: f32 = 1.4;
 
 fn shape_area_line_wrapped(
     shaper: &mut TextShaper,
@@ -850,7 +855,8 @@ fn shape_area_line_wrapped(
         &ShapeOptions::new(phys)
             .max_width(max_width)
             .wrap(wrap)
-            .face(FontFace::Mono),
+            .face(FontFace::Mono)
+            .line_height(Some(AREA_LINE_HEIGHT)),
     )
 }
 

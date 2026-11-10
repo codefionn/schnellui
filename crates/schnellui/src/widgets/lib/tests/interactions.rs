@@ -304,23 +304,25 @@ fn pointer_hover_decorates_enabled_controls_and_clears_on_leave_or_disable() {
     ));
 }
 
+// Label colours stay light: a state foreground that would drop below 4.5:1
+// on the button fill is not applied (see `MIN_STATE_LABEL_CONTRAST`).
 #[test]
 fn interaction_channels_compose_and_restore_without_rebuilding_paint() {
     let runtime_handle = crate::widgets::Runtime::new();
     let runtime = &runtime_handle;
     let hover = InteractionStyle::all(
         Color::rgba(11, 22, 33, 44),
-        Color::rgb(55, 66, 77),
+        Color::rgb(245, 246, 247),
         Color::rgb(88, 99, 110),
     );
     let focus = InteractionStyle::all(
         Color::rgba(12, 23, 34, 45),
-        Color::rgb(56, 67, 78),
+        Color::rgb(246, 247, 248),
         Color::rgb(89, 100, 111),
     );
     let active = InteractionStyle::all(
         Color::rgba(13, 24, 35, 46),
-        Color::rgb(57, 68, 79),
+        Color::rgb(247, 248, 249),
         Color::rgb(90, 101, 112),
     );
     let themed = Theme {
@@ -608,4 +610,194 @@ fn press_wash_comes_off_after_hover_is_taken_from_under_it() {
             scene.node(id).map(|n| n.kind)
         );
     }
+}
+
+/// A toggle's hover halo and focus ring are concentric with the control, with
+/// the same offset on every side, whatever sits beside it in its row.
+#[test]
+fn toggle_halo_and_ring_are_concentric_with_the_control() {
+    for (kind, theme) in (0..3).flat_map(|kind| {
+        [
+            crate::theme::LIGHT,
+            crate::theme::BRUTAL,
+            crate::theme::CANDY,
+        ]
+        .map(|theme| (kind, theme))
+    }) {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let toggle: Box<dyn View> = match kind {
+            0 => Box::new(Checkbox::new(false)),
+            1 => Box::new(Switch::new(false)),
+            _ => Box::new(Radio::new(false)),
+        };
+        let (mut scene, mut layout, mut text, mut atlas, root) = build_one(
+            runtime,
+            ThemeProvider::new(
+                theme,
+                Row::new()
+                    .gap(12.0)
+                    .align(Align::Center)
+                    .child(toggle)
+                    .child(Text::new("Complete Book train tickets")),
+            ),
+        );
+        layout.sync_tree(&scene, root);
+        layout.compute(
+            &mut scene,
+            root,
+            Size {
+                width: 400.0,
+                height: 80.0,
+            },
+        );
+        reposition_paint(runtime, &mut scene);
+        let id = scene.node(root).unwrap().children[0];
+        let body = paint_bounds(runtime, &scene, id).unwrap();
+        let around = |outer: Rect| {
+            [
+                body.x - outer.x,
+                body.y - outer.y,
+                outer.x + outer.width - (body.x + body.width),
+                outer.y + outer.height - (body.y + body.height),
+            ]
+        };
+        let equal =
+            |sides: [f32; 4], want: f32| sides.iter().all(|side| (side - want).abs() < 0.01);
+
+        let center = Point {
+            x: body.x + body.width * 0.5,
+            y: body.y + body.height * 0.5,
+        };
+        assert!(update_pointer_proximity(runtime, &mut scene, center));
+        let halo = scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .find_map(|p| match *p {
+                Primitive::SolidRect { rect, .. } if rect.width > body.width + 1.0 => Some(rect),
+                _ => None,
+            })
+            .expect("hover halo");
+        assert!(
+            equal(around(halo), TOGGLE_HALO),
+            "kind {kind}: halo {halo:?} around {body:?}"
+        );
+        assert_eq!(paint_bounds(runtime, &scene, id).unwrap(), body);
+
+        assert!(dispatch_focus(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            Some(id)
+        ));
+        let (ring, ..) = ring_stroke(&scene, id);
+        assert!(
+            equal(around(ring), FOCUS_RING_GAP + FOCUS_RING_W),
+            "kind {kind}: ring {ring:?} around {body:?}"
+        );
+    }
+}
+
+/// A focus ring on a rounded navigation row has the row's own corner radius.
+#[test]
+fn navigation_focus_ring_follows_the_rows_fill_radius() {
+    for kind in 0..3 {
+        for theme in [crate::theme::LIGHT, crate::theme::CANDY, crate::theme::DARK] {
+            let runtime_handle = crate::widgets::Runtime::new();
+            let runtime = &runtime_handle;
+            let row: Box<dyn View> = match kind {
+                0 => Box::new(Tab::new("Inbox").appearance(TabAppearance::Navigation)),
+                1 => Box::new(ListItem::new("Inbox").selected(true)),
+                _ => Box::new(
+                    Tab::new("Inbox")
+                        .appearance(TabAppearance::Navigation)
+                        .selected(true),
+                ),
+            };
+            let (mut scene, mut layout, mut text, mut atlas, root) =
+                build_one(runtime, ThemeProvider::new(theme, Column::new().child(row)));
+            layout.sync_tree(&scene, root);
+            layout.compute(
+                &mut scene,
+                root,
+                Size {
+                    width: 300.0,
+                    height: 200.0,
+                },
+            );
+            reposition_paint(runtime, &mut scene);
+            let id = scene.node(root).unwrap().children[0];
+            let fill = match scene.paint(id).unwrap().primitives[0] {
+                Primitive::SolidRect { corner_radius, .. } => corner_radius,
+                _ => panic!("row fill is first"),
+            };
+            assert!(dispatch_focus(
+                runtime,
+                &mut scene,
+                &mut text,
+                &mut atlas,
+                Some(id)
+            ));
+            let (_, ring, ..) = ring_stroke(&scene, id);
+            assert_eq!(ring, fill, "kind {kind}");
+            assert!(update_pointer_proximity(
+                runtime,
+                &mut scene,
+                Point { x: 20.0, y: 10.0 }
+            ));
+            let (_, ring, ..) = ring_stroke(&scene, id);
+            assert_eq!(ring, fill, "kind {kind} hovered");
+        }
+    }
+}
+
+/// A button's tooltip comes down when the button opens its menu, and stays
+/// down while the menu is open and the pointer rests or moves on the button.
+#[test]
+fn opening_a_buttons_menu_hides_its_tooltip() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, mut text, mut atlas, id) = build_one(
+        runtime,
+        Button::new("More")
+            .tooltip("More actions")
+            .width(60.0)
+            .height(28.0)
+            .menu(ContextMenu::new().item(ContextMenuItem::new("Rename"))),
+    );
+    let viewport = Size {
+        width: 300.0,
+        height: 200.0,
+    };
+    layout.sync_tree(&scene, id);
+    layout.compute(&mut scene, id, viewport);
+    reposition_paint(runtime, &mut scene);
+    let shown = |runtime: &crate::widgets::Runtime| {
+        runtime.with(|rt| rt.borrow().hover_tooltips.get(id).map(|t| t.visible))
+    };
+    let on_button = Point { x: 10.0, y: 10.0 };
+    assert!(update_pointer_proximity(runtime, &mut scene, on_button));
+    assert_eq!(shown(runtime), Some(true));
+
+    assert!(open_context_menu(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        id,
+        Point { x: 0.0, y: 28.0 },
+        viewport,
+        1.0,
+        false,
+    ));
+    assert_eq!(shown(runtime), Some(false), "hidden as the menu opens");
+    update_pointer_proximity(runtime, &mut scene, Point { x: 11.0, y: 10.0 });
+    assert_eq!(shown(runtime), Some(false), "stays hidden while it is open");
+
+    dismiss_context_menu(runtime, &mut scene);
+    update_pointer_proximity(runtime, &mut scene, Point { x: 12.0, y: 10.0 });
+    assert_eq!(shown(runtime), Some(true), "back once it closes");
 }

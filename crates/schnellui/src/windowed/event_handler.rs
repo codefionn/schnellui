@@ -331,18 +331,27 @@ impl WindowedApp {
         if is_control_key(&event.logical_key, event.physical_key) {
             self.control_pressed = event.state == ElementState::Pressed;
         }
-        // Keys that move a highlight take hover from the resting pointer.
+        // Any key that does something (a highlight move, Enter, Space, a
+        // typed character, a shortcut) takes hover from the resting pointer,
+        // so a key the pointer happens to rest on does not look pressed.
         if event.state == ElementState::Pressed
-            && matches!(
+            && !matches!(
                 event.logical_key,
                 Key::Named(
-                    NamedKey::ArrowUp
-                        | NamedKey::ArrowDown
-                        | NamedKey::PageUp
-                        | NamedKey::PageDown
-                        | NamedKey::Home
-                        | NamedKey::End
-                        | NamedKey::Tab
+                    NamedKey::Shift
+                        | NamedKey::Control
+                        | NamedKey::Alt
+                        | NamedKey::AltGraph
+                        | NamedKey::Super
+                        | NamedKey::Meta
+                        | NamedKey::Hyper
+                        | NamedKey::CapsLock
+                        | NamedKey::NumLock
+                        | NamedKey::ScrollLock
+                        | NamedKey::Fn
+                        | NamedKey::FnLock
+                        | NamedKey::Symbol
+                        | NamedKey::SymbolLock
                 )
             )
             && self.app.hold_pointer_hover()
@@ -375,8 +384,10 @@ impl WindowedApp {
                 return EventTail::Normal;
             }
             // Escape dismisses the top-most dialog first. A
-            // persistent dialog still consumes it; only an
-            // overlay-less application exits the window.
+            // persistent dialog still consumes it. Without an overlay it
+            // exits the window only when the app asked for that
+            // (`App::set_escape_exits`); otherwise it goes on to the
+            // focused widget like any other key.
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
                 if self.app.dismiss_context_menu() {
                     if let Some(w) = &self.window {
@@ -399,10 +410,14 @@ impl WindowedApp {
                         // early return from this Escape event.
                         self.poll_remount();
                         self.sync_cursor();
+                        return EventTail::Skip;
                     }
-                    None => event_loop.exit(),
+                    None if self.app.escape_exits() => {
+                        event_loop.exit();
+                        return EventTail::Skip;
+                    }
+                    None => {}
                 }
-                return EventTail::Skip;
             }
             let context_key = matches!(&event.logical_key, Key::Named(NamedKey::ContextMenu))
                 || (self.modifiers.shift_key()

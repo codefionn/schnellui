@@ -125,6 +125,7 @@ impl App {
         self.paint_bindings
             .remap(|widget| paint_counterparts.get(widget));
         self.continuous_redraw = previous.continuous_redraw;
+        self.escape_exits = previous.escape_exits;
         self.redraw_interval = previous.redraw_interval;
         self.hot_reload = previous.hot_reload.take();
         self.redraw_signal = previous.redraw_signal.clone();

@@ -913,7 +913,8 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
 
 /// Moves an anchored, floating box back inside the root viewport: shifts it
 /// left when it runs past the right edge, and opens it upward
-/// (`anchor_above`) when it runs past the bottom and fits above.
+/// (`anchor_above`) when it runs past the bottom and fits above. When it fits
+/// on neither side it slides up to end at the bottom edge, top edge first.
 fn keep_anchored_in_view(
     viewport: Option<Rect>,
     style: &ContainerStyle,
@@ -933,8 +934,14 @@ fn keep_anchored_in_view(
         // The parent's top in absolute coordinates.
         let parent_y = at.y - anchor.y;
         let flipped = parent_y + above - size.height;
-        if at.y + size.height > bottom && flipped >= view.y {
-            at.y = flipped;
+        if at.y + size.height > bottom {
+            at.y = if flipped >= view.y {
+                flipped
+            } else {
+                // Fits on neither side: slide up until the bottom edge is in
+                // view, over the trigger if need be, but never past the top.
+                (bottom - size.height).max(view.y)
+            };
         }
     }
     at
@@ -999,5 +1006,43 @@ fn map_align(a: Align) -> taffy::AlignItems {
         Align::Center => taffy::AlignItems::CENTER,
         Align::End => taffy::AlignItems::FLEX_END,
         Align::Stretch => taffy::AlignItems::STRETCH,
+    }
+}
+
+#[cfg(test)]
+mod anchored_tests {
+    use super::*;
+
+    fn popup_style() -> ContainerStyle {
+        let mut style = ContainerStyle::new(Container::Column);
+        // a 30px trigger with the popup 4px below it, 4px above it when flipped
+        style.anchor = Some(Point { x: 0.0, y: 34.0 });
+        style.anchor_above = Some(-4.0);
+        style
+    }
+
+    fn place(view: (f32, f32), parent_y: f32, height: f32) -> f32 {
+        let view = Some(Rect::new(0.0, 0.0, view.0, view.1));
+        let at = Point {
+            x: 0.0,
+            y: parent_y + 34.0,
+        };
+        let size = taffy::Size {
+            width: 80.0,
+            height,
+        };
+        keep_anchored_in_view(view, &popup_style(), at, size).y
+    }
+
+    #[test]
+    fn a_popup_opens_below_then_above_then_slides_into_view() {
+        // room below: stays below the trigger
+        assert_eq!(place((200.0, 300.0), 10.0, 90.0), 44.0);
+        // no room below, room above: opens upward
+        assert_eq!(place((200.0, 300.0), 200.0, 120.0), 76.0);
+        // room on neither side: slides up so its bottom edge is the window's
+        assert_eq!(place((200.0, 153.0), 40.0, 110.0), 43.0);
+        // taller than the window: its top edge stays in view
+        assert_eq!(place((200.0, 117.0), 40.0, 140.0), 0.0);
     }
 }

@@ -483,11 +483,12 @@ pub fn reposition_paint(runtime: &Runtime, scene: &mut Scene) {
     // rather than the tree size. `reposition_node` may add entries (a re-emit that
     // writes geometry), so walk by index and re-read the length.
     let mut scroll_parents: SmallVec<[WidgetId; 8]> = SmallVec::new();
-    // Tooltips are placed against the root's box, so a window resize moves
+    // Tooltips are placed against the window (or the root's box), so a resize moves
     // them even where their own control stays put.
-    let viewport_changed = scene
-        .root()
-        .is_some_and(|root| scene.geometry_changed().contains(&root));
+    let viewport_changed = crate::widgets::take_window_resized(runtime)
+        | scene
+            .root()
+            .is_some_and(|root| scene.geometry_changed().contains(&root));
     let mut i = 0;
     while i < scene.geometry_changed().len() {
         let id = scene.geometry_changed()[i];
@@ -683,6 +684,31 @@ fn translate_primitives(primitives: &mut [Primitive], dx: f32, dy: f32) {
 /// The handler is taken out of the registry before it runs, so user code (which may
 /// re-enter to dispatch another widget) never executes under the registry borrow
 /// (§3.1 discipline).
+/// Fires a text input's submit handler, the way Enter submits a browser
+/// form field. Returns `None` when `id` has no submit handler, so the key
+/// falls through to the field's normal editing.
+pub fn dispatch_submit(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<bool> {
+    let disabled = scene
+        .a11y(id)
+        .map(|a| StateFlags(a.state).contains(StateFlags::DISABLED))
+        .unwrap_or(false);
+    let mut cb = runtime.with(|rt| {
+        rt.borrow_mut()
+            .handlers
+            .get_mut(id)
+            .and_then(|h| h.submit.take())
+    })?;
+    if !disabled {
+        cb();
+    }
+    runtime.with(|rt| {
+        if let Some(h) = rt.borrow_mut().handlers.get_mut(id) {
+            h.submit = Some(cb);
+        }
+    });
+    Some(!disabled)
+}
+
 pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
     let Some(node) = scene.node(id) else {
         return false;

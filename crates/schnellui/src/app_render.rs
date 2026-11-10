@@ -351,6 +351,16 @@ impl App {
                     false
                 }
             }
+            // Activating a text field focuses it for typing, as a pointer
+            // click on it does.
+            Action::Click
+                if matches!(
+                    self.scene.node(id).map(|n| n.kind),
+                    Some(WidgetKind::TextInput | WidgetKind::TextArea)
+                ) =>
+            {
+                self.focus(Some(id))
+            }
             Action::Click => schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id),
             _ => schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id),
         };

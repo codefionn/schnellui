@@ -323,7 +323,11 @@ impl TextShaper {
             }
             // Text that can flow onto several lines gets reading leading, so a
             // paragraph is not set as tight as a one-line label.
-            if opts.max_width.is_some() && opts.wrap != WrapMode::NoWrap {
+            if let Some(line_height) = opts.line_height {
+                builder.push_default(StyleProperty::LineHeight(
+                    parley::LineHeight::FontSizeRelative(line_height),
+                ));
+            } else if opts.max_width.is_some() && opts.wrap != WrapMode::NoWrap {
                 builder.push_default(StyleProperty::LineHeight(
                     parley::LineHeight::FontSizeRelative(PARAGRAPH_LINE_HEIGHT),
                 ));
