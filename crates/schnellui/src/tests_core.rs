@@ -792,6 +792,95 @@ fn content_drag_preserves_clicks_and_previews_an_accepted_drop() {
 }
 
 #[test]
+fn escape_cancels_a_content_drag_before_it_drops() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use schnellui::scene::Point;
+    use schnellui::widgets::{Button, DragRelease, Row, TextInput};
+
+    let clicks = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let escapes = Rc::new(Cell::new(0));
+    let view = Row::new()
+        .gap(80.0)
+        .child(
+            Button::new("source")
+                .on_click({
+                    let clicks = clicks.clone();
+                    move || clicks.set(clicks.get() + 1)
+                })
+                .on_drag_start(|| {})
+                .on_drag_end({
+                    let ends = ends.clone();
+                    move |accepted| ends.borrow_mut().push(accepted)
+                }),
+        )
+        .child(Button::new("target").on_drop({
+            let drops = drops.clone();
+            move || drops.set(drops.get() + 1)
+        }))
+        .child(TextInput::new("").label("Note"));
+    let mut app = App::mount_with_size(view, 600, 120);
+    app.register_focused_key_handler(Role::TextInput, Some("Note"), {
+        let escapes = escapes.clone();
+        move |key| {
+            let escape = key == UiKey::Escape;
+            if escape {
+                escapes.set(escapes.get() + 1);
+            }
+            escape
+        }
+    });
+    app.frame();
+
+    let center = |app: &App, role: Role, name: &str| {
+        let id = app.find_widget(role, Some(name)).unwrap();
+        let rect = app.scene().layout(id).unwrap().rect;
+        (
+            id,
+            Point {
+                x: rect.x + rect.width * 0.5,
+                y: rect.y + rect.height * 0.5,
+            },
+        )
+    };
+    let (_, from) = center(&app, Role::Button, "source");
+    let (target, to) = center(&app, Role::Button, "target");
+    let (note, _) = center(&app, Role::TextInput, "Note");
+    let before = app.scene().paint(target).unwrap().primitives.len();
+
+    // Escape mid-drag drops nothing, even while a widget that handles
+    // Escape itself holds focus, and the release that follows is inert.
+    assert!(app.focus(Some(note)));
+    assert!(app.begin_drag(from));
+    assert!(app.update_drag(to));
+    assert!(app.dispatch_key(UiKey::Escape), "Escape cancels the drag");
+    assert_eq!(escapes.get(), 0, "the drag takes Escape first");
+    assert_eq!(app.scene().paint(target).unwrap().primitives.len(), before);
+    assert_eq!(*ends.borrow(), vec![false]);
+    assert_eq!(app.end_drag(to), DragRelease::None);
+    assert_eq!(drops.get(), 0);
+    assert_eq!(clicks.get(), 0);
+
+    // The window's Escape ladder cancels it the same way.
+    assert!(app.begin_drag(from));
+    assert!(app.update_drag(to));
+    assert_eq!(app.dispatch_escape(), Some(true));
+    assert_eq!(app.end_drag(to), DragRelease::None);
+    assert_eq!(*ends.borrow(), vec![false, false]);
+    assert_eq!(drops.get(), 0);
+
+    // A press that never crossed the threshold is not a drag yet: Escape
+    // leaves it alone and the release still clicks.
+    assert!(app.begin_drag(from));
+    assert!(app.dispatch_key(UiKey::Escape));
+    assert_eq!(escapes.get(), 1);
+    assert!(matches!(app.end_drag(from), DragRelease::Click(_)));
+}
+
+#[test]
 fn dock_area_resolves_right_edge_and_previews_the_result_above_content() {
     use std::cell::Cell;
     use std::rc::Rc;

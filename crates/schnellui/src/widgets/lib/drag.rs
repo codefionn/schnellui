@@ -422,6 +422,39 @@ pub fn update_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> bool {
     changed
 }
 
+/// Cancels a content drag that has started moving: the drop preview goes,
+/// the source's `on_drag_end(false)` runs, and the release that follows does
+/// nothing. A press that has not crossed the drag threshold is left alone,
+/// so it can still become a click. Returns whether a drag was cancelled.
+pub fn cancel_drag(runtime: &Runtime, scene: &mut Scene) -> bool {
+    let Some(capture) = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        rt.drag_pointer
+            .filter(|capture| capture.active)
+            .and_then(|_| rt.drag_pointer.take())
+    }) else {
+        return false;
+    };
+    if let Some(hover) = capture.hovered {
+        strip_drop_preview(runtime, scene, hover);
+    }
+    let callback = runtime.with(|rt| {
+        rt.borrow_mut()
+            .handlers
+            .get_mut(capture.source)
+            .and_then(|handlers| handlers.drag_end.take())
+    });
+    if let Some(mut callback) = callback {
+        callback(false);
+        runtime.with(|rt| {
+            if let Some(handlers) = rt.borrow_mut().handlers.get_mut(capture.source) {
+                handlers.drag_end = Some(callback);
+            }
+        });
+    }
+    true
+}
+
 /// Releases a possible/active content drag. A sub-threshold gesture becomes a
 /// click; a real drag fires the hovered target's drop handler followed by the
 /// source's `on_drag_end(accepted)` callback.

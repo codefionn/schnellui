@@ -237,6 +237,10 @@ impl App {
     pub fn dispatch_key(&mut self, key: UiKey<'_>) -> bool {
         use widgets::{ActivateKey, Adjust, EditKey};
 
+        // A drag in flight owns Escape before any focused handler sees it.
+        if key == UiKey::Escape && self.cancel_drag() {
+            return true;
+        }
         if self.context_menu_is_open() {
             if let Some(changed) = self.step_context_menu(key) {
                 return changed;
@@ -770,10 +774,14 @@ impl App {
         dismissed | back.is_some_and(|id| self.focus(Some(id)))
     }
 
-    /// Escape's ladder, the same from the keyboard path and the window: an
-    /// open menu closes first, then any open dropdown or combo list, then the
-    /// top dialog. `None` when nothing took it.
+    /// Escape's ladder, the same from the keyboard path and the window: a
+    /// content drag in flight is cancelled first, then an open menu closes,
+    /// then any open dropdown or combo list, then the top dialog. `None`
+    /// when nothing took it.
     pub(crate) fn dispatch_escape(&mut self) -> Option<bool> {
+        if self.cancel_drag() {
+            return Some(true);
+        }
         if self.context_menu_is_open() {
             return Some(self.dismiss_context_menu());
         }
@@ -1081,6 +1089,12 @@ impl App {
     /// Releases a possible/active content drag.
     pub fn end_drag(&mut self, point: scene::Point) -> widgets::DragRelease {
         schnellui::widgets::end_drag(&self.widgets, &mut self.scene, point)
+    }
+
+    /// Cancels a content drag that has started moving, as Escape does. The
+    /// release that follows drops nothing and clicks nothing.
+    pub fn cancel_drag(&mut self) -> bool {
+        schnellui::widgets::cancel_drag(&self.widgets, &mut self.scene)
     }
 
     /// Captures a pointer press on movable dialog title chrome or an enabled
