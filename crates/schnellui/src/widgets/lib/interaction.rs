@@ -1574,12 +1574,27 @@ pub fn update_pointer_proximity_held(
                 scene,
                 id,
                 tooltip,
-                !held && !own_menu_open && rect.contains(point),
+                !held && !own_menu_open && rect.contains(point) && uncovered(scene, id, hit),
             );
         }
         changed
     });
     control_changed | proximity_changed
+}
+
+/// Whether the pointer that hit `hit` is on `id` rather than on a layer
+/// painted over it, such as an open dropdown list or a dialog. Each node
+/// belongs to its outermost overlay, or to the page below every overlay;
+/// `id` is covered when the hit belongs to a layer drawn above its own.
+fn uncovered(scene: &Scene, id: WidgetId, hit: Option<WidgetId>) -> bool {
+    let Some(hit) = hit else { return true };
+    let layer = |node: WidgetId| {
+        std::iter::successors(Some(node), |n| scene.node(*n).and_then(|node| node.parent))
+            .filter(|n| scene.is_overlay(*n))
+            .last()
+            .map(|n| (scene.overlay_level(n), scene.overlay_order(n)))
+    };
+    layer(hit) <= layer(id)
 }
 
 /// Hides `id`'s hover tooltip, if it has one. Returns whether paint changed.

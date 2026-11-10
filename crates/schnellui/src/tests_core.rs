@@ -1871,6 +1871,53 @@ fn an_open_dropdown_on_the_page_is_above_a_modeless_dialog() {
     assert_eq!(app.hit_test(center), Some(option));
 }
 
+/// Open a dropdown whose list covers a button with a tooltip, and point at
+/// the option over the button. The button's tooltip came up beside the list
+/// although the pointer was on the option, not the button.
+#[test]
+fn a_control_covered_by_an_open_list_shows_no_tooltip() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Button, Column, Dropdown, DropdownOption};
+    let view = Column::new()
+        .child(
+            Dropdown::new("Theme")
+                .open(true)
+                .option(DropdownOption::new("Light").selected(true))
+                .option(DropdownOption::new("Dark"))
+                .option(DropdownOption::new("Forest")),
+        )
+        .child(Button::new("Archive everything").tooltip("Archive it"));
+    let mut app = App::mount_with_size(view, 640, 400);
+    app.frame();
+    let button = app
+        .find_widget(Role::Button, Some("Archive everything"))
+        .unwrap();
+    let shown = |app: &App| {
+        app.scene().paint(button).map_or(0, |p| {
+            p.primitives
+                .iter()
+                .filter(|p| matches!(p, Primitive::GlyphQuad { color, .. } if color.a != 0))
+                .count()
+        })
+    };
+    let label_only = shown(&app);
+    let covered = app.scene().composited_rect(button);
+    let option = ["Light", "Dark", "Forest"]
+        .into_iter()
+        .filter_map(|name| app.find_widget(Role::ListBoxOption, Some(name)))
+        .map(|id| app.scene().composited_rect(id))
+        .map(|r| Point {
+            x: r.x + 8.0,
+            y: r.y + r.height / 2.0,
+        })
+        .find(|p| covered.contains(*p))
+        .expect("the test needs an option over the button");
+    assert_ne!(app.hit_test(option), Some(button));
+    app.update_pointer_proximity(option);
+    app.frame();
+    assert_eq!(shown(&app), label_only, "the tooltip stays hidden");
+}
+
 #[test]
 fn a_dropdown_is_at_least_its_min_width() {
     use schnellui::widgets::{Column, Dropdown, DropdownOption};
