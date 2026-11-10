@@ -1064,6 +1064,32 @@ mod context_menu_clipboard {
     }
 
     #[test]
+    fn debug_ctrl_home_and_end_reach_the_text_area() {
+        let mut app = App::mount(crate::widgets::TextArea::new("one\ntwo\nthree"));
+        app.frame();
+        let area = app.find_widget(Role::MultilineTextInput, None).unwrap();
+        app.focus(Some(area));
+        let mut host = windowed_host(app, None);
+        let ctrl = |name: &str| DebugKey {
+            ctrl: true,
+            ..key(name)
+        };
+        host.handle_debug_key(ctrl("home"));
+        host.app
+            .dispatch_edit_key(crate::widgets::EditKey::Insert("^"));
+        assert_eq!(value(&host, area), "^one\ntwo\nthree");
+        host.handle_debug_key(ctrl("end"));
+        host.app
+            .dispatch_edit_key(crate::widgets::EditKey::Insert("$"));
+        assert_eq!(value(&host, area), "^one\ntwo\nthree$");
+        // Without Ctrl, Home stays on the line.
+        host.handle_debug_key(key("home"));
+        host.app
+            .dispatch_edit_key(crate::widgets::EditKey::Insert("@"));
+        assert_eq!(value(&host, area), "^one\ntwo\n@three$");
+    }
+
+    #[test]
     fn pointer_path_still_pastes() {
         let (mut host, input) = field_host();
         act(&mut host, Action::ShowContextMenu, input);

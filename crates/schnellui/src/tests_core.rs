@@ -1725,6 +1725,72 @@ fn full_fidelity_focused_input_routes_keys_pointer_focus_ime_and_clipboard() {
     );
 }
 
+/// Browsers do not distinguish Ctrl on Home/End for sliders, so neither do we.
+#[test]
+fn slider_ignores_ctrl_on_home_and_end() {
+    use schnellui::widgets::{Column, Slider};
+
+    let mut app =
+        App::mount_with_size(Column::new().child(Slider::new(50.0, 0.0, 100.0)), 400, 300);
+    app.frame();
+    let slider = app.find_widget(Role::Slider, None).unwrap();
+    app.focus(Some(slider));
+    let value = |app: &App| app.scene().a11y(slider).unwrap().value.clone();
+    assert!(app.dispatch_key(UiKey::End {
+        shift: false,
+        ctrl: true
+    }));
+    assert_eq!(value(&app).as_deref(), Some("100"));
+    assert!(app.dispatch_key(UiKey::Home {
+        shift: true,
+        ctrl: true
+    }));
+    assert_eq!(value(&app).as_deref(), Some("0"));
+}
+
+/// Ctrl+Home and Ctrl+End act like Home and End in a single-line input.
+#[test]
+fn text_input_treats_ctrl_home_and_end_like_home_and_end() {
+    use schnellui::widgets::{Column, EditKey, TextInput};
+
+    let mut app = App::mount_with_size(Column::new().child(TextInput::new("hello")), 400, 300);
+    app.frame();
+    let input = app.find_widget(Role::TextInput, None).unwrap();
+    app.focus(Some(input));
+    app.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: true,
+    });
+    assert!(app.dispatch_edit_key(EditKey::Insert("<")));
+    assert_eq!(
+        app.scene().a11y(input).unwrap().value.as_deref(),
+        Some("<hello")
+    );
+    app.dispatch_key(UiKey::End {
+        shift: false,
+        ctrl: true,
+    });
+    assert!(app.dispatch_edit_key(EditKey::Insert(">")));
+    assert_eq!(
+        app.scene().a11y(input).unwrap().value.as_deref(),
+        Some("<hello>")
+    );
+    app.dispatch_key(UiKey::Home {
+        shift: true,
+        ctrl: true,
+    });
+    app.dispatch_key(UiKey::End {
+        shift: false,
+        ctrl: true,
+    });
+    app.dispatch_key(UiKey::Home {
+        shift: true,
+        ctrl: true,
+    });
+    assert!(app.dispatch_edit_key(EditKey::Insert("x")));
+    assert_eq!(app.scene().a11y(input).unwrap().value.as_deref(), Some("x"));
+}
+
 /// A focused slider takes the range keys — arrows ±1 step, PageUp/PageDown
 /// ±10, Home/End min/max — and an inbound AccessKit `Increment`/`Decrement`
 /// action reaches the identical adjust path (SOUL §6.3).
@@ -1758,14 +1824,20 @@ fn slider_keys_and_increment_actions_adjust_the_value() {
         app.scene().a11y(slider).unwrap().value.as_deref(),
         Some("60")
     );
-    assert!(app.dispatch_key(UiKey::End { shift: false }));
+    assert!(app.dispatch_key(UiKey::End {
+        shift: false,
+        ctrl: false
+    }));
     assert_eq!(
         app.scene().a11y(slider).unwrap().value.as_deref(),
         Some("100")
     );
     // at the max, a further increment is a no-op
     assert!(!app.dispatch_key(UiKey::Up { shift: false }));
-    assert!(app.dispatch_key(UiKey::Home { shift: false }));
+    assert!(app.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert_eq!(
         app.scene().a11y(slider).unwrap().value.as_deref(),
         Some("0")
@@ -2558,7 +2630,10 @@ mod undo_redo {
         assert_eq!(value(&app, id), "fixed");
 
         let (mut app, id) = area_app("a\nb\nc");
-        assert!(app.dispatch_key(UiKey::Home { shift: false }));
+        assert!(app.dispatch_key(UiKey::Home {
+            shift: false,
+            ctrl: false
+        }));
         assert!(app.dispatch_edit_key(EditKey::Insert("> ")));
         assert_eq!(value(&app, id), "a\nb\n> c");
         assert!(app.dispatch_key(UiKey::Undo));

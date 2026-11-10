@@ -203,11 +203,17 @@ fn run_program(ops: &[Op]) {
                     model.move_to(to, *shift, end);
                 }
                 Op::Home { shift } => {
-                    sim.key(UiKey::Home { shift: *shift });
+                    sim.key(UiKey::Home {
+                        shift: *shift,
+                        ctrl: false,
+                    });
                     model.move_to(0, *shift, None);
                 }
                 Op::End { shift } => {
-                    sim.key(UiKey::End { shift: *shift });
+                    sim.key(UiKey::End {
+                        shift: *shift,
+                        ctrl: false,
+                    });
                     model.move_to(model.text.len(), *shift, None);
                 }
                 Op::SelectAll => {

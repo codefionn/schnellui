@@ -216,8 +216,8 @@ impl WindowedApp {
         let walk = match &event.logical_key {
             Key::Named(NamedKey::ArrowDown) => Some(UiKey::Down { shift }),
             Key::Named(NamedKey::ArrowUp) => Some(UiKey::Up { shift }),
-            Key::Named(NamedKey::Home) => Some(UiKey::Home { shift }),
-            Key::Named(NamedKey::End) => Some(UiKey::End { shift }),
+            Key::Named(NamedKey::Home) => Some(UiKey::Home { shift, ctrl: false }),
+            Key::Named(NamedKey::End) => Some(UiKey::End { shift, ctrl: false }),
             _ => None,
         };
         if let Some(changed) = walk.and_then(|key| self.app.step_context_menu(key)) {
@@ -1022,9 +1022,11 @@ impl WindowedApp {
             }),
             "home" => self.dispatch_ui_key(UiKey::Home {
                 shift: request.shift,
+                ctrl: request.ctrl,
             }),
             "end" => self.dispatch_ui_key(UiKey::End {
                 shift: request.shift,
+                ctrl: request.ctrl,
             }),
             "page_up" => self.dispatch_ui_key(UiKey::PageUp),
             "page_down" => self.dispatch_ui_key(UiKey::PageDown),
@@ -1238,8 +1240,8 @@ impl WindowedApp {
             Key::Named(NamedKey::ArrowRight) => UiKey::Right { shift, ctrl },
             Key::Named(NamedKey::ArrowUp) => UiKey::Up { shift },
             Key::Named(NamedKey::ArrowDown) => UiKey::Down { shift },
-            Key::Named(NamedKey::Home) => UiKey::Home { shift },
-            Key::Named(NamedKey::End) => UiKey::End { shift },
+            Key::Named(NamedKey::Home) => UiKey::Home { shift, ctrl },
+            Key::Named(NamedKey::End) => UiKey::End { shift, ctrl },
             Key::Named(NamedKey::PageUp) => UiKey::PageUp,
             Key::Named(NamedKey::PageDown) => UiKey::PageDown,
             Key::Named(NamedKey::Escape) => UiKey::Escape,

@@ -30,11 +30,17 @@ fn scroll_keys_page_the_viewport() {
     assert_eq!(app.scene().scroll_offset(sv).y, 2.0 * page);
     assert!(app.dispatch_key(UiKey::Space { shift: true }));
     assert_eq!(app.scene().scroll_offset(sv).y, page);
-    assert!(app.dispatch_key(UiKey::End { shift: false }));
+    assert!(app.dispatch_key(UiKey::End {
+        shift: false,
+        ctrl: false
+    }));
     let max = app.scene().scroll_offset(sv).y;
     assert!(max > 2.0 * page, "End pins to the far end");
     assert!(!app.dispatch_key(UiKey::PageDown), "already at the end");
-    assert!(app.dispatch_key(UiKey::Home { shift: false }));
+    assert!(app.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert_eq!(app.scene().scroll_offset(sv).y, 0.0);
 }
 
@@ -188,7 +194,10 @@ fn content_remount_preserves_focused_text_area_selection() {
         .find_widget(Role::MultilineTextInput, Some("Message"))
         .unwrap();
     previous.focus(Some(previous_area));
-    assert!(previous.dispatch_key(UiKey::Home { shift: false }));
+    assert!(previous.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert!(previous.dispatch_key(UiKey::Right {
         shift: true,
         ctrl: false,
@@ -305,9 +314,15 @@ fn remount_preserves_every_editor_and_uses_component_refs_across_reordering() {
     let first = previous.scene().resolve_ref(first_ref).unwrap();
     let second = previous.scene().resolve_ref(second_ref).unwrap();
     assert!(previous.focus(Some(first)));
-    assert!(previous.dispatch_key(UiKey::Home { shift: false }));
+    assert!(previous.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert!(previous.focus(Some(second)));
-    assert!(previous.dispatch_key(UiKey::Home { shift: false }));
+    assert!(previous.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert!(previous.dispatch_key(UiKey::Right {
         shift: false,
         ctrl: false,
@@ -563,7 +578,10 @@ fn focused_text_input_consumes_keys_before_scrolling() {
         shift: false,
         ctrl: false
     }));
-    assert!(app.dispatch_key(UiKey::Home { shift: false }));
+    assert!(app.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert_eq!(
         app.scene().scroll_offset(sv).y,
         0.0,
@@ -1132,9 +1150,21 @@ fn grouped_tab_list_arrows_walk_rows_across_groups_and_fold_branches() {
     assert_eq!(app.focused_widget(), Some(other), "across groups");
     key(&mut app, UiKey::Up { shift: false });
     assert_eq!(app.focused_widget(), Some(child));
-    key(&mut app, UiKey::Home { shift: false });
+    key(
+        &mut app,
+        UiKey::Home {
+            shift: false,
+            ctrl: false,
+        },
+    );
     assert_eq!(app.focused_widget(), Some(branch));
-    key(&mut app, UiKey::End { shift: false });
+    key(
+        &mut app,
+        UiKey::End {
+            shift: false,
+            ctrl: false,
+        },
+    );
     assert_eq!(app.focused_widget(), Some(other));
     let selected = |app: &App, id| {
         schnellui::a11y::StateFlags(app.scene().a11y(id).unwrap().state)
@@ -1289,9 +1319,15 @@ fn enter_or_space_on_a_menu_button_opens_its_menu() {
         assert_eq!(app.focused_widget(), pulse, "Down wraps to the first row");
         app.dispatch_key(UiKey::Up { shift: false });
         assert_eq!(app.focused_widget(), notes, "Up wraps to the last row");
-        app.dispatch_key(UiKey::Home { shift: false });
+        app.dispatch_key(UiKey::Home {
+            shift: false,
+            ctrl: false,
+        });
         assert_eq!(app.focused_widget(), pulse, "Home goes to the first row");
-        app.dispatch_key(UiKey::End { shift: false });
+        app.dispatch_key(UiKey::End {
+            shift: false,
+            ctrl: false,
+        });
         assert_eq!(app.focused_widget(), notes, "End goes to the last row");
 
         app.dispatch_key(key);

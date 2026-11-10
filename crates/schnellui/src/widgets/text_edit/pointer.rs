@@ -22,6 +22,16 @@ pub enum EditKey<'a> {
     End {
         select: bool,
     },
+    /// Ctrl+Home: the start of the whole value, on a multi-line
+    /// [`TextArea`](crate::widgets::TextArea) as on a single-line input, where it
+    /// is the same as [`EditKey::Home`]. Collapses extra carets to one.
+    DocStart {
+        select: bool,
+    },
+    /// Ctrl+End: the end of the whole value; see [`EditKey::DocStart`].
+    DocEnd {
+        select: bool,
+    },
     /// Caret up/down one visual line — meaningful only on a multi-line
     /// [`TextArea`](crate::widgets::TextArea); a no-op on a single-line input.
     Up {

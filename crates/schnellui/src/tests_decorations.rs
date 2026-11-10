@@ -112,7 +112,10 @@ fn typing_into_a_pressed_hovered_field_restores_its_own_colours() {
         app.update_pointer_proximity(p);
         app.set_active_interaction(Some(id));
         app.focus(Some(id));
-        app.dispatch_key(UiKey::End { shift: false });
+        app.dispatch_key(UiKey::End {
+            shift: false,
+            ctrl: false,
+        });
         app.dispatch_key(UiKey::Char("x"));
         app.frame();
         app.dispatch_key(UiKey::Backspace);
@@ -128,7 +131,10 @@ fn typing_into_a_pressed_hovered_field_restores_its_own_colours() {
         });
         let fresh_id = fresh.find_widget(role, None).unwrap();
         fresh.focus(Some(fresh_id));
-        fresh.dispatch_key(UiKey::End { shift: false });
+        fresh.dispatch_key(UiKey::End {
+            shift: false,
+            ctrl: false,
+        });
         fresh.focus(None);
         fresh.frame();
         assert_eq!(

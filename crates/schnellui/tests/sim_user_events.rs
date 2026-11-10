@@ -335,9 +335,15 @@ fn random_editing_keys_match_a_caret_and_selection_model() {
                 ..EditModel::default()
             };
             if rng.chance(1, 2) {
-                sim.key(UiKey::Home { shift: false });
+                sim.key(UiKey::Home {
+                    shift: false,
+                    ctrl: false,
+                });
             } else {
-                sim.key(UiKey::End { shift: false });
+                sim.key(UiKey::End {
+                    shift: false,
+                    ctrl: false,
+                });
                 model.caret = model.text.len();
                 model.anchor = model.caret;
             }
@@ -372,11 +378,11 @@ fn random_editing_keys_match_a_caret_and_selection_model() {
                         model.move_to(to, shift, end);
                     }
                     9 => {
-                        sim.key(UiKey::Home { shift });
+                        sim.key(UiKey::Home { shift, ctrl: false });
                         model.move_to(0, shift, None);
                     }
                     10 => {
-                        sim.key(UiKey::End { shift });
+                        sim.key(UiKey::End { shift, ctrl: false });
                         model.move_to(model.text.len(), shift, None);
                     }
                     _ => {

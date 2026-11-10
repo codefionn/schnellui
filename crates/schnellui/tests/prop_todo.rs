@@ -274,13 +274,19 @@ impl Harness {
         match op {
             Op::Type(text) => {
                 self.sim.focus(Role::TextInput, Some("New task")).unwrap();
-                self.sim.key(UiKey::End { shift: false });
+                self.sim.key(UiKey::End {
+                    shift: false,
+                    ctrl: false,
+                });
                 self.sim.type_text(text);
                 model.draft.push_str(text);
             }
             Op::Backspace => {
                 self.sim.focus(Role::TextInput, Some("New task")).unwrap();
-                self.sim.key(UiKey::End { shift: false });
+                self.sim.key(UiKey::End {
+                    shift: false,
+                    ctrl: false,
+                });
                 self.sim.key(UiKey::Backspace);
                 model.draft.pop();
             }

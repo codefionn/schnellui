@@ -378,7 +378,10 @@ fn run_concurrent_script(seed: u64) -> (Vec<String>, i64, String) {
                 }
                 1 => {
                     sim.focus(Role::TextInput, Some("Note")).unwrap();
-                    sim.key(UiKey::End { shift: false });
+                    sim.key(UiKey::End {
+                        shift: false,
+                        ctrl: false,
+                    });
                     let c = *rng.pick(&['x', 'y', 'é']);
                     sim.type_text(&c.to_string());
                     expected_text.push(c);

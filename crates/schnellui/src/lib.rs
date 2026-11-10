@@ -412,11 +412,17 @@ pub enum UiKey<'a> {
     Down {
         shift: bool,
     },
+    /// `ctrl` jumps to the start of a text area's document; elsewhere it is
+    /// ignored.
     Home {
         shift: bool,
+        ctrl: bool,
     },
+    /// `ctrl` jumps to the end of a text area's document; elsewhere it is
+    /// ignored.
     End {
         shift: bool,
+        ctrl: bool,
     },
     PageUp,
     PageDown,

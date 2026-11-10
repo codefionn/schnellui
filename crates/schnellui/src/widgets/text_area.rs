@@ -827,6 +827,21 @@ impl AreaState {
         }
     }
 
+    /// Ctrl+Home / Ctrl+End: one caret at `target`, the others dropped.
+    fn jump(&mut self, target: usize, select: bool) -> Change {
+        let before = selection_list(self.caret, self.anchor, &self.secondary);
+        self.secondary.clear();
+        self.caret = target;
+        if !select {
+            self.anchor = target;
+        }
+        if selection_list(self.caret, self.anchor, &self.secondary) == before {
+            Change::None
+        } else {
+            Change::Caret
+        }
+    }
+
     fn apply(&mut self, key: &EditKey, kind: Option<EditKind>, shaper: &mut TextShaper) -> Change {
         // Any non-vertical edit re-anchors the goal column.
         if !matches!(key, EditKey::Up { .. } | EditKey::Down { .. }) {
@@ -915,6 +930,8 @@ impl AreaState {
                     }
                 },
             ),
+            EditKey::DocStart { select } => self.jump(0, *select),
+            EditKey::DocEnd { select } => self.jump(self.value.len(), *select),
             EditKey::Up { select } => self.vertical(false, *select, shaper),
             EditKey::Down { select } => self.vertical(true, *select, shaper),
             EditKey::SelectAll => {
@@ -1454,6 +1471,8 @@ pub(crate) fn dispatch_area_key(
                 | EditKey::Down { .. }
                 | EditKey::Home { .. }
                 | EditKey::End { .. }
+                | EditKey::DocStart { .. }
+                | EditKey::DocEnd { .. }
                 | EditKey::SelectAll
         ) {
         Change::None
@@ -1463,7 +1482,53 @@ pub(crate) fn dispatch_area_key(
     runtime.with(|rt| {
         rt.borrow_mut().areas.insert(id, st);
     });
-    commit_area_change(runtime, scene, shaper, atlas, id, change)
+    let committed = commit_area_change(runtime, scene, shaper, atlas, id, change);
+    match key {
+        EditKey::DocStart { .. } => reveal_doc_edge(runtime, scene, shaper, id, false) | committed,
+        EditKey::DocEnd { .. } => reveal_doc_edge(runtime, scene, shaper, id, true) | committed,
+        _ => committed,
+    }
+}
+
+/// Scrolls the enclosing viewport so the first (`end == false`) or last row of
+/// the area is visible, padding included: where Ctrl+Home / Ctrl+End put the
+/// caret. The rows sit at fixed offsets inside the area's laid-out box, so no
+/// shaping is needed.
+fn reveal_doc_edge(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    id: WidgetId,
+    end: bool,
+) -> bool {
+    let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
+        return false;
+    };
+    let Some(viewport) = crate::widgets::enclosing_scroll(scene, id) else {
+        return false;
+    };
+    let Some(metrics) = crate::widgets::scroll_metrics(scene, viewport) else {
+        return false;
+    };
+    let Some(line_h) = runtime.with(|rt| {
+        rt.borrow_mut()
+            .areas
+            .get_mut(id)
+            .map(|st| st.line_height(shaper))
+    }) else {
+        return false;
+    };
+    let top = if end { rect.bottom() - line_h } else { rect.y };
+    let visible_top = metrics.viewport.y + metrics.offset;
+    let visible_bottom = visible_top + metrics.viewport.height;
+    let delta = if top < visible_top {
+        top - visible_top
+    } else if top + line_h > visible_bottom {
+        top + line_h - visible_bottom
+    } else {
+        return false;
+    };
+    crate::widgets::dispatch_scroll(runtime, scene, viewport, delta)
 }
 
 /// Places the caret from a pointer position (press), or extends the selection
@@ -2324,6 +2389,118 @@ mod tests {
         assert_eq!(w.caret(), 0);
         w.press(EditKey::End { select: false });
         assert_eq!(w.caret(), PARA.len());
+    }
+
+    #[test]
+    fn doc_start_and_end_jump_over_lines_and_wrapped_rows() {
+        let value = format!("{PARA}\nab\n{PARA}");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let rows = w.row_starts(2);
+        let mid = rows[1] + 1;
+
+        w.set_caret(mid);
+        w.press(EditKey::DocStart { select: false });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (0, 0));
+
+        w.set_caret(mid);
+        w.press(EditKey::DocEnd { select: false });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (value.len(), value.len()));
+
+        // Shift extends from the anchor; plain Home still stays on the row.
+        w.set_caret(mid);
+        w.press(EditKey::DocStart { select: true });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (0, mid), "Ctrl+Shift+Home");
+        w.set_caret(mid);
+        w.press(EditKey::DocEnd { select: true });
+        assert_eq!(
+            caret_anchor(&w.runtime, w.id),
+            (value.len(), mid),
+            "Ctrl+Shift+End"
+        );
+        w.set_caret(mid);
+        w.press(EditKey::Home { select: false });
+        assert_eq!(w.caret(), rows[1], "plain Home keeps the visual row");
+    }
+
+    #[test]
+    fn doc_start_and_end_collapse_extra_carets() {
+        let value = (0..60).map(|i| format!("line {i}\n")).collect::<String>();
+        let mut w = Wrapped::new(&value, WrapMode::NoWrap);
+        w.set_caret(value.len());
+        w.runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            let st = rt.areas.get_mut(w.id).unwrap();
+            st.secondary.push(TextSelection {
+                caret: 3,
+                anchor: 3,
+            });
+        });
+        assert_eq!(all_selections(&w.runtime, w.id).len(), 2);
+        w.press(EditKey::DocStart { select: false });
+        assert_eq!(all_selections(&w.runtime, w.id), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn doc_start_and_end_scroll_the_enclosing_viewport_to_the_caret() {
+        let runtime = crate::widgets::Runtime::new();
+        let lines = 200;
+        let (mut scene, _l, mut text, mut atlas, sv) = build_area(
+            &runtime,
+            crate::widgets::Scroll::new()
+                .size(300.0, 200.0)
+                .child(TextArea::new(numbered_source(lines))),
+        );
+        let id = runtime.with(|rt| rt.borrow().areas.keys().next().unwrap());
+        let view = Rect::new(0.0, 0.0, 300.0, 200.0);
+        scene.set_layout(
+            sv,
+            LayoutBox {
+                rect: view,
+                content: view,
+            },
+        );
+        emit_text_area_paint(&runtime, &mut scene, &mut text, &mut atlas, id);
+        let line_h = runtime.with(|rt| rt.borrow().areas.get(id).unwrap().cache.line_h.unwrap().1);
+        let rect = Rect::new(0.0, 0.0, 300.0, lines as f32 * line_h + 2.0 * AREA_PAD);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        dispatch_focus(&runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        let press = |scene: &mut Scene, text: &mut TextShaper, atlas: &mut GlyphAtlas, key| {
+            dispatch_edit_key(&runtime, scene, text, atlas, id, key)
+        };
+        assert_eq!(scene.scroll_offset(sv).y, 0.0);
+        assert!(press(
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            EditKey::DocEnd { select: false }
+        ));
+        let bottom = scene.scroll_offset(sv).y;
+        assert!(
+            bottom >= rect.height - view.height - 1.0,
+            "Ctrl+End scrolls to the last row: {bottom}"
+        );
+        // Already at the end of the document, the viewport still follows.
+        scene.set_scroll_offset(sv, Point { x: 0.0, y: 40.0 });
+        press(
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            EditKey::DocEnd { select: true },
+        );
+        assert!(scene.scroll_offset(sv).y >= bottom - 1.0);
+        assert!(press(
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            EditKey::DocStart { select: false }
+        ));
+        assert_eq!(scene.scroll_offset(sv).y, 0.0, "Ctrl+Home scrolls back up");
     }
 
     #[test]

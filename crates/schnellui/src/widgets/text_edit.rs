@@ -568,7 +568,7 @@ impl EditState {
                     }
                 },
             ),
-            EditKey::Home { select } => map_selections(
+            EditKey::Home { select } | EditKey::DocStart { select } => map_selections(
                 &mut self.caret,
                 &mut self.anchor,
                 &mut self.secondary,
@@ -577,7 +577,7 @@ impl EditState {
                     anchor: if *select { selection.anchor } else { 0 },
                 },
             ),
-            EditKey::End { select } => {
+            EditKey::End { select } | EditKey::DocEnd { select } => {
                 let end = self.value.len();
                 map_selections(
                     &mut self.caret,

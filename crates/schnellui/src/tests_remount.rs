@@ -297,7 +297,10 @@ fn theme_remount_preserves_interaction_state_and_host_registrations() {
     let editor = app.scene().resolve_ref(editor_ref).unwrap();
     let surface = app.scene().resolve_ref(surface_ref).unwrap();
     assert!(app.focus(Some(editor)));
-    assert!(app.dispatch_key(UiKey::Home { shift: false }));
+    assert!(app.dispatch_key(UiKey::Home {
+        shift: false,
+        ctrl: false
+    }));
     assert!(app.focus(Some(surface)));
 
     let shortcuts = Rc::new(Cell::new(0));
