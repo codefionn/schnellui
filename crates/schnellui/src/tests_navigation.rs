@@ -1454,6 +1454,41 @@ fn escape_closes_an_open_list_before_its_dialog() {
     assert_eq!(dismissed.get(), 0, "the dialog stays open");
 }
 
+/// Down and Up from the trigger of an open dropdown step from the chosen
+/// option and wrap, so reopening with the last option chosen and pressing
+/// Down reaches the first option, not the chosen one again.
+#[test]
+fn arrows_from_an_open_dropdown_trigger_step_from_the_chosen_option() {
+    use schnellui::widgets::{Dropdown, DropdownOption};
+    const NAMES: [&str; 4] = ["Light", "Dark", "Sepia", "Candy"];
+    // (chosen index or none, Down target, Up target)
+    let cases = [
+        (Some(3), "Light", "Sepia"),
+        (Some(0), "Dark", "Candy"),
+        (Some(1), "Sepia", "Light"),
+        (None, "Light", "Candy"),
+    ];
+    for (chosen, down, up) in cases {
+        for (key, want) in [
+            (UiKey::Down { shift: false }, down),
+            (UiKey::Up { shift: false }, up),
+        ] {
+            let mut dropdown = Dropdown::new("Theme").open(true);
+            for (i, name) in NAMES.iter().enumerate() {
+                dropdown = dropdown.option(DropdownOption::new(*name).selected(chosen == Some(i)));
+            }
+            let mut app = App::mount_with_size(dropdown, 400, 300);
+            app.frame();
+            let combo = app.find_widget(Role::ComboBox, Some("Theme")).unwrap();
+            app.focus(Some(combo));
+            assert!(app.dispatch_key(key), "{chosen:?} {key:?}");
+            let landed = app.focused_widget().unwrap();
+            let name = app.scene().a11y(landed).and_then(|a| a.name.clone());
+            assert_eq!(name.as_deref(), Some(want), "{chosen:?} {key:?}");
+        }
+    }
+}
+
 /// Closing or picking from a menu whose row wears the focus ring takes the
 /// ring with the row. Before this, right-click a text field, Up, then blur
 /// left the ring's record on the removed row.

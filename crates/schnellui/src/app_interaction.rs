@@ -349,14 +349,15 @@ impl App {
                         combo,
                     );
                 }
-                UiKey::Down { shift: false } if expanded => {
+                UiKey::Down { shift: false } | UiKey::Up { shift: false } if expanded => {
+                    let forward = matches!(key, UiKey::Down { .. });
                     let popup = self
                         .scene
                         .node(combo)
                         .and_then(|node| node.parent)
                         .and_then(|wrapper| self.scene.node(wrapper))
                         .and_then(|node| node.children.get(1).copied());
-                    let option = popup.and_then(|popup| self.first_visible_option(popup));
+                    let option = popup.and_then(|popup| self.entry_option(popup, forward));
                     if let Some(option) = option {
                         return self.focus(Some(option));
                     }
@@ -729,38 +730,30 @@ impl App {
         changed
     }
 
-    /// Where Down lands in an open popup: the option after the chosen one
-    /// (the chosen one when it is last), else the first visible option.
-    /// Looks through the scroll viewport or padded surface around the rows.
-    fn first_visible_option(&self, popup: scene::WidgetId) -> Option<scene::WidgetId> {
-        let mut first = None;
-        let chosen = self.find_option(popup, &mut first);
-        let Some(chosen) = chosen else {
-            return first;
+    /// Where Down (`forward`) or Up lands from the trigger of an open popup:
+    /// the visible option after (before) the chosen one, wrapping like the
+    /// arrows inside the popup do, else the first (last) visible option when
+    /// nothing is chosen. Looks through the scroll viewport or padded surface
+    /// around the rows.
+    fn entry_option(&self, popup: scene::WidgetId, forward: bool) -> Option<scene::WidgetId> {
+        let mut options = Vec::new();
+        self.collect_options(popup, &mut options);
+        let len = options.len();
+        let chosen = options.iter().position(|&(_, selected)| selected);
+        let index = match (chosen, forward) {
+            (Some(at), true) => (at + 1) % len,
+            (Some(at), false) => (at + len - 1) % len,
+            (None, true) => 0,
+            (None, false) => len.checked_sub(1)?,
         };
-        let next = self
-            .scene
-            .node(chosen)
-            .and_then(|node| node.parent)
-            .and_then(|parent| self.scene.node(parent))
-            .and_then(|parent| {
-                let at = parent.children.iter().position(|&c| c == chosen)?;
-                parent.children[at + 1..]
-                    .iter()
-                    .copied()
-                    .find(|&c| self.scene.is_effectively_visible(c))
-            });
-        Some(next.unwrap_or(chosen))
+        options.get(index).map(|&(id, _)| id)
     }
 
-    /// Walks a popup for visible options: returns the selected one and
-    /// records the first in `first`.
-    fn find_option(
-        &self,
-        id: scene::WidgetId,
-        first: &mut Option<scene::WidgetId>,
-    ) -> Option<scene::WidgetId> {
-        let node = self.scene.node(id)?;
+    /// Walks a popup in order for visible options, with whether each is chosen.
+    fn collect_options(&self, id: scene::WidgetId, out: &mut Vec<(scene::WidgetId, bool)>) {
+        let Some(node) = self.scene.node(id) else {
+            return;
+        };
         for &child in &node.children {
             let option = self
                 .scene
@@ -768,22 +761,15 @@ impl App {
                 .filter(|a| a11y::Role::from_u16(a.role) == a11y::Role::ListBoxOption);
             match option {
                 Some(semantics) => {
-                    if !self.scene.is_effectively_visible(child) {
-                        continue;
-                    }
-                    first.get_or_insert(child);
-                    if a11y::StateFlags(semantics.state).contains(a11y::StateFlags::SELECTED) {
-                        return Some(child);
+                    if self.scene.is_effectively_visible(child) {
+                        let selected =
+                            a11y::StateFlags(semantics.state).contains(a11y::StateFlags::SELECTED);
+                        out.push((child, selected));
                     }
                 }
-                None => {
-                    if let Some(found) = self.find_option(child, first) {
-                        return Some(found);
-                    }
-                }
+                None => self.collect_options(child, out),
             }
         }
-        None
     }
 
     pub(crate) fn refresh_combobox_filter(&mut self, id: scene::WidgetId) {
