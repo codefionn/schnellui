@@ -883,6 +883,16 @@ fn the_input_observer_is_called_and_survives_a_host_remount() {
     replacement.inherit_host_configuration(&mut previous);
     replacement.note_input();
     assert_eq!(seen.get(), 2);
+
+    let handle = Rc::new(Cell::new(0isize));
+    previous.set_native_window_observer({
+        let handle = handle.clone();
+        move |h| handle.set(h)
+    });
+    let mut third = App::mount_with_size(Button::new("Run"), 200, 100);
+    third.inherit_host_configuration(&mut previous);
+    third.note_native_window(42);
+    assert_eq!(handle.get(), 42);
 }
 
 /// Right-click a field, then let the tree be rebuilt under the open menu: a

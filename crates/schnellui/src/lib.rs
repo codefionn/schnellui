@@ -557,6 +557,9 @@ pub struct App {
     /// Called by the native host for every pointer, touch, key or IME event, before the app
     /// handles it. See [`App::set_input_observer`].
     input_observer: Option<Box<dyn FnMut()>>,
+    /// Called once when the native window exists, with its Win32 handle. See
+    /// [`App::set_native_window_observer`].
+    native_window_observer: Option<Box<dyn FnMut(isize)>>,
     /// Thread-safe native wake handle. It is inert for headless applications and
     /// connected to the winit proxy when a window starts.
     redraw_signal: RedrawSignal,

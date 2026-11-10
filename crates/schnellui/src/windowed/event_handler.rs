@@ -63,6 +63,13 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                 .clone()
                 .expect("native event loop proxy"),
         );
+        #[cfg(windows)]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(RawWindowHandle::Win32(h)) = window.window_handle().map(|h| h.as_raw()) {
+                self.app.note_native_window(h.hwnd.get());
+            }
+        }
         window.set_visible(true);
         self.accessibility = Some(accessibility);
         self.window = Some(window);

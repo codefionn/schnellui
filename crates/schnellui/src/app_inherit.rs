@@ -286,6 +286,7 @@ impl App {
         self.escape_exits = previous.escape_exits;
         self.redraw_interval = previous.redraw_interval;
         self.input_observer = previous.input_observer.take();
+        self.native_window_observer = previous.native_window_observer.take();
         self.hot_reload = previous.hot_reload.take();
         self.redraw_signal = previous.redraw_signal.clone();
         self.window_title_provider = previous.window_title_provider.take();

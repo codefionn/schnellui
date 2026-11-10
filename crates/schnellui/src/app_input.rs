@@ -140,6 +140,20 @@ impl App {
         self.input_observer = Some(Box::new(observer));
     }
 
+    /// Calls `observer` with the window's `HWND` as an integer once the native window exists.
+    /// Windows only: other systems never call it. Platform dialogs such as Windows Hello need
+    /// the handle of the window that owns them.
+    pub fn set_native_window_observer(&mut self, observer: impl FnMut(isize) + 'static) {
+        self.native_window_observer = Some(Box::new(observer));
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn note_native_window(&mut self, handle: isize) {
+        if let Some(observer) = self.native_window_observer.as_mut() {
+            observer(handle);
+        }
+    }
+
     pub(crate) fn note_input(&mut self) {
         if let Some(observer) = self.input_observer.as_mut() {
             observer();
