@@ -737,6 +737,15 @@ pub fn dismiss_context_menu(runtime: &crate::widgets::Runtime, scene: &mut Scene
     };
     let _ = crate::widgets::strip_hover_decoration(runtime, scene);
     scene.mark_dirty(open.root, DirtyFlags::PAINT);
+    for &item in &open.items {
+        // A row that holds keyboard focus loses it with its ring before it
+        // goes, or the ring's record would outlive the node.
+        let state = scene.a11y(item).map_or(0, |a| a.state);
+        if StateFlags(state).contains(StateFlags::FOCUSED) {
+            scene.set_a11y_state(item, state & !StateFlags::FOCUSED.0);
+            let _ = crate::widgets::remove_focus_ring(runtime, scene, item);
+        }
+    }
     for item in open.items {
         runtime.context_menu.with(|state| {
             state.borrow_mut().actions.remove(item);

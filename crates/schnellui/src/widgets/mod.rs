@@ -132,7 +132,8 @@ pub use media::*;
 #[path = "lib/reactivity.rs"]
 mod reactivity;
 use reactivity::RetainedReactivity;
-#[cfg(feature = "fuzzing")]
+#[cfg(any(test, feature = "fuzzing"))]
+#[cfg_attr(not(feature = "fuzzing"), allow(dead_code))]
 #[path = "lib/probes.rs"]
 pub(crate) mod probes;
 #[cfg(test)]

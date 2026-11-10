@@ -1361,3 +1361,45 @@ fn escape_closes_an_open_list_before_its_dialog() {
     assert_eq!(toggled.get(), before + 1, "Escape asks the list to close");
     assert_eq!(dismissed.get(), 0, "the dialog stays open");
 }
+
+/// Closing or picking from a menu whose row wears the focus ring takes the
+/// ring with the row. Before this, right-click a text field, Up, then blur
+/// left the ring's record on the removed row.
+#[test]
+fn closing_a_menu_drops_the_ring_of_its_focused_row() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+    // `None` blurs, as a click on empty space or another window does.
+    let closers = [
+        Some(UiKey::Tab { shift: false }),
+        Some(UiKey::Escape),
+        Some(UiKey::Char("x")),
+        Some(UiKey::Enter),
+        None,
+    ];
+    for close in closers {
+        let menu = ContextMenu::new()
+            .item(ContextMenuItem::new("Pulse").on_select(|| {}))
+            .item(ContextMenuItem::new("Notes").on_select(|| {}));
+        let mut app = App::mount_with_size(Button::new("Add").menu(menu), 400, 300);
+        app.frame();
+        let add = app.find_widget(Role::Button, Some("Add")).unwrap();
+        app.focus(Some(add));
+        assert!(app.dispatch_click(add), "a click opens the menu");
+        app.frame();
+        app.dispatch_key(UiKey::Up { shift: false });
+        assert!(app.focused_context_menu_row().is_some());
+        match close {
+            Some(key) => app.dispatch_key(key),
+            None => app.focus(None),
+        };
+        app.frame();
+        assert!(!app.context_menu_is_open(), "{close:?} closes the menu");
+        assert_eq!(
+            schnellui::widgets::probes::decoration_faults(&app.widgets, app.scene()),
+            None,
+            "{close:?}"
+        );
+        let expected = close.map(|_| add);
+        assert_eq!(app.focused_widget(), expected, "{close:?} returns focus");
+    }
+}
