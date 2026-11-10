@@ -792,3 +792,62 @@ mod platform_theme_change {
         );
     }
 }
+
+/// Input that arrives faster than frames are drawn: several pointer events
+/// land between two redraws.
+mod input_between_frames {
+    use super::super::{event_handler::EventTail, WindowedApp};
+    use crate::widgets::{Dialog, Stack, Text};
+    use crate::{a11y::Role, App};
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{ElementState, MouseButton};
+
+    fn to(host: &mut WindowedApp, x: f32, y: f32) {
+        host.on_cursor_moved(PhysicalPosition::new(f64::from(x), f64::from(y)));
+    }
+
+    fn button(host: &mut WindowedApp, state: ElementState) {
+        if host.on_mouse_input(state, MouseButton::Left) == EventTail::Normal {
+            host.poll_remount();
+        }
+    }
+
+    /// Drag a dialog by its title, let go and grab it again before the next
+    /// redraw. The second press was hit-tested against the layout from
+    /// before the drag, missed the title and left the dialog where it was.
+    #[test]
+    fn a_dialog_grabbed_again_before_a_redraw_follows_the_pointer() {
+        let mut app = App::mount_with_size(
+            Stack::new().fill().child(
+                Dialog::new("Board")
+                    .modeless()
+                    .non_fixed()
+                    .movable()
+                    .at(40.0, 60.0)
+                    .size(240.0, 160.0)
+                    .child(Text::new("Notes")),
+            ),
+            640,
+            480,
+        );
+        app.frame();
+        let mut host = super::windowed_host(app, None);
+        let dialog = |host: &WindowedApp| {
+            let id = host.app.find_widget(Role::Dialog, Some("Board")).unwrap();
+            host.app.scene().layout(id).unwrap().rect
+        };
+        let start = dialog(&host);
+        let (x, y) = (start.x + 60.0, start.y + 12.0);
+        to(&mut host, x, y);
+        button(&mut host, ElementState::Pressed);
+        to(&mut host, x + 150.0, y + 80.0);
+        button(&mut host, ElementState::Released);
+        // No redraw: the next press comes within the same frame.
+        button(&mut host, ElementState::Pressed);
+        to(&mut host, x + 50.0, y + 30.0);
+        button(&mut host, ElementState::Released);
+        host.on_redraw_requested();
+        let end = dialog(&host);
+        assert_eq!((end.x - start.x, end.y - start.y), (50.0, 30.0));
+    }
+}

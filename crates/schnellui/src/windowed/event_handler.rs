@@ -566,6 +566,12 @@ impl WindowedApp {
     }
 
     pub(super) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) -> EventTail {
+        // Several events can land between two redraws. A press or release
+        // must find widgets where the earlier ones put them (a dragged dialog
+        // grabbed again), not where the last frame drew them.
+        if self.app.layout_pending() {
+            let _ = self.app.settle_frame();
+        }
         // A button let go after the pointer left the window happens nowhere:
         // it must not hover or reveal a tooltip at the last inside position.
         let p = self.resting_pointer();

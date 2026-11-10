@@ -287,6 +287,14 @@ impl App {
             || self.theme_transition_active()
     }
 
+    /// Whether input since the last frame changed geometry that has not been
+    /// laid out yet, so a hit test now would find widgets where they were.
+    pub(crate) fn layout_pending(&self) -> bool {
+        !self.laid_out
+            || (!self.scene.layout_dirty().is_empty()
+                && self.scene.layout_epoch() != self.layout_consumed_epoch)
+    }
+
     /// Runs the retained passes while keeping the resulting dirty channels alive.
     /// The native host uses this narrow seam to publish AccessKit changes and
     /// present pixels before retiring the frame; headless callers use [`App::frame`].
