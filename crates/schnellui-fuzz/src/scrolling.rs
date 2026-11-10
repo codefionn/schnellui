@@ -3,8 +3,8 @@
 //! [`settled`] judges a frame by itself: offsets inside their range, the
 //! accessibility tree agreeing with the scene, and the hit test agreeing with
 //! what is drawn. [`Watch`] remembers what an op started from, for the rules
-//! that compare before and after: a wheel leaves hover on the control now under
-//! a resting pointer, keyboard focus and the caret scroll into view, and a
+//! that compare before and after: a wheel or a resize leaves hover on the control now
+//! under a resting pointer, keyboard focus and the caret scroll into view, and a
 //! theme switch keeps the offsets.
 
 use schnellui::a11y::to_access_id;
@@ -193,6 +193,13 @@ fn hover_fault(host: &HeadlessHost) -> Option<String> {
     hover_faults(host.app(), host.pointer()?)
 }
 
+fn op_name(op: &Op) -> &'static str {
+    match op {
+        Op::Resize(..) => "a resize",
+        _ => "a wheel",
+    }
+}
+
 /// The names of the controls shown in viewport `id`: those with a visible
 /// part in it.
 fn shown_in(app: &App, id: WidgetId) -> Vec<String> {
@@ -274,13 +281,13 @@ impl Watch {
             return Ok(());
         }
         match op {
-            // Content that scrolled under a pointer at rest puts a different
-            // control under it, and hover goes with the pointer. Only a
-            // wheel that started from right hover is judged: hover left
-            // behind by something else (a resize) is not the wheel's fault.
-            Op::Wheel(_) | Op::WheelBurst(..) | Op::WheelAt(..) => {
+            // Content that scrolled or was laid out again under a pointer at
+            // rest puts a different control under it, and hover goes with the
+            // pointer. Only an op that started from right hover is judged:
+            // hover left behind by something else is not this op's fault.
+            Op::Wheel(_) | Op::WheelBurst(..) | Op::WheelAt(..) | Op::Resize(..) => {
                 match hover_fault(host).filter(|_| self.hover_right) {
-                    Some(f) => Err(format!("a wheel left hover behind: {f}")),
+                    Some(f) => Err(format!("{} left hover behind: {f}", op_name(op))),
                     None => Ok(()),
                 }
             }

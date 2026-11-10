@@ -1076,6 +1076,19 @@ impl App {
     /// Updates proximity-revealed controls for a logical pointer position.
     /// Returns `true` when their paint changed and a redraw is needed.
     pub fn update_pointer_proximity(&mut self, point: scene::Point) -> bool {
+        self.update_pointer(point, true)
+    }
+
+    /// Brings hover up to date with the resting pointer after layout moved
+    /// content under it. Shown tooltips follow their control; none appears.
+    pub(crate) fn refresh_resting_hover(&mut self) -> bool {
+        match self.pointer_hit.get().map(|hit| hit.point) {
+            Some(point) => self.update_pointer(point, false),
+            None => false,
+        }
+    }
+
+    fn update_pointer(&mut self, point: scene::Point, new_tooltips: bool) -> bool {
         let hit = schnellui::widgets::hit_test(&self.widgets, &self.scene, point);
         // A pointer that has not moved since the keyboard took over lights
         // nothing; the first move hands hover back to it.
@@ -1087,13 +1100,24 @@ impl App {
             }
             None => false,
         };
-        let changed = schnellui::widgets::update_pointer_proximity_held(
-            &self.widgets,
-            &mut self.scene,
-            point,
-            if held { None } else { hit },
-            held,
-        );
+        let hit_for_hover = if held { None } else { hit };
+        let changed = if new_tooltips {
+            schnellui::widgets::update_pointer_proximity_held(
+                &self.widgets,
+                &mut self.scene,
+                point,
+                hit_for_hover,
+                held,
+            )
+        } else {
+            schnellui::widgets::refresh_pointer_hover(
+                &self.widgets,
+                &mut self.scene,
+                point,
+                hit_for_hover,
+                held,
+            )
+        };
         // Hover decoration is paint-only, so the hit still stands afterwards.
         // Remember it with the scene state it is valid for; `cursor_at` for the
         // same pointer position then skips a second walk.

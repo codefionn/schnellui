@@ -454,7 +454,6 @@ impl App {
         // actual variable row heights afterwards. At most two follow-up passes
         // absorb an initial viewport and changed estimates; clean frames still do
         // no list work and take the ordinary single-pass path.
-        let mut rows_remounted = false;
         for _ in 0..3 {
             let virtual_changed = schnellui::widgets::reconcile_virtual_lists(
                 &self.widgets,
@@ -465,7 +464,6 @@ impl App {
                 &mut self.atlas,
                 self.scale,
             );
-            rows_remounted |= virtual_changed;
             let Some(root) = self.scene.root() else { break };
             let layout_requested = !self.scene.layout_dirty().is_empty()
                 && self.scene.layout_epoch() != self.layout_consumed_epoch;
@@ -537,17 +535,12 @@ impl App {
             let _ = self.update_drag(point);
         }
         if layout_changed {
-            // A virtual list that mounted rows under a pointer at rest (a wheel
-            // flung it past what was mounted) has a different control under
-            // it now: hover goes there without waiting for the pointer to move.
-            if let Some(point) = self
-                .pointer_hit
-                .get()
-                .map(|hit| hit.point)
-                .filter(|_| rows_remounted)
-            {
-                let _ = self.update_pointer_proximity(point);
-            }
+            // Layout moved content under a pointer at rest (a resize, a theme
+            // with other sizes, rows mounted or added): hover goes to what is
+            // under it now without waiting for the pointer to move, as a browser
+            // recomputes :hover after a layout change. Tooltips only follow
+            // their control; none appears (see `refresh_resting_hover`).
+            let _ = self.refresh_resting_hover();
             schnellui::widgets::relay_moved_decorations(&self.widgets, &mut self.scene);
         }
 

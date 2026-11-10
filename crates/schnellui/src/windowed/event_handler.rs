@@ -910,6 +910,10 @@ impl WindowedApp {
             return EventTail::Skip;
         }
         if self.app.dismiss_context_menu() {
+            // Closing the menu takes its hover with it; the pointer is still
+            // over the control it came from.
+            let rest = self.resting_pointer();
+            let _ = self.app.update_pointer_proximity(rest);
             if let Some(w) = &self.window {
                 w.request_redraw();
             }

@@ -28,8 +28,8 @@
 //!   keys, and AccessKit scroll actions are ops, in the ordinary and the pace
 //!   properties. After every step each viewport's offset is inside its range
 //!   and told to assistive technology, the pointer hits what is drawn
-//!   under it, and (compared with the step before) a wheel leaves hover on the
-//!   control now under the pointer, a key that moves focus or edits a field
+//!   under it, and (compared with the step before) a wheel or a resize leaves hover
+//!   on the control now under the pointer, a key that moves focus or edits a field
 //!   leaves it in view, and a theme switch keeps the offsets. See [`scrolling`].
 //! - Retained-state checks from `schnellui::testing::fuzz::invariants`, run
 //!   after every step: decoration records match their paint, no decoration is

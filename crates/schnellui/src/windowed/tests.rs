@@ -952,7 +952,7 @@ mod hover_after_a_relayout {
     use super::super::headless::HeadlessHost;
     use crate::scene::Point;
     use crate::widgets::probes::hover_disagrees;
-    use crate::widgets::{Button, VirtualList, VirtualListController};
+    use crate::widgets::{Button, Column, Flex, Row, VirtualList, VirtualListController};
     use crate::{theme, App, ThemeMode};
 
     #[test]
@@ -982,6 +982,147 @@ mod hover_after_a_relayout {
             hover_disagrees(&host.app().widgets, host.app().scene(), pointer, false),
             None
         );
+    }
+
+    fn hover_fault(host: &HeadlessHost, pointer: Point, held: bool) -> Option<String> {
+        hover_disagrees(&host.app().widgets, host.app().scene(), pointer, held)
+    }
+
+    /// Two buttons that each take half the width; a resize moves the boundary.
+    fn halves(width: u32) -> App {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                Row::new()
+                    .fill()
+                    .child(Flex::new().grow(1.0).child(Button::new("Left")))
+                    .child(Flex::new().grow(1.0).child(Button::new("Right")))
+            },
+            width,
+            100,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        app
+    }
+
+    /// The name of the control the pointer is over.
+    fn under(host: &HeadlessHost, pointer: Point) -> Option<String> {
+        let scene = host.app().scene();
+        let hit = crate::widgets::hit_test(&host.app().widgets, scene, pointer)?;
+        scene
+            .a11y(hit)
+            .and_then(|a| a.name.as_ref().map(|n| n.to_string()))
+    }
+
+    #[test]
+    fn a_resize_that_puts_another_control_under_the_pointer_moves_hover_to_it() {
+        let mut host = HeadlessHost::new(halves(200));
+        let pointer = Point { x: 150.0, y: 10.0 };
+        host.pointer_move(pointer);
+        let before = under(&host, pointer);
+        assert_eq!(hover_fault(&host, pointer, false), None);
+        host.resize(400.0, 100.0);
+        assert_ne!(under(&host, pointer), before, "the resize moved a control");
+        assert_eq!(hover_fault(&host, pointer, false), None);
+    }
+
+    #[test]
+    fn a_resize_that_leaves_nothing_under_the_pointer_takes_hover_away() {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                Row::new()
+                    .fill()
+                    .child(Flex::new().grow(1.0))
+                    .child(Button::new("Edge").width(100.0))
+            },
+            300,
+            100,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        let pointer = Point { x: 250.0, y: 10.0 };
+        host.pointer_move(pointer);
+        assert_eq!(hover_fault(&host, pointer, false), None);
+        host.resize(500.0, 100.0);
+        assert_eq!(under(&host, pointer), None);
+        assert_eq!(hover_fault(&host, pointer, false), None);
+    }
+
+    #[test]
+    fn a_resize_does_not_bring_hover_back_while_the_keyboard_holds_it() {
+        let mut host = HeadlessHost::new(halves(200));
+        let pointer = Point { x: 150.0, y: 10.0 };
+        host.pointer_move(pointer);
+        host.app_mut().hold_pointer_hover();
+        host.resize(400.0, 100.0);
+        assert_eq!(hover_fault(&host, pointer, true), None);
+    }
+
+    #[test]
+    fn a_theme_switch_that_changes_sizes_moves_hover_with_the_content() {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                let mut column = Column::new();
+                for i in 0..8 {
+                    column = column.child(Button::new(format!("Row {i}")));
+                }
+                column
+            },
+            300,
+            600,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        let pointer = Point { x: 20.0, y: 150.0 };
+        host.pointer_move(pointer);
+        let before = under(&host, pointer);
+        assert_eq!(hover_fault(&host, pointer, false), None);
+        host.set_theme(theme::BRUTAL);
+        assert_ne!(under(&host, pointer), before, "the theme moved a control");
+        assert_eq!(hover_fault(&host, pointer, false), None);
+    }
+
+    #[test]
+    fn content_that_grows_before_the_pointer_takes_hover_off_the_control_it_pushed_away() {
+        use crate::widgets::Text;
+        let letters = crate::signal::create_signal(1_usize);
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            move || {
+                Row::new()
+                    .child(Text::dynamic(move || "m".repeat(letters.get())))
+                    .child(Button::new("Go"))
+            },
+            400,
+            100,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        let go = host
+            .app()
+            .find_widget(crate::a11y::Role::Button, Some("Go"));
+        let r = host.app().scene().layout(go.unwrap()).unwrap().rect;
+        let pointer = Point {
+            x: r.x + 4.0,
+            y: r.y + r.height / 2.0,
+        };
+        host.pointer_move(pointer);
+        assert_eq!(under(&host, pointer).as_deref(), Some("Go"));
+        assert_eq!(hover_fault(&host, pointer, false), None);
+        letters.set(30);
+        host.frame();
+        assert_ne!(under(&host, pointer).as_deref(), Some("Go"), "content grew");
+        assert_eq!(hover_fault(&host, pointer, false), None);
     }
 }
 

@@ -2194,6 +2194,66 @@ fn a_control_covered_by_an_open_list_shows_no_tooltip() {
     assert_eq!(shown(&app), label_only, "the tooltip stays hidden");
 }
 
+/// Content that slides a control under a resting pointer hovers it, but its
+/// tooltip waits for the pointer to move; one already shown stays while the
+/// pointer is still on its control and goes when the control moves away.
+#[test]
+fn a_relayout_under_a_resting_pointer_hovers_but_never_raises_a_tooltip() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Button, Row, Text};
+    let letters = schnellui::signal::create_signal(30_usize);
+    let view = Row::new()
+        .child(Text::dynamic(move || "m".repeat(letters.get())))
+        .child(Button::new("Go").tooltip("Hint"));
+    let mut app = App::mount_with_size(view, 600, 100);
+    app.frame();
+    let go = app.find_widget(Role::Button, Some("Go")).unwrap();
+    let tip = |app: &App| {
+        app.scene().paint(go).map_or(0, |p| {
+            p.primitives
+                .iter()
+                .filter(|p| matches!(p, Primitive::GlyphQuad { color, .. } if color.a != 0))
+                .count()
+        })
+    };
+    let label_only = tip(&app);
+    // The pointer rests over the text, left of the button.
+    let rest = Point { x: 20.0, y: 15.0 };
+    assert_ne!(app.hit_test(rest), Some(go));
+    app.update_pointer_proximity(rest);
+    // The text shrinks: the button slides under the pointer.
+    letters.set(1);
+    app.frame();
+    assert_eq!(app.hit_test(rest), Some(go));
+    assert_eq!(
+        tip(&app),
+        label_only,
+        "no tooltip for a pointer that did not move"
+    );
+    // Moving the pointer raises it; growing the text pushes the button away.
+    app.update_pointer_proximity(Point {
+        x: rest.x + 1.0,
+        y: rest.y,
+    });
+    app.frame();
+    let shown = tip(&app);
+    assert!(shown > label_only, "the tooltip came up on a move");
+    letters.set(1);
+    app.frame();
+    assert_eq!(
+        tip(&app),
+        shown,
+        "a shown tooltip stays while its control does"
+    );
+    letters.set(30);
+    app.frame();
+    assert_eq!(
+        tip(&app),
+        label_only,
+        "it goes when the control moves off the pointer"
+    );
+}
+
 #[test]
 fn a_dropdown_is_at_least_its_min_width() {
     use schnellui::widgets::{Column, Dropdown, DropdownOption};

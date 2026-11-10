@@ -229,3 +229,33 @@ mod scroll_oracles {
         );
     }
 }
+
+/// A wheel that dismisses a context menu leaves the pointer over the control
+/// the menu came from; hover goes back to it.
+mod wheel_closing_a_context_menu {
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::ops::Op;
+    use schnellui_fuzz::{serial, PointerButton, THEMES};
+
+    #[test]
+    fn hover_returns_to_the_control_under_the_pointer() {
+        let _s = serial();
+        let c = components::named("text_area");
+        let m = Mount {
+            theme: THEMES[0],
+            size: (360, 240),
+            scale: 1.0,
+            animate: false,
+        };
+        let ops = [
+            Op::Aim {
+                n: 0,
+                corner: false,
+            },
+            Op::Press(PointerButton::Right),
+            Op::Release(PointerButton::Right),
+            Op::Wheel(1.0),
+        ];
+        assert_eq!(schnellui_fuzz::oracle::twin(&c, m, &ops), Ok(()));
+    }
+}

@@ -1677,6 +1677,32 @@ pub fn update_pointer_proximity_held(
     hit: Option<WidgetId>,
     held: bool,
 ) -> bool {
+    update_pointer_state(runtime, scene, point, hit, held, true)
+}
+
+/// [`update_pointer_proximity_held`] for a pointer that did not move: layout
+/// changed under it. Hover and proximity follow the content, a shown tooltip
+/// stays or goes with its control, but no tooltip comes up. As in a browser,
+/// a tooltip appears for a pointer that arrives or moves, not because
+/// the page changed beneath it.
+pub fn refresh_pointer_hover(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    point: Point,
+    hit: Option<WidgetId>,
+    held: bool,
+) -> bool {
+    update_pointer_state(runtime, scene, point, hit, held, false)
+}
+
+fn update_pointer_state(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    point: Point,
+    hit: Option<WidgetId>,
+    held: bool,
+    may_show_tooltips: bool,
+) -> bool {
     let control_changed = update_control_hover(runtime, scene, hit);
     let proximity_changed = runtime.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -1721,6 +1747,7 @@ pub fn update_pointer_proximity_held(
                 tooltip,
                 allowed
                     && !held
+                    && (may_show_tooltips || tooltip.visible)
                     && !own_menu_open
                     && rect.contains(point)
                     && uncovered(scene, id, hit),
