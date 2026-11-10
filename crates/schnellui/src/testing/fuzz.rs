@@ -85,7 +85,7 @@ pub fn reveal_target(
     id: schnellui::scene::WidgetId,
 ) -> Option<schnellui::scene::Rect> {
     let widgets = app.widgets.clone();
-    crate::widgets::reveal_target(&widgets, app.scene(), &mut app.text, id)
+    crate::widgets::reveal_target(&widgets, &app.scene, &mut app.text, id)
 }
 
 /// All of the checks above, first failure first.
