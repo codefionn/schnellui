@@ -15,7 +15,8 @@ use schnellui::scene::Color;
 use schnellui::signal::{create_signal, Signal};
 use schnellui::testing::find_by_role_name;
 use schnellui::widgets::{
-    Align, Button, Column, Divider, Justify, Row, Shape, Text, Theme, ThemeProvider, View, WrapMode,
+    Align, Button, Column, Divider, Justify, Row, Scroll, Shape, Text, Theme, ThemeProvider, View,
+    WrapMode,
 };
 use schnellui::{App, Shortcut};
 use strum::IntoEnumIterator;
@@ -630,25 +631,31 @@ fn calculator_view(
             .role(Role::Status),
         )));
 
+    // A window shorter than the panel scrolls it, so every key can be shown.
+    // The Scroll sits inside the centering column and shrinks to the window,
+    // rather than filling it: a viewport sizes its scroll range from the
+    // content, so a full-height child would never overflow.
     Column::new()
         .fill()
         .align(Align::Center)
         .justify(Justify::Center)
         .child(
-            Column::new()
-                .width(PANEL_WIDTH)
-                .gap(14.0)
-                .child(Text::new("Calculator").size(20.0).bold())
-                .child(Divider::new())
-                .child(screen)
-                .child(Divider::new())
-                .child(keypad)
-                .child(ThemeProvider::new(
-                    MUTED_THEME,
-                    Text::new("Keyboard: digits, + − * / and = or Enter. C clears, D deletes.")
-                        .size(12.0)
-                        .wrap(WrapMode::Word),
-                )),
+            Scroll::new().child(
+                Column::new()
+                    .width(PANEL_WIDTH)
+                    .gap(14.0)
+                    .child(Text::new("Calculator").size(20.0).bold())
+                    .child(Divider::new())
+                    .child(screen)
+                    .child(Divider::new())
+                    .child(keypad)
+                    .child(ThemeProvider::new(
+                        MUTED_THEME,
+                        Text::new("Keyboard: digits, + − * / and = or Enter. C clears, D deletes.")
+                            .size(12.0)
+                            .wrap(WrapMode::Word),
+                    )),
+            ),
         )
 }
 
@@ -822,4 +829,25 @@ fn main() -> ExitCode {
         .clone()
         .unwrap_or_else(|| format!("{}.png", scenario.name()));
     render_one(scenario, &cli, &out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(430, 610), (360, 240), (240, 160)] {
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
 }
