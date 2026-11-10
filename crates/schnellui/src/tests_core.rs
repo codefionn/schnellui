@@ -3505,3 +3505,195 @@ mod forms {
         assert_eq!(submits.get(), 0);
     }
 }
+
+/// A control inside a window clips to the window's frame (f4fc11e), but the
+/// overlays it owns resolve their clip from their own layer: a tooltip, a
+/// dropdown list and a context menu may extend past the frame.
+mod overlays_in_a_window {
+    use super::*;
+    use schnellui::scene::{Point, Primitive, Rect, WidgetId};
+    use schnellui::widgets::{
+        Button, Column, ContextMenu, ContextMenuItem, Dialog, Dropdown, DropdownOption, TextInput,
+    };
+
+    fn window(at: (f32, f32), size: (f32, f32)) -> Dialog {
+        Dialog::new("Window")
+            .modeless()
+            .non_fixed()
+            .movable()
+            .at(at.0, at.1)
+            .size(size.0, size.1)
+    }
+
+    fn panel(app: &App) -> Rect {
+        let id = app.find_widget(Role::Dialog, Some("Window")).unwrap();
+        app.scene().composited_rect(id)
+    }
+
+    /// The bounds of the painted tooltip: the host's primitives lying outside
+    /// its own layout box.
+    fn tooltip_bounds(app: &App, host: WidgetId) -> Rect {
+        let own = app.scene().layout(host).unwrap().rect;
+        let mut bounds: Option<Rect> = None;
+        for primitive in &app.scene().paint(host).unwrap().primitives {
+            let rect = match primitive {
+                Primitive::SolidRect { rect, .. } | Primitive::GlyphQuad { rect, .. } => *rect,
+                _ => continue,
+            };
+            if rect.intersect(&own) == rect {
+                continue;
+            }
+            bounds = Some(bounds.map_or(rect, |b| b.union(&rect)));
+        }
+        bounds.expect("the tooltip is painted outside its host")
+    }
+
+    fn center(r: Rect) -> Point {
+        Point {
+            x: r.x + r.width / 2.0,
+            y: r.y + r.height / 2.0,
+        }
+    }
+
+    fn tooltip_clip_check(at: (f32, f32), size: (f32, f32), trailing: bool) {
+        let host = Button::new("Close").tooltip("Close Proof preview");
+        let content = if trailing {
+            Column::new().child(Button::new("filler")).child(host)
+        } else {
+            Column::new().child(host)
+        };
+        let mut app = App::mount_with_size(
+            Column::new().child(window(at, size).child(content)),
+            800,
+            600,
+        );
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Close")).unwrap();
+        let frame = panel(&app);
+        let at = center(app.scene().composited_rect(button));
+        app.update_pointer_proximity(Point {
+            x: at.x + 1.0,
+            y: at.y,
+        });
+        app.frame();
+        app.update_pointer_proximity(at);
+        app.frame();
+        let tip = tooltip_bounds(&app, button);
+        // The tooltip pokes out of the frame in the case under test.
+        assert!(
+            tip.y < frame.y
+                || tip.x < frame.x
+                || tip.right() > frame.right()
+                || tip.bottom() > frame.bottom(),
+            "{tip:?} stays inside {frame:?}"
+        );
+        let (_, clip) = app.scene().composite_context(button);
+        assert_eq!(
+            clip.intersect(&tip),
+            tip,
+            "the window clip {clip:?} cuts the tooltip {tip:?}"
+        );
+    }
+
+    #[test]
+    fn a_tooltip_above_a_windows_top_edge_is_not_clipped_by_the_window() {
+        tooltip_clip_check((200.0, 20.0), (300.0, 160.0), false);
+    }
+
+    #[test]
+    fn a_tooltip_past_a_windows_side_edge_is_not_clipped_by_the_window() {
+        // A narrow window: the wide tooltip centred on the button is wider.
+        tooltip_clip_check((300.0, 200.0), (90.0, 120.0), false);
+    }
+
+    #[test]
+    fn a_window_still_clips_the_content_it_owns_next_to_its_overlays() {
+        let mut app = App::mount_with_size(
+            Column::new().child(
+                window((200.0, 100.0), (300.0, 120.0)).child(
+                    Column::new()
+                        .child(Button::new("Close").tooltip("Close the window"))
+                        .child(Button::new("Plain").height(400.0)),
+                ),
+            ),
+            800,
+            600,
+        );
+        app.frame();
+        let frame = panel(&app);
+        let plain = app.find_widget(Role::Button, Some("Plain")).unwrap();
+        let r = app.scene().composited_rect(plain);
+        assert!(r.bottom() <= frame.bottom(), "{r:?} escapes {frame:?}");
+        let below = Point {
+            x: frame.x + 10.0,
+            y: frame.bottom() + 20.0,
+        };
+        assert_ne!(app.hit_test(below), Some(plain));
+    }
+
+    #[test]
+    fn a_dropdown_popup_extends_past_the_bottom_of_its_window_and_takes_clicks_there() {
+        let view = Column::new().child(
+            window((150.0, 100.0), (320.0, 150.0)).child(
+                Dropdown::new("Keymap")
+                    .open(true)
+                    .option(DropdownOption::new("one").selected(true))
+                    .option(DropdownOption::new("two"))
+                    .option(DropdownOption::new("three"))
+                    .option(DropdownOption::new("four"))
+                    .option(DropdownOption::new("five"))
+                    .option(DropdownOption::new("six")),
+            ),
+        );
+        let mut app = App::mount_with_size(view, 800, 600);
+        app.frame();
+        let frame = panel(&app);
+        let mut past = 0;
+        for name in ["one", "two", "three", "four", "five", "six"] {
+            let option = app.find_widget(Role::ListBoxOption, Some(name)).unwrap();
+            let rect = app.scene().composited_rect(option);
+            let layout = app.scene().layout(option).unwrap().rect;
+            assert_eq!(rect, layout, "option {name} is clipped to {frame:?}");
+            if layout.bottom() > frame.bottom() + 1.0 {
+                past += 1;
+                assert_eq!(
+                    app.hit_test(center(layout)),
+                    Some(option),
+                    "option {name} takes no click below the window"
+                );
+            }
+        }
+        assert!(past > 0, "the test needs an option below the window frame");
+    }
+
+    #[test]
+    fn a_context_menu_opened_in_a_text_field_in_a_window_is_not_clipped() {
+        let view = Column::new().child(
+            window((150.0, 100.0), (260.0, 120.0)).child(
+                TextInput::new("note").label("Note").context_menu(
+                    ContextMenu::new()
+                        .item(ContextMenuItem::new("One"))
+                        .item(ContextMenuItem::new("Two"))
+                        .item(ContextMenuItem::new("Three"))
+                        .item(ContextMenuItem::new("Four")),
+                ),
+            ),
+        );
+        let mut app = App::mount_with_size(view, 800, 600);
+        app.frame();
+        let frame = panel(&app);
+        let field = app.find_widget(Role::TextInput, Some("Note")).unwrap();
+        let r = app.scene().layout(field).unwrap().rect;
+        let at = Point {
+            x: r.x + 10.0,
+            y: frame.bottom() - 10.0,
+        };
+        assert!(app.open_context_menu(field, at, false));
+        app.frame();
+        let item = app.find_widget(Role::MenuItem, Some("Four")).unwrap();
+        let rect = app.scene().composited_rect(item);
+        assert!(rect.bottom() > frame.bottom(), "{rect:?} vs {frame:?}");
+        assert_eq!(rect, app.scene().layout(item).unwrap().rect);
+        assert_eq!(app.hit_test(center(rect)), Some(item));
+    }
+}

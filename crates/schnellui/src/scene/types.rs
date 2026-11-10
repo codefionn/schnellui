@@ -1000,8 +1000,15 @@ pub struct RemovedSubtree {
 /// Inherited compositing state. Translation is relative to the parent property
 /// node. Clip coordinates use the same layout space as paint primitives and are
 /// translated by the accumulated translation before intersecting ancestor clips.
+///
+/// `clip_spares_overlays` marks a frame clip (a window's content bounds) that
+/// does not reach overlay layers below it: a tooltip, popup or menu owned by a
+/// control inside the frame resolves its clip from its own overlay layer, so it
+/// may paint and take hits outside the frame. Viewport (scroll) clips are not
+/// affected.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CompositeProperties {
     pub translation: Point,
     pub clip: Option<Rect>,
+    pub clip_spares_overlays: bool,
 }

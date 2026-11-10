@@ -1095,3 +1095,52 @@ fn renders_empty_scene_to_clear_color() {
     assert_eq!(px(&rgba, 32, 31, 31), [255, 255, 255, 255]);
     assert_eq!(px(&rgba, 32, 16, 16), [255, 255, 255, 255]);
 }
+
+/// A frame clip that spares overlays clips the content it owns but not an
+/// overlay layer below it: a tooltip or popup may paint outside the window.
+#[test]
+fn an_overlay_below_a_sparing_frame_clip_is_not_clipped_by_it() {
+    use schnellui::scene::CompositeProperties;
+    let mut r = match Renderer::try_new(64, 64, Backend::Auto) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipping GPU render test: {e}");
+            return;
+        }
+    };
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Column, None);
+    scene.set_root(root);
+    let content = scene.insert(WidgetKind::Column, Some(root));
+    scene.set_composite_properties(
+        content,
+        CompositeProperties {
+            clip: Some(Rect::new(10.0, 10.0, 20.0, 20.0)),
+            clip_spares_overlays: true,
+            ..Default::default()
+        },
+    );
+    let solid = |x: f32| Primitive::SolidRect {
+        rect: Rect::new(x, 12.0, 8.0, 8.0),
+        color: Color::WHITE,
+        corner_radius: 0.0,
+    };
+    let own = scene.insert(WidgetKind::Chart, Some(content));
+    scene.paint_mut(own).primitives.push(solid(12.0));
+    let popup = scene.insert(WidgetKind::Chart, Some(content));
+    scene.set_overlay(popup);
+    scene.paint_mut(popup).primitives.push(solid(40.0));
+    scene.mark_dirty(own, DirtyFlags::PAINT);
+    scene.mark_dirty(popup, DirtyFlags::PAINT);
+
+    r.core.gather(&scene);
+    let clip_of = |node| {
+        let f = r.core.fragments.get(&node).unwrap();
+        f.clip
+    };
+    assert_eq!(clip_of(own), Rect::new(10.0, 10.0, 20.0, 20.0));
+    assert_eq!(
+        clip_of(popup).intersect(&Rect::new(40.0, 12.0, 8.0, 8.0)),
+        Rect::new(40.0, 12.0, 8.0, 8.0)
+    );
+}

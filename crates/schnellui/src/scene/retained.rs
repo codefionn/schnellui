@@ -881,9 +881,39 @@ impl Scene {
     /// Accumulated translation and window-space clip for this property node.
     /// The clip includes ancestor viewport clips and this node's explicit clip.
     pub fn composite_context(&self, id: WidgetId) -> (Point, Rect) {
-        let (mut offset, mut clip) = match self.tree.get(id).and_then(|node| node.parent) {
+        self.composite_context_in(id, false)
+    }
+
+    /// The `(offset, clip)` an overlay root inherits from where it sits in the
+    /// tree, before its own properties apply. Frame clips marked
+    /// `clip_spares_overlays` on its ancestors are left out: an overlay resolves
+    /// its clip from its layer, not from the window that owns its control.
+    pub fn overlay_inherited_context(&self, id: WidgetId) -> (Point, Rect) {
+        self.inherited_context_in(id, false)
+    }
+
+    /// `spare` is set once the walk up has crossed an overlay root, so frame
+    /// clips above that root do not apply.
+    fn composite_context_in(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
+        let (mut offset, mut clip) = self.inherited_context_in(id, spare);
+        let properties = self.composite_properties(id);
+        offset.x += properties.translation.x;
+        offset.y += properties.translation.y;
+        if let Some(mut local) = properties.clip {
+            if !(spare && properties.clip_spares_overlays) {
+                local.x += offset.x;
+                local.y += offset.y;
+                clip = clip.intersect(&local);
+            }
+        }
+        (offset, clip)
+    }
+
+    fn inherited_context_in(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
+        match self.tree.get(id).and_then(|node| node.parent) {
             Some(parent) => {
-                let (mut offset, mut clip) = self.composite_context(parent);
+                let (mut offset, mut clip) =
+                    self.composite_context_in(parent, spare || self.is_overlay(id));
                 if self.tree[parent].kind == WidgetKind::Scroll {
                     if let Some(layout) = self.layout.get(parent) {
                         let mut viewport = layout.rect;
@@ -898,16 +928,7 @@ impl Scene {
                 (offset, clip)
             }
             None => (Point::default(), UNBOUNDED),
-        };
-        let properties = self.composite_properties(id);
-        offset.x += properties.translation.x;
-        offset.y += properties.translation.y;
-        if let Some(mut local) = properties.clip {
-            local.x += offset.x;
-            local.y += offset.y;
-            clip = clip.intersect(&local);
         }
-        (offset, clip)
     }
 
     /// Geometry in the accessibility coordinate space: like
@@ -921,17 +942,18 @@ impl Scene {
         let Some(layout) = self.layout.get(id) else {
             return Rect::ZERO;
         };
-        let (offset, clip) = self.accessibility_context(id);
+        let (offset, clip) = self.accessibility_context(id, false);
         let mut rect = layout.rect;
         rect.x += offset.x;
         rect.y += offset.y;
         rect.intersect(&clip)
     }
 
-    fn accessibility_context(&self, id: WidgetId) -> (Point, Rect) {
+    fn accessibility_context(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
         let (mut offset, mut clip) = match self.tree.get(id).and_then(|node| node.parent) {
             Some(parent) => {
-                let (offset, clip) = self.accessibility_context(parent);
+                let (offset, clip) =
+                    self.accessibility_context(parent, spare || self.is_overlay(id));
                 if self.tree[parent].kind == WidgetKind::Scroll {
                     (offset, UNBOUNDED)
                 } else {
@@ -944,9 +966,11 @@ impl Scene {
         offset.x += properties.translation.x;
         offset.y += properties.translation.y;
         if let Some(mut local) = properties.clip {
-            local.x += offset.x;
-            local.y += offset.y;
-            clip = clip.intersect(&local);
+            if !(spare && properties.clip_spares_overlays) {
+                local.x += offset.x;
+                local.y += offset.y;
+                clip = clip.intersect(&local);
+            }
         }
         (offset, clip)
     }
@@ -1248,7 +1272,12 @@ impl Scene {
             all
         };
         let properties = self.composite_properties(id);
-        let rect = properties.clip.map_or(rect, |clip| rect.intersect(&clip));
+        // A frame clip that spares overlays must not prune them, so it only
+        // clips at hit time; the bounds stay a conservative superset.
+        let rect = match properties.clip {
+            Some(clip) if !properties.clip_spares_overlays => rect.intersect(&clip),
+            _ => rect,
+        };
         bounds.insert(id, BoundsEntry { rect, dirty: false });
         index.remove(id);
         rect

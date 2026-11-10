@@ -1038,6 +1038,7 @@ fn nested_property_translation_clip_matches_fresh_render() {
         CompositeProperties {
             translation: Point { x: 20.0, y: 10.0 },
             clip: Some(Rect::new(0.0, 0.0, 40.0, 40.0)),
+            ..Default::default()
         },
     );
     scene.set_composite_properties(
@@ -1045,6 +1046,7 @@ fn nested_property_translation_clip_matches_fresh_render() {
         CompositeProperties {
             translation: Point { x: 10.0, y: 10.0 },
             clip: Some(Rect::new(0.0, 0.0, 20.0, 20.0)),
+            ..Default::default()
         },
     );
     let first = renderer.render_rgba8(&scene, &atlas);
@@ -1059,6 +1061,7 @@ fn nested_property_translation_clip_matches_fresh_render() {
         CompositeProperties {
             translation: Point { x: 140.0, y: 10.0 },
             clip: Some(Rect::new(0.0, 0.0, 40.0, 40.0)),
+            ..Default::default()
         },
     );
     assert!(scene.layout_dirty().is_empty());
@@ -1163,6 +1166,7 @@ fn tile_cache_matches_transparent_overlay_reorder_and_rotated_clip() {
             CompositeProperties {
                 translation: Point::default(),
                 clip: Some(Rect::new(105.0, 105.0, 70.0, 70.0)),
+                ..Default::default()
             },
         );
         scene.replace_primitives(
@@ -1188,6 +1192,7 @@ fn tile_cache_matches_transparent_overlay_reorder_and_rotated_clip() {
         CompositeProperties {
             translation: Point { x: 140.0, y: 0.0 },
             clip: Some(Rect::new(105.0, 105.0, 70.0, 70.0)),
+            ..Default::default()
         },
     );
     let moved = renderer.render_rgba8(&scene, &atlas);

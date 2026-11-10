@@ -1614,7 +1614,17 @@ impl GpuCore {
             }
             if !after && scene.is_overlay(id) && self.overlay_root_walk != Some(id) {
                 if defer_overlays {
-                    self.overlay_roots.push((id, offset, clip));
+                    // An overlay takes its clip from its layer: frame clips of
+                    // the windows above it do not reach it.
+                    let (_, inherited) = scene.overlay_inherited_context(id);
+                    let unclipped = Rect::new(
+                        UNCLIPPED_CLIP[0],
+                        UNCLIPPED_CLIP[1],
+                        UNCLIPPED_CLIP[2],
+                        UNCLIPPED_CLIP[3],
+                    );
+                    self.overlay_roots
+                        .push((id, offset, inherited.intersect(&unclipped)));
                     continue;
                 }
                 if !gather {

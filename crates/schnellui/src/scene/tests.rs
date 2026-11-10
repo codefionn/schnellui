@@ -948,6 +948,7 @@ fn composited_geometry_resolves_nested_properties_and_scroll() {
         CompositeProperties {
             translation: Point { x: 20.0, y: 10.0 },
             clip: None,
+            ..Default::default()
         },
     );
     scene.set_scroll_offset(root, Point { x: 0.0, y: 30.0 });
@@ -958,6 +959,7 @@ fn composited_geometry_resolves_nested_properties_and_scroll() {
         CompositeProperties {
             translation: Point { x: 5.0, y: 2.0 },
             clip: Some(Rect::new(0.0, 40.0, 50.0, 20.0)),
+            ..Default::default()
         },
     );
     assert_eq!(scene.composited_offset(child), Point { x: 25.0, y: -18.0 });
@@ -1016,6 +1018,7 @@ fn translated_child_invalidates_cached_subtree_and_hit_index() {
         CompositeProperties {
             translation: Point { x: 200.0, y: 0.0 },
             clip: None,
+            ..Default::default()
         },
     );
     assert_eq!(scene.subtree_bounds(root).right(), 210.0);

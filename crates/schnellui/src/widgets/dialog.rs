@@ -665,6 +665,9 @@ fn emit_panel_paint(runtime: &crate::widgets::Runtime, scene: &mut Scene, id: Wi
     if let Some(content) = content {
         let mut properties = scene.composite_properties(content);
         properties.clip = Some(inner);
+        // Tooltips, popups and menus owned by a control in the window are
+        // overlay layers of their own and may extend past the frame.
+        properties.clip_spares_overlays = true;
         scene.set_composite_properties(content, properties);
     }
     let pd = scene.paint_mut(id);

@@ -31,6 +31,7 @@ fn translated_clipped_leaf_agrees_with_pointer_cursor_and_accessibility() {
         CompositeProperties {
             translation: Point { x: 120.0, y: 30.0 },
             clip: Some(Rect::new(0.0, 0.0, 35.0, 80.0)),
+            ..Default::default()
         },
     );
     assert_eq!(app.hit_test(Point { x: 140.0, y: 50.0 }), Some(button));
@@ -87,6 +88,7 @@ fn wheel_target_uses_translated_viewport_and_inherited_clip() {
         CompositeProperties {
             translation: Point { x: 100.0, y: 20.0 },
             clip: Some(Rect::new(0.0, 0.0, 40.0, 100.0)),
+            ..Default::default()
         },
     );
     assert_eq!(

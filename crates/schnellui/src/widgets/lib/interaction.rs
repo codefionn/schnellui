@@ -1199,11 +1199,16 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
         id: WidgetId,
         mut offset: Point,
         clip: Option<Rect>,
+        spare: bool,
     ) -> (Point, Option<Rect>) {
         let properties = scene.composite_properties(id);
         offset.x += properties.translation.x;
         offset.y += properties.translation.y;
-        let clip = match (clip, properties.clip) {
+        // Frame clips that spare overlays do not apply above an overlay root.
+        let local_clip = properties
+            .clip
+            .filter(|_| !(spare && properties.clip_spares_overlays));
+        let clip = match (clip, local_clip) {
             (Some(parent), Some(local)) => Some(parent.intersect(&translated_rect(local, offset))),
             (None, Some(local)) => Some(translated_rect(local, offset)),
             (parent, None) => parent,
@@ -1255,7 +1260,7 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
         offset: Point,
         clip: Option<Rect>,
     ) -> Option<WidgetId> {
-        let (offset, clip) = property_composite_state(scene, id, offset, clip);
+        let (offset, clip) = property_composite_state(scene, id, offset, clip, false);
         if !scene.is_visible(id) || clip.is_some_and(|clip| !clip.contains(p)) {
             return None;
         }
@@ -1381,7 +1386,7 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
             let mut offset = Point::default();
             let mut clip = None;
             for &ancestor in chain.iter().rev() {
-                (offset, clip) = property_composite_state(scene, ancestor, offset, clip);
+                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, true);
                 (offset, clip) = child_composite_state(scene, ancestor, offset, clip);
             }
             if clip.is_some_and(|clip| !clip.contains(p)) {
@@ -1447,7 +1452,7 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
             let mut offset = Point::default();
             let mut clip = None;
             for &ancestor in chain.iter().rev() {
-                (offset, clip) = property_composite_state(scene, ancestor, offset, clip);
+                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, true);
                 (offset, clip) = child_composite_state(scene, ancestor, offset, clip);
             }
             let hit = nested_hit(runtime, scene, root, id, p)
