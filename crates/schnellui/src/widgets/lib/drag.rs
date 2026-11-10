@@ -764,6 +764,15 @@ macro_rules! flex_container {
                 self
             }
 
+            /// Never grows past the parent's content box, whatever a definite
+            /// `width` or `size` asks for: a 460px column in a 320px window
+            /// shrinks to 320px and its text reflows, instead of running off
+            /// the edge. In `view!` it is the valueless `fit_parent` flag.
+            pub fn fit_parent(mut self) -> $name {
+                self.style.fit_parent = true;
+                self
+            }
+
             /// Sets the minimum outer width; content may make it wider.
             pub fn min_width(mut self, width: f32) -> $name {
                 self.style.min_width = Some(width.max(0.0));

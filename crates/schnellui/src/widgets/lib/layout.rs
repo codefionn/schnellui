@@ -380,6 +380,17 @@ impl Scroll {
         self.style.fill = true;
         self
     }
+    /// Hands the content the viewport's width instead of its own max-content
+    /// width. By default a Scroll sizes its child to its natural width, so a
+    /// wrapping row or a text paragraph inside never sees a width to wrap at and
+    /// runs past a narrow window with no way to scroll to it (the viewport scrolls
+    /// only down). With this on, wrapping rows wrap, and text under a column that
+    /// stretches reflows, at the viewport width. A child with a definite width
+    /// keeps it.
+    pub fn fit_width(mut self) -> Scroll {
+        self.style.align = Align::Stretch;
+        self
+    }
     /// Sets the minimum viewport width; content or a definite size may make it wider.
     pub fn min_width(mut self, width: f32) -> Scroll {
         self.style.min_width = Some(width.max(0.0));

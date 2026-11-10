@@ -1021,3 +1021,44 @@ fn sub_pixel_overflow_is_not_scrollable() {
     );
     assert_eq!(scroll_metrics(&scene, scroll).unwrap().max_offset, 1.0);
 }
+
+/// The width of a wrapping row of five 60px boxes inside a scroll viewport 200
+/// wide, next to a 300px box that is wider than the viewport.
+fn wrapped_row_width(fit: bool) -> f32 {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let mut row = Row::new().wrap().gap(4.0);
+    for _ in 0..5 {
+        row = row.child(Column::new().size(60.0, 20.0));
+    }
+    let mut scroll = Scroll::new().fill().child(
+        Column::new()
+            .align(Align::Stretch)
+            .child(row)
+            .child(Column::new().size(300.0, 10.0)),
+    );
+    if fit {
+        scroll = scroll.fit_width();
+    }
+    let (scene, _l, _t, _a, id) = build_and_layout(
+        runtime,
+        scroll,
+        Size {
+            width: 200.0,
+            height: 100.0,
+        },
+    );
+    let column = scene.node(id).unwrap().children[0];
+    let row = scene.node(column).unwrap().children[0];
+    scene.layout(row).unwrap().rect.width
+}
+
+/// A Scroll sizes its child to the widest thing inside it by default, so a
+/// wrapping row beside a wide box takes that box's width and never wraps at the
+/// viewport's. `fit_width` hands the child the viewport's width, and the row
+/// wraps there.
+#[test]
+fn fit_width_gives_a_wrapping_row_the_viewport_width() {
+    assert!(wrapped_row_width(false) > 200.0);
+    assert!((wrapped_row_width(true) - 200.0).abs() < 0.5);
+}

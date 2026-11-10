@@ -219,7 +219,7 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
             text(size = 22.0, bold) { "schnellui playground" }
             // actions: button (live + disabled), link, badge, and the live
             // click counter the button drives (SOUL §3.3)
-            row(gap = 10.0, align = center) {
+            row(gap = 10.0, align = center, wrap) {
                 button(on:click = move || {
                     clicks.update(|v| *v += 1);
                     click_runtime.edit(|p| p.gallery_clicks = clicks.get());
@@ -271,6 +271,7 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
     let owner_runtime = runtime.clone();
     let ranges = Row::new()
         .gap(10.0)
+        .wrap()
         .align(Align::Center)
         .child(Text::new("Volume"))
         .child(
@@ -306,6 +307,7 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
     // text entry + an image that has no pixels yet, as tall as the fields
     let entry = Row::new()
         .gap(8.0)
+        .wrap()
         .align(Align::Center)
         .child(
             TextInput::new(project)
@@ -328,7 +330,7 @@ fn gallery_view(runtime: PlaygroundRuntime, live: bool, theme: ThemeChoice) -> i
             divider
             // selection: tabs + list beside the table (header + two data
             // rows, first row pre-selected)
-            row(gap = 40.0) {
+            row(gap = 40.0, wrap) {
                 column(gap = 12.0) {
                     tabs(gap = 2.0) {
                         tab(selected = page.gallery_tab == "General", on:select = move || tab_a.edit(|p| p.gallery_tab = "General")) { "General" }
@@ -414,7 +416,7 @@ fn click_count(clicks: i32) -> String {
 fn counter_view(runtime: PlaygroundRuntime) -> impl View {
     let clicks = create_signal(runtime.page().counter);
     view! {
-        column(gap = 14.0, width = 460.0) {
+        column(gap = 14.0, width = 460.0, fit_parent) {
             text(size = 22.0, bold) { "Button" }
             row(gap = 12.0, align = center) {
                 button(on:click = move || {
@@ -461,7 +463,7 @@ fn tabs_view(runtime: PlaygroundRuntime) -> impl View {
     };
     let (general, privacy, about) = (pick("General"), pick("Privacy"), pick("About"));
     view! {
-        column(gap = 10.0, width = 460.0) {
+        column(gap = 10.0, width = 460.0, fit_parent) {
             text(size = 22.0, bold) { "Tabs" }
             tabs(gap = 2.0) {
                 tab(selected = page == "General", on:select = general) { "General" }
@@ -619,7 +621,7 @@ fn table_view(runtime: PlaygroundRuntime) -> impl View {
 /// text's accessible **name stays the full string** — truncation is visual only.
 fn text_view() -> impl View {
     view! {
-        column(gap = 10.0, width = 460.0) {
+        column(gap = 10.0, width = 460.0, fit_parent) {
             text(size = 22.0, bold) { "Typography" }
             text(size = 16.0) { "regular 16px" }
             text(size = 12.0) { "small 12px" }
@@ -696,6 +698,7 @@ fn images_view() -> impl View {
         .child(
             Row::new()
                 .gap(16.0)
+                .wrap()
                 .align(schnellui::layout::Align::Start)
                 .child(figure(
                     Box::new(Image::from_rgba(64, 64, px).alt("gradient checker")),
@@ -786,6 +789,7 @@ fn dialogs_view() -> impl View {
 
     Column::new()
         .width(600.0)
+        .fit_parent()
         .gap(10.0)
         .child(Text::new("Dialogs").size(22.0).bold())
         .child(
@@ -795,6 +799,8 @@ fn dialogs_view() -> impl View {
         .child(
             Row::new()
                 .width(600.0)
+                .fit_parent()
+                .wrap()
                 .gap(12.0)
                 .child(
                     Column::new()
@@ -1064,10 +1070,13 @@ fn stage(
     }
     // The page scrolls when a design's density makes it taller than the
     // window, with a visible bar so nothing hides below the fold.
-    Scroll::new().fill().scrollbar(true).child(
+    // `fit_width` gives the page the window's width, so rows wrap and prose
+    // reflows at it instead of running off the right edge.
+    Scroll::new().fill().fit_width().scrollbar(true).child(
         Pad::all(PAGE_PADDING).child(
             Column::new()
                 .gap(12.0)
+                .align(schnellui::layout::Align::Stretch)
                 .child(bar)
                 .child(
                     Row::new()
@@ -1657,6 +1666,38 @@ mod tests {
             }
         }
         assert!(stops > 0, "no scenario has a Tab stop");
+    }
+
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content scrolls sideways.
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        for scenario in Scenario::iter() {
+            let runtime = PlaygroundRuntime::default();
+            let cli = Cli::parse_from([
+                "playground",
+                "--headless-windowed",
+                "--width",
+                "360",
+                "--height",
+                "600",
+            ]);
+            let mut app = scenario_app(
+                &runtime,
+                MountState {
+                    scenario,
+                    theme: ThemeChoice::Light,
+                    theme_open: false,
+                },
+                &cli,
+            );
+            for fault in sideways_clips(&mut app) {
+                faults.push(format!("{scenario:?}: {fault}"));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
     }
 
     fn mount(runtime: &PlaygroundRuntime, scenario: Scenario) -> App {

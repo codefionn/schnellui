@@ -530,7 +530,7 @@ fn document(name: &str) -> (&'static str, &'static str) {
 
 /// Secondary text in the muted ink.
 fn caption(text: impl Into<std::borrow::Cow<'static, str>>, size: f32) -> impl View {
-    ThemeProvider::new(MUTED_THEME, Text::new(text).size(size))
+    ThemeProvider::new(MUTED_THEME, Text::new(text).size(size).wrap(WrapMode::Word))
 }
 
 /// A view that may be absent: builds `Some` as usual and `None` as an empty,
@@ -571,13 +571,18 @@ fn example_view(scenario: Scenario, state: ExampleState) -> impl View {
 
     // A window shorter than the page scrolls it, so every row action can be
     // shown.
-    Scroll::new().fill().scrollbar(true).child(
+    // `fit_width` hands the page the window's width, so the reading pane
+    // wraps under the navigation in a narrow window instead of running off it.
+    Scroll::new().fill().fit_width().scrollbar(true).child(
         Pad::all(PAGE_PADDING).child(
             Column::new()
                 .gap(14.0)
+                .align(Align::Stretch)
                 .child(
                     Row::new()
                         .width(712.0)
+                        .fit_parent()
+                        .gap(12.0)
                         .justify(Justify::SpaceBetween)
                         .align(Align::End)
                         .child(Text::new("Fieldwork").size(28.0).bold())
@@ -597,52 +602,58 @@ fn example_view(scenario: Scenario, state: ExampleState) -> impl View {
                 .child(
                     Row::new()
                         .gap(30.0)
+                        .wrap()
                         .align(Align::Start)
                         .child(navigation)
                         .child(
-                            Pad::all(8.0).child(
-                                Column::new()
-                                    .width(420.0)
-                                    .gap(10.0)
-                                    .child(
-                                        Text::dynamic(move || chosen.get())
-                                            .size(30.0)
-                                            .bold()
-                                            .role(Role::Status),
-                                    )
-                                    .child(ThemeProvider::new(
-                                        MUTED_THEME,
-                                        Text::dynamic(move || {
-                                            document(&chosen.get()).0.to_string()
-                                        })
-                                        .size(13.0),
-                                    ))
-                                    .child(Divider::new())
-                                    .child(
-                                        Text::dynamic(move || {
-                                            document(&chosen.get()).1.to_string()
-                                        })
-                                        .size(16.0)
-                                        .wrap(WrapMode::Word),
-                                    )
-                                    .child(Divider::new())
-                                    .child(
-                                        Row::new()
-                                            .width(420.0)
-                                            .justify(Justify::SpaceBetween)
-                                            .align(Align::Center)
-                                            .child(
-                                                Column::new()
-                                                    .gap(2.0)
-                                                    .child(caption("Last change", 12.0))
-                                                    .child(
-                                                        Text::dynamic(move || last_action.get())
+                            // The pane's box is its 8px padding plus a 420px column, and
+                            // never wider than the window lets it be.
+                            Column::new().width(436.0).fit_parent().child(
+                                Pad::all(8.0).child(
+                                    Column::new()
+                                        .align(Align::Stretch)
+                                        .gap(10.0)
+                                        .child(
+                                            Text::dynamic(move || chosen.get())
+                                                .size(30.0)
+                                                .bold()
+                                                .role(Role::Status),
+                                        )
+                                        .child(ThemeProvider::new(
+                                            MUTED_THEME,
+                                            Text::dynamic(move || {
+                                                document(&chosen.get()).0.to_string()
+                                            })
+                                            .size(13.0),
+                                        ))
+                                        .child(Divider::new())
+                                        .child(
+                                            Text::dynamic(move || {
+                                                document(&chosen.get()).1.to_string()
+                                            })
+                                            .size(16.0)
+                                            .wrap(WrapMode::Word),
+                                        )
+                                        .child(Divider::new())
+                                        .child(
+                                            Row::new()
+                                                .justify(Justify::SpaceBetween)
+                                                .align(Align::Center)
+                                                .child(
+                                                    Column::new()
+                                                        .gap(2.0)
+                                                        .child(caption("Last change", 12.0))
+                                                        .child(
+                                                            Text::dynamic(move || {
+                                                                last_action.get()
+                                                            })
                                                             .size(14.0)
                                                             .role(Role::Status),
-                                                    ),
-                                            )
-                                            .child(Maybe(undo)),
-                                    ),
+                                                        ),
+                                                )
+                                                .child(Maybe(undo)),
+                                        ),
+                                ),
                             ),
                         ),
                 ),
@@ -932,6 +943,21 @@ fn manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        for scenario in Scenario::iter() {
+            let (mut app, _state) = scenario_app(scenario, 360, 600, 1.0);
+            for fault in sideways_clips(&mut app) {
+                faults.push(format!("{}: {fault}", scenario.name()));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
 
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.

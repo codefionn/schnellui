@@ -142,6 +142,79 @@ pub fn tab_stops_reachable(app: &mut App) -> Result<usize, String> {
     Err("the tab order does not wrap within 512 stops".into())
 }
 
+/// Every visible text node, image, chart or a11y control that the window cuts
+/// off at a side, in tree order, described one per entry. A vertical cut is
+/// ignored: a page scrolls down.
+///
+/// A Scroll viewport scrolls only down, so any content its viewport clips at a
+/// side is unreachable, and so is anything past the window edge.
+pub fn sideways_clips(app: &mut App) -> Vec<String> {
+    use schnellui::scene::WidgetKind;
+    let mut found = Vec::new();
+    app.frame();
+    let size = app.size();
+    let scene = app.scene();
+    for id in scene.preorder() {
+        if !scene.is_visible(id) {
+            continue;
+        }
+        let Some(node) = scene.node(id) else { continue };
+        let text = matches!(node.kind, WidgetKind::Text | WidgetKind::RichText);
+        let picture = matches!(node.kind, WidgetKind::Image | WidgetKind::Chart);
+        let control = scene.a11y(id).is_some_and(|a| {
+            use schnellui::a11y::Role;
+            matches!(
+                Role::from_u16(a.role),
+                Role::Button
+                    | Role::Tab
+                    | Role::ProgressIndicator
+                    | Role::Table
+                    | Role::CheckBox
+                    | Role::TextInput
+                    | Role::Slider
+                    | Role::Switch
+            )
+        });
+        if !(text || control || picture) {
+            continue;
+        }
+        let Some(layout) = scene.layout(id) else {
+            continue;
+        };
+        if layout.rect.is_empty() {
+            continue;
+        }
+        let (offset, clip) = scene.composite_context(id);
+        let left = layout.rect.x + offset.x;
+        let mut right = left + layout.rect.width;
+        if text {
+            // A line that does not wrap runs past its box: the glyphs, not the
+            // box, say how far.
+            if let Some(paint) = scene.paint(id) {
+                for primitive in &paint.primitives {
+                    if let schnellui::scene::Primitive::GlyphQuad { rect, .. } = primitive {
+                        right = right.max(rect.right() + offset.x);
+                    }
+                }
+            }
+        }
+        let shown_left = clip.x.max(0.0);
+        let shown_right = clip.right().min(size.width);
+        if left < shown_left - 0.5 || right > shown_right + 0.5 {
+            let name = scene
+                .a11y(id)
+                .map(|a| format!("{:?} {:?}", a.role, a.name))
+                .unwrap_or_default();
+            found.push(format!(
+                "{:?} {name} spans x {left:.0}..{right:.0} but only {shown_left:.0}..{shown_right:.0} shows in the {:?} window",
+                node.kind,
+                app.size()
+            ));
+        }
+    }
+    found
+}
+
 /// All of the checks above, first failure first.
 pub fn invariants(app: &mut App) -> Result<(), String> {
     if let Some(fault) = decoration_faults(app) {

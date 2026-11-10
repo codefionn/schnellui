@@ -488,6 +488,21 @@ mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
 
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        for scenario in Scenario::iter() {
+            let mut app = scenario_app(scenario, 360, 600, 1.0);
+            for fault in sideways_clips(&mut app) {
+                faults.push(format!("{}: {fault}", scenario.name()));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]

@@ -9,6 +9,25 @@ mod tests {
     use schnellui::accesskit_reexport::TreeId;
     use schnellui::widgets::DockPosition;
 
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    #[ignore = "the board is a fixed size that cannot reflow, and a Scroll scrolls only down: open design item #12"]
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        use crate::runtime::{scenario_app, Scenario};
+        use strum::IntoEnumIterator;
+        for scenario in Scenario::iter() {
+            let runtime = WorkspaceRuntime::default();
+            let mut app = scenario_app(&runtime, scenario, 360, 600, 1.0).expect("scenario");
+            for fault in sideways_clips(&mut app) {
+                faults.push(format!("{scenario:?}: {fault}"));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]

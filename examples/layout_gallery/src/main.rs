@@ -32,14 +32,22 @@ use schnellui::layout::{Align, Container, ContainerStyle};
 use schnellui::scene::Size;
 use schnellui::testing::find_by_role_name;
 use schnellui::view;
-use schnellui::widgets::{Column, Image, Pad, Row, Spacer, Stack, Text, TextAlign, View, WrapMode};
+use schnellui::widgets::{
+    Column, Image, Pad, Row, Scroll, Spacer, Stack, Text, TextAlign, View, WrapMode,
+};
 use schnellui::App;
 use strum::IntoEnumIterator;
 
 const WINDOW_PADDING: f32 = 20.0;
 
+/// The page scrolls when the window is too short for it, and gets the window's
+/// width (`fit_width`) so headings wrap and `row(wrap)` flows at it.
 fn stage(content: impl View) -> impl View {
-    Pad::all(WINDOW_PADDING).child(content)
+    Scroll::new()
+        .fill()
+        .fit_width()
+        .scrollbar(true)
+        .child(Pad::all(WINDOW_PADDING).child(content))
 }
 
 /// The enumerable scenario table (SOUL §7.1 — `clap::ValueEnum` + `strum::EnumIter`,
@@ -94,7 +102,7 @@ impl Scenario {
 fn rows_and_columns_view() -> impl View {
     view! {
         column(gap = 16.0) {
-            text(size = 20.0) { "Column stacks vertically; Row lays out horizontally" }
+            text(size = 20.0, wrap = WrapMode::Word) { "Column stacks vertically; Row lays out horizontally" }
             // first Row: three labelled leaves, spaced 12px apart on the main axis.
             row(gap = 12.0) {
                 text { "Row A left" }
@@ -123,7 +131,7 @@ fn rows_and_columns_view() -> impl View {
 fn padding_view() -> impl View {
     view! {
         column(gap = 16.0) {
-            text(size = 20.0) { "Pad::all(24) insets its child; the right button has none" }
+            text(size = 20.0, wrap = WrapMode::Word) { "Pad::all(24) insets its child; the right button has none" }
             row(gap = 56.0) {
                 // left cell: identical button, wrapped in 24px of padding on all sides.
                 column(gap = 6.0) {
@@ -165,7 +173,11 @@ fn stack_view() -> impl View {
 
     Column::new()
         .gap(12.0)
-        .child(Text::new("Stack layers children in Z; the last child paints on top").size(20.0))
+        .child(
+            Text::new("Stack layers children in Z; the last child paints on top")
+                .size(20.0)
+                .wrap(WrapMode::Word),
+        )
         .child(
             Stack::new()
                 .style(stack_style)
@@ -198,7 +210,11 @@ fn spacer_view(width: u32, height: u32) -> impl View {
 
     Column::new()
         .gap(12.0)
-        .child(Text::new("Spacer grows to fill free space, pushing the labels apart").size(20.0))
+        .child(
+            Text::new("Spacer grows to fill free space, pushing the labels apart")
+                .size(20.0)
+                .wrap(WrapMode::Word),
+        )
         .child(
             Row::new()
                 .style(row_style)
@@ -268,7 +284,9 @@ fn wrap_view(width: u32, height: u32) -> impl View {
     Column::new()
         .style(canvas)
         .child(
-            Text::new("Wrap: one paragraph, four line-break policies (narrow column)").size(18.0),
+            Text::new("Wrap: one paragraph, four line-break policies (narrow column)")
+                .size(18.0)
+                .wrap(WrapMode::Word),
         )
         // NoWrap is the default (WrapMode::NoWrap + Start, no ellipsis): the legacy
         // single-line path. Its natural width exceeds the column, so it overflows.
@@ -311,7 +329,7 @@ fn flex_grow_view(width: u32) -> impl View {
     let row_w = (width as f32 - 40.0).max(240.0);
     view! {
         column(gap = 16.0) {
-            text(size = 20.0) { "flex(grow = n): weighted gaps share free space 1 : 2" }
+            text(size = 20.0, wrap = WrapMode::Word) { "flex(grow = n): weighted gaps share free space 1 : 2" }
             row(width = row_w) {
                 text { "A" }
                 flex(grow = 1.0)
@@ -319,7 +337,7 @@ fn flex_grow_view(width: u32) -> impl View {
                 flex(grow = 2.0)
                 text { "C" }
             }
-            text(size = 13.0) { "the B-to-C gap is exactly twice the A-to-B gap" }
+            text(size = 13.0, wrap = WrapMode::Word) { "the B-to-C gap is exactly twice the A-to-B gap" }
         }
     }
 }
@@ -338,7 +356,7 @@ fn flex_grow_view(width: u32) -> impl View {
 fn flex_wrap_view() -> impl View {
     view! {
         column(gap = 16.0) {
-            text(size = 20.0) { "row(wrap): buttons flow onto new lines at the fixed width" }
+            text(size = 20.0, wrap = WrapMode::Word) { "row(wrap): buttons flow onto new lines at the fixed width" }
             row(width = 260.0, wrap, gap = 10.0) {
                 button { "alpha" }
                 button { "beta" }
@@ -347,7 +365,7 @@ fn flex_wrap_view() -> impl View {
                 button { "epsilon" }
                 button { "zeta" }
             }
-            text(size = 13.0) { "the row's height derives from the wrapped line count" }
+            text(size = 13.0, wrap = WrapMode::Word) { "the row's height derives from the wrapped line count" }
         }
     }
 }
@@ -579,6 +597,26 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        for scenario in Scenario::iter() {
+            let mut app = scenario_app(scenario, 360, 600, 1.0);
+            for fault in sideways_clips(&mut app) {
+                // The NoWrap sample overflows its column on purpose: the lesson
+                // is the line running off, and any width is cut somewhere.
+                if scenario == Scenario::Wrap && fault.contains("Layout answers") {
+                    continue;
+                }
+                faults.push(format!("{}: {fault}", scenario.name()));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
 
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.

@@ -32,15 +32,28 @@ use clap::{Parser, ValueEnum};
 use schnellui::a11y;
 use schnellui::testing::find_by_role_name;
 use schnellui::view;
-use schnellui::widgets::{Pad, Stack, View};
+use schnellui::widgets::{Pad, Scroll, Stack, View, WrapMode};
 use schnellui::App;
 use strum::IntoEnumIterator;
 
 const WINDOW_PADDING: f32 = 20.0;
 
-/// The outer stack owns the viewport; the padded child becomes the responsive
-/// work area, so `fill` scenarios still derive from a definite box.
+/// The outer scroll owns the viewport; the padded child becomes the responsive
+/// work area, so `fill` scenarios still derive from a definite box. The scroll
+/// hands the work area the window's width (`fit_width`), so headings wrap and
+/// `row(wrap)` flows at it, and a window too short for the page scrolls it.
 fn stage(content: impl View) -> impl View {
+    Scroll::new()
+        .fill()
+        .fit_width()
+        .scrollbar(true)
+        .child(Pad::all(WINDOW_PADDING).child(content))
+}
+
+/// The pinned-footer page keeps the plain stack: its lesson is a footer glued to
+/// the window's bottom edge, which needs the work area's height to come from the
+/// window, and a scroll's content has no such height. It has no control to reach.
+fn fixed_stage(content: impl View) -> impl View {
     Stack::new()
         .fill()
         .child(Pad::all(WINDOW_PADDING).child(content))
@@ -93,7 +106,7 @@ impl Scenario {
 fn toolbar_view() -> impl View {
     view! {
         column(fill, align = stretch, gap = 16.0) {
-            text(size = 20.0) { "toolbar: one flex(grow = 1) gap pins actions to the far edge" }
+            text(size = 20.0, wrap = WrapMode::Word) { "toolbar: one flex(grow = 1) gap pins actions to the far edge" }
             row(gap = 8.0) {
                 button { "Back" }
                 button { "Forward" }
@@ -101,7 +114,7 @@ fn toolbar_view() -> impl View {
                 button { "Search" }
                 button { "Menu" }
             }
-            text(size = 13.0) { "resize the window: only the middle gap grows" }
+            text(size = 13.0, wrap = WrapMode::Word) { "resize the window: only the middle gap grows" }
         }
     }
 }
@@ -118,7 +131,7 @@ fn toolbar_view() -> impl View {
 fn weighted_view() -> impl View {
     view! {
         column(fill, align = stretch, gap = 16.0) {
-            text(size = 20.0) { "weighted gaps: flex(grow = 1 / 2 / 3) share free space" }
+            text(size = 20.0, wrap = WrapMode::Word) { "weighted gaps: flex(grow = 1 / 2 / 3) share free space" }
             row {
                 text { "A" }
                 flex(grow = 1.0)
@@ -128,7 +141,7 @@ fn weighted_view() -> impl View {
                 flex(grow = 3.0)
                 text { "D" }
             }
-            text(size = 13.0) { "gap ratios stay 1 : 2 : 3 at every viewport width" }
+            text(size = 13.0, wrap = WrapMode::Word) { "gap ratios stay 1 : 2 : 3 at every viewport width" }
         }
     }
 }
@@ -145,20 +158,20 @@ fn weighted_view() -> impl View {
 fn justify_view() -> impl View {
     view! {
         column(fill, align = stretch, gap = 12.0) {
-            text(size = 20.0) { "justify: the same three buttons, four distributions" }
-            text(size = 13.0) { "justify = start" }
+            text(size = 20.0, wrap = WrapMode::Word) { "justify: the same three buttons, four distributions" }
+            text(size = 13.0, wrap = WrapMode::Word) { "justify = start" }
             row(gap = 8.0, justify = start) {
                 button { "one" } button { "two" } button { "three" }
             }
-            text(size = 13.0) { "justify = center" }
+            text(size = 13.0, wrap = WrapMode::Word) { "justify = center" }
             row(gap = 8.0, justify = center) {
                 button { "one" } button { "two" } button { "three" }
             }
-            text(size = 13.0) { "justify = end" }
+            text(size = 13.0, wrap = WrapMode::Word) { "justify = end" }
             row(gap = 8.0, justify = end) {
                 button { "one" } button { "two" } button { "three" }
             }
-            text(size = 13.0) { "justify = space_between" }
+            text(size = 13.0, wrap = WrapMode::Word) { "justify = space_between" }
             row(justify = space_between) {
                 button { "one" } button { "two" } button { "three" }
             }
@@ -179,13 +192,13 @@ fn justify_view() -> impl View {
 fn card_flow_view() -> impl View {
     view! {
         column(fill, align = stretch, gap = 16.0) {
-            text(size = 20.0) { "card flow: row(wrap) re-flows cards to the viewport" }
+            text(size = 20.0, wrap = WrapMode::Word) { "card flow: row(wrap) re-flows cards to the viewport" }
             row(wrap, gap = 10.0) {
                 button { "card 1" } button { "card 2" } button { "card 3" }
                 button { "card 4" } button { "card 5" } button { "card 6" }
                 button { "card 7" } button { "card 8" }
             }
-            text(size = 13.0) { "the line count is derived, never specified" }
+            text(size = 13.0, wrap = WrapMode::Word) { "the line count is derived, never specified" }
         }
     }
 }
@@ -202,11 +215,11 @@ fn card_flow_view() -> impl View {
 /// so dragging the bottom edge keeps the footer glued to it.
 fn pinned_footer_view() -> impl View {
     view! {
-        column(fill) {
-            text(size = 20.0) { "pinned footer: a grown gap in the viewport-filling column" }
-            text(size = 13.0) { "header hugs the top" }
+        column(fill, align = stretch) {
+            text(size = 20.0, wrap = WrapMode::Word) { "pinned footer: a grown gap in the viewport-filling column" }
+            text(size = 13.0, wrap = WrapMode::Word) { "header hugs the top" }
             flex(grow = 1.0)
-            text(size = 13.0) { "footer hugs the bottom, at every viewport height" }
+            text(size = 13.0, wrap = WrapMode::Word) { "footer hugs the bottom, at every viewport height" }
         }
     }
 }
@@ -234,7 +247,7 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             App::mount_with_size_scaled(stage(card_flow_view()), width, height, scale)
         }
         Scenario::PinnedFooter => {
-            App::mount_with_size_scaled(stage(pinned_footer_view()), width, height, scale)
+            App::mount_with_size_scaled(fixed_stage(pinned_footer_view()), width, height, scale)
         }
     }
 }
@@ -428,6 +441,21 @@ mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
 
+    /// At a phone width no text or control is cut at a side with nothing to
+    /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    #[test]
+    fn nothing_is_clipped_sideways_at_360() {
+        use schnellui::testing::fuzz::sideways_clips;
+        let mut faults = Vec::new();
+        for scenario in Scenario::iter() {
+            let mut app = scenario_app(scenario, 360, 600, 1.0);
+            for fault in sideways_clips(&mut app) {
+                faults.push(format!("{}: {fault}", scenario.name()));
+            }
+        }
+        assert!(faults.is_empty(), "{faults:#?}");
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]
@@ -435,14 +463,6 @@ mod tests {
         let mut stops = 0;
         for scenario in Scenario::iter() {
             for (w, h) in [(680, 420), (360, 240), (360, 120)] {
-                // Known gap: `justify` spreads rows across the viewport width, and
-                // a Scroll hands its content its own max-content width, never the
-                // viewport's. Until a Scroll can stretch its child without also
-                // pinning its height, the page cannot scroll without breaking
-                // the lesson, so only the default size is checked there.
-                if scenario == Scenario::Justify && h < 420 {
-                    continue;
-                }
                 let mut app = scenario_app(scenario, w, h, 1.0);
                 stops += tab_stops_reachable(&mut app)
                     .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
