@@ -137,6 +137,7 @@ impl App {
             continuous_redraw: false,
             escape_exits: false,
             redraw_interval: None,
+            input_observer: None,
             redraw_signal: RedrawSignal::default(),
             pending_clipboard: None,
             window_title_provider: None,

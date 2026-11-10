@@ -85,6 +85,17 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                 | WindowEvent::Touch(_)
                 | WindowEvent::Focused(_)
         );
+        if matches!(
+            event,
+            WindowEvent::KeyboardInput { .. }
+                | WindowEvent::Ime(_)
+                | WindowEvent::CursorMoved { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::Touch(_)
+        ) {
+            self.app.note_input();
+        }
         // AccessKit needs focus, move, and resize notifications before the app
         // handles them. This ordering is part of the adapter contract.
         if let (Some(accessibility), Some(window)) =

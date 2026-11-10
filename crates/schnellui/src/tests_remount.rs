@@ -863,6 +863,28 @@ fn escape_exits_is_off_by_default_and_survives_a_host_remount() {
     assert!(replacement.escape_exits());
 }
 
+#[test]
+fn the_input_observer_is_called_and_survives_a_host_remount() {
+    use std::{cell::Cell, rc::Rc};
+
+    use schnellui::widgets::Button;
+
+    let seen = Rc::new(Cell::new(0));
+    let mut previous = App::mount_with_size(Button::new("Run"), 200, 100);
+    previous.note_input();
+    assert_eq!(seen.get(), 0, "no observer, nothing counted");
+    previous.set_input_observer({
+        let seen = seen.clone();
+        move || seen.set(seen.get() + 1)
+    });
+    previous.note_input();
+    assert_eq!(seen.get(), 1);
+    let mut replacement = App::mount_with_size(Button::new("Run"), 200, 100);
+    replacement.inherit_host_configuration(&mut previous);
+    replacement.note_input();
+    assert_eq!(seen.get(), 2);
+}
+
 /// Right-click a field, then let the tree be rebuilt under the open menu: a
 /// theme change (instant, or a fade frame) or a remount that keeps the field.
 /// The menu stays open where it was, and its rows still act.

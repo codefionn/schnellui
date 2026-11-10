@@ -133,6 +133,19 @@ impl App {
         self.escape_exits
     }
 
+    /// Calls `observer` for every pointer, touch, key or IME event the native window host
+    /// receives, before the app handles it. Embedders use it to tell when the person last
+    /// touched the window, for an idle lock. It sees no event of the headless paths.
+    pub fn set_input_observer(&mut self, observer: impl FnMut() + 'static) {
+        self.input_observer = Some(Box::new(observer));
+    }
+
+    pub(crate) fn note_input(&mut self) {
+        if let Some(observer) = self.input_observer.as_mut() {
+            observer();
+        }
+    }
+
     /// Requests periodic native redraws at a bounded cadence. Unlike continuous
     /// redraw this lets the event loop sleep between frames.
     pub fn set_redraw_interval(&mut self, interval: Option<Duration>) {

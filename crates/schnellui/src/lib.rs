@@ -554,6 +554,9 @@ pub struct App {
     /// Optional paced native redraw used by embedders that need periodic polling
     /// without presenting at the monitor refresh rate while idle.
     redraw_interval: Option<Duration>,
+    /// Called by the native host for every pointer, touch, key or IME event, before the app
+    /// handles it. See [`App::set_input_observer`].
+    input_observer: Option<Box<dyn FnMut()>>,
     /// Thread-safe native wake handle. It is inert for headless applications and
     /// connected to the winit proxy when a window starts.
     redraw_signal: RedrawSignal,
