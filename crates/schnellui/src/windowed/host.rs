@@ -1122,22 +1122,20 @@ impl WindowedApp {
                 let Some(text) = request.text.as_deref() else {
                     return DebugReply::error(400, "text key requires text");
                 };
-                // One typed character reaches application shortcuts first,
-                // as a real key press does in the windowed host.
-                let mut chars = text.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None)
-                        if self.app.dispatch_shortcut(crate::Shortcut::new(
-                            c,
-                            request.ctrl,
-                            request.shift,
-                            false,
-                        )) =>
-                    {
-                        true
-                    }
-                    _ => self.dispatch_ui_key(UiKey::Char(text)),
+                // A real keyboard delivers one character per key event, so
+                // each character reaches application shortcuts first and
+                // then the focused control. An IME commit stays whole.
+                let mut changed = false;
+                let mut buf = [0u8; 4];
+                for c in text.chars() {
+                    changed |= self.app.dispatch_shortcut(crate::Shortcut::new(
+                        c,
+                        request.ctrl,
+                        request.shift,
+                        false,
+                    )) || self.dispatch_ui_key(UiKey::Char(c.encode_utf8(&mut buf)));
                 }
+                changed
             }
             // An input method's committed text, as the window's IME event
             // delivers it.

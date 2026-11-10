@@ -230,6 +230,30 @@ fn debug_server_keys_undo_and_redo_typed_text() {
 }
 
 #[test]
+fn debug_server_text_key_types_each_character_through_shortcuts() {
+    use crate::debug_server::DebugKey;
+    use std::{cell::RefCell, rc::Rc};
+
+    let mut app = App::mount(crate::widgets::TextInput::new(""));
+    let pressed = Rc::new(RefCell::new(String::new()));
+    for c in ['1', '2'] {
+        let pressed = Rc::clone(&pressed);
+        app.register_shortcut(crate::Shortcut::new(c, false, false, false), move || {
+            pressed.borrow_mut().push(c)
+        });
+    }
+    app.frame();
+    let mut host = windowed_host(app, None);
+    host.handle_debug_key(DebugKey {
+        key: "text".into(),
+        shift: false,
+        ctrl: false,
+        text: Some("12".into()),
+    });
+    assert_eq!(*pressed.borrow(), "12");
+}
+
+#[test]
 fn headless_clipboard_stays_in_memory() {
     let mut clipboard = super::HostClipboard::Memory(None);
     assert!(clipboard.read_text().is_err());
