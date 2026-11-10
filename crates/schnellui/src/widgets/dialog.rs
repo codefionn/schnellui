@@ -1147,10 +1147,22 @@ pub fn update_dialog_pointer(
         DialogPointerMode::Resize => {
             let available_width = (stage_rect.width - capture.start_anchor.x).max(0.0);
             let available_height = (stage_rect.height - capture.start_anchor.y).max(0.0);
-            let max_width = max_width.unwrap_or(available_width).min(available_width);
-            let max_height = max_height.unwrap_or(available_height).min(available_height);
-            let min_width = min_width.min(max_width);
-            let min_height = min_height.min(max_height);
+            // The size the window already has is always allowed. A window that
+            // starts past the stage edge (or whose stage shrank under it) would
+            // otherwise snap down to what fits on the first drag, even in the
+            // dimension the pointer did not move. Growing then stops at the
+            // current size, and shrinking works from it.
+            let start = capture.start_size;
+            let max_width = max_width
+                .unwrap_or(available_width)
+                .min(available_width)
+                .max(start.width);
+            let max_height = max_height
+                .unwrap_or(available_height)
+                .min(available_height)
+                .max(start.height);
+            let min_width = min_width.min(max_width).min(start.width);
+            let min_height = min_height.min(max_height).min(start.height);
             style.anchor = Some(capture.start_anchor);
             style.width = Some((capture.start_size.width + dx).clamp(min_width, max_width));
             style.height = Some((capture.start_size.height + dy).clamp(min_height, max_height));
@@ -1698,5 +1710,165 @@ mod tests {
                 replacement,
             ));
         }
+    }
+    /// A window that starts partly past the stage edge, such as a default
+    /// position that puts its right edge outside a narrow viewport.
+    fn overhanging(runtime: &crate::widgets::Runtime) -> (Scene, LayoutEngine, WidgetId, Rect) {
+        let (mut scene, mut layout, root) = build_with_layout(
+            runtime,
+            Dialog::new("Proof")
+                .modeless()
+                .non_fixed()
+                .movable()
+                .resizable()
+                .at(500.0, 40.0)
+                .size(300.0, 200.0),
+            Size {
+                width: 640.0,
+                height: 480.0,
+            },
+        );
+        let panel = find_kind(&scene, root, WidgetKind::Dialog).unwrap();
+        let rect = scene.layout(panel).unwrap().rect;
+        let stage = scene.node(panel).and_then(|node| node.parent).unwrap();
+        let stage_rect = scene.layout(stage).unwrap().rect;
+        assert!(
+            rect.right() > stage_rect.right(),
+            "the window {rect:?} must start past the stage edge {stage_rect:?}"
+        );
+        layout.sync_tree(&scene, root);
+        layout.compute(
+            &mut scene,
+            root,
+            Size {
+                width: 640.0,
+                height: 480.0,
+            },
+        );
+        (scene, layout, panel, rect)
+    }
+
+    fn drag_grip(
+        runtime: &crate::widgets::Runtime,
+        scene: &mut Scene,
+        layout: &mut LayoutEngine,
+        panel: WidgetId,
+        rect: Rect,
+        by: Point,
+    ) -> Rect {
+        let grip = Point {
+            x: rect.right() - 2.0,
+            y: rect.bottom() - 2.0,
+        };
+        assert!(begin_dialog_pointer(runtime, scene, grip));
+        update_dialog_pointer(
+            runtime,
+            scene,
+            layout,
+            Point {
+                x: grip.x + by.x,
+                y: grip.y + by.y,
+            },
+        );
+        end_dialog_pointer(runtime);
+        let root = scene.root().unwrap();
+        layout.sync_tree(scene, root);
+        layout.compute(
+            scene,
+            root,
+            Size {
+                width: 640.0,
+                height: 480.0,
+            },
+        );
+        scene.layout(panel).unwrap().rect
+    }
+
+    #[test]
+    fn a_vertical_grow_of_a_window_past_the_stage_edge_keeps_its_width() {
+        let runtime = crate::widgets::Runtime::new();
+        let (mut scene, mut layout, panel, rect) = overhanging(&runtime);
+        let after = drag_grip(
+            &runtime,
+            &mut scene,
+            &mut layout,
+            panel,
+            rect,
+            Point { x: 0.0, y: 50.0 },
+        );
+        assert_eq!(after.width, rect.width);
+        assert_eq!(after.height, rect.height + 50.0);
+    }
+
+    #[test]
+    fn a_horizontal_grow_of_a_window_past_the_stage_edge_keeps_its_height_and_never_shrinks() {
+        let runtime = crate::widgets::Runtime::new();
+        let (mut scene, mut layout, panel, rect) = overhanging(&runtime);
+        let after = drag_grip(
+            &runtime,
+            &mut scene,
+            &mut layout,
+            panel,
+            rect,
+            Point { x: 30.0, y: 0.0 },
+        );
+        assert_eq!(after.height, rect.height);
+        assert!(
+            after.width >= rect.width,
+            "{} < {}",
+            after.width,
+            rect.width
+        );
+    }
+
+    #[test]
+    fn shrinking_a_window_past_the_stage_edge_still_shrinks_it() {
+        let runtime = crate::widgets::Runtime::new();
+        let (mut scene, mut layout, panel, rect) = overhanging(&runtime);
+        let after = drag_grip(
+            &runtime,
+            &mut scene,
+            &mut layout,
+            panel,
+            rect,
+            Point { x: -40.0, y: -30.0 },
+        );
+        assert_eq!(after.width, rect.width - 40.0);
+        assert_eq!(after.height, rect.height - 30.0);
+    }
+    #[test]
+    fn a_vertical_grow_after_the_stage_shrank_under_the_window_keeps_its_width() {
+        let runtime = crate::widgets::Runtime::new();
+        let (mut scene, mut layout, panel, _) = overhanging(&runtime);
+        let root = scene.root().unwrap();
+        let small = Size {
+            width: 320.0,
+            height: 480.0,
+        };
+        layout.sync_tree(&scene, root);
+        layout.compute(&mut scene, root, small);
+        let rect = scene.layout(panel).unwrap().rect;
+        let stage = scene.node(panel).and_then(|node| node.parent).unwrap();
+        let stage_rect = scene.layout(stage).unwrap().rect;
+        assert!(rect.width + (rect.x - stage_rect.x) > stage_rect.width);
+        let grip = Point {
+            x: rect.right() - 2.0,
+            y: rect.bottom() - 2.0,
+        };
+        assert!(begin_dialog_pointer(&runtime, &scene, grip));
+        update_dialog_pointer(
+            &runtime,
+            &scene,
+            &mut layout,
+            Point {
+                x: grip.x,
+                y: grip.y + 40.0,
+            },
+        );
+        layout.sync_tree(&scene, root);
+        layout.compute(&mut scene, root, small);
+        let after = scene.layout(panel).unwrap().rect;
+        assert_eq!(after.width, rect.width);
+        assert_eq!(after.height, rect.height + 40.0);
     }
 }
