@@ -88,6 +88,7 @@ pub fn all() -> Vec<Component> {
         TODO,
         RICH_TEXT,
         RICH_LINKS,
+        CLICK_TARGETS,
     ]
 }
 
@@ -1488,4 +1489,102 @@ pub const RICH_LINKS: Component = Component {
     mount: rich_links,
     canonical: None,
     check: fine,
+};
+
+// --- one of each click target, with counters -----------------------------------
+
+/// A control of every kind that a click activates or selects in, each with a
+/// count of how often it fired, so a click that is lost or counted twice shows
+/// in the tree. The fields hold several words and lines for double and triple
+/// clicks to select.
+fn click_targets(mount: &Mount) -> HeadlessHost {
+    let added = create_signal(0u32);
+    let flag = create_signal(false);
+    let flips = create_signal(0u32);
+    let tab = create_signal("One");
+    let switches = create_signal(0u32);
+    let row = create_signal("Red");
+    let picks = create_signal(0u32);
+    let line = create_signal(String::from("alpha beta gamma delta"));
+    let notes = create_signal(String::from("one two three\nfour five six\nseven"));
+    host(
+        move || {
+            let tabs =
+                ["One", "Two", "Three"]
+                    .into_iter()
+                    .fold(TabBar::new().gap(2.0), |bar, label| {
+                        bar.child(Tab::new(label).selected(tab.get() == label).on_select(
+                            move || {
+                                tab.set(label);
+                                switches.set(switches.get() + 1);
+                            },
+                        ))
+                    });
+            let rows = ["Red", "Green", "Blue"]
+                .into_iter()
+                .fold(List::new(), |list, label| {
+                    list.child(ListItem::new(label).selected(row.get() == label).on_select(
+                        move || {
+                            row.set(label);
+                            picks.set(picks.get() + 1);
+                        },
+                    ))
+                });
+            let doc = RichDoc::new().paragraph([
+                RichSpan::plain("Plain words, a "),
+                RichSpan::bold("bold"),
+                RichSpan::plain(" one and more plain words after it."),
+            ]);
+            Pad::all(12.0).child(
+                Column::new()
+                    .gap(8.0)
+                    .child(
+                        Row::new()
+                            .gap(10.0)
+                            .align(Align::Center)
+                            .child(Button::new("Add").on_click(move || added.set(added.get() + 1)))
+                            .child(Checkbox::new(flag.get()).name("Flag").on_toggle(move |on| {
+                                flag.set(on);
+                                flips.set(flips.get() + 1);
+                            }))
+                            .child(Text::dynamic(move || {
+                                format!(
+                                    "added {} flips {} tabs {} rows {}",
+                                    added.get(),
+                                    flips.get(),
+                                    switches.get(),
+                                    picks.get()
+                                )
+                            })),
+                    )
+                    .child(tabs)
+                    .child(rows)
+                    .child(
+                        TextInput::new(line.get())
+                            .label("Line")
+                            .on_input(move |v: &str| line.set(v.to_owned())),
+                    )
+                    .child(
+                        TextArea::new(notes.get())
+                            .rows(3)
+                            .wrap(WrapMode::Word)
+                            .on_input(move |v: &str| notes.set(v.to_owned())),
+                    )
+                    .child(RichText::new(doc)),
+            )
+        },
+        mount,
+    )
+}
+
+pub const CLICK_TARGETS: Component = Component {
+    name: "click_targets",
+    size: (460, 520),
+    mount: click_targets,
+    canonical: None,
+    check: |app| {
+        clean_text(app)?;
+        exactly_one(app, Role::Tab, "selected")?;
+        exactly_one(app, Role::ListItem, "selected")
+    },
 };

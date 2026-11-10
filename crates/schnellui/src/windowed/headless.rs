@@ -13,7 +13,7 @@ use winit::event::{ElementState, MouseButton};
 use winit::keyboard::ModifiersState;
 
 use super::{HostClipboard, WindowedApp};
-use crate::debug_server::DebugKey;
+use crate::debug_server::{DebugButton, DebugCommand, DebugDrag, DebugKey, DebugPoint, DebugPress};
 use crate::scene::{Point, Rect, Size};
 use crate::widgets::Theme;
 use crate::{App, WindowUpdate};
@@ -23,6 +23,19 @@ use crate::{App, WindowUpdate};
 pub enum PointerButton {
     Left,
     Right,
+}
+
+/// How a [`HeadlessHost`] delivers pointer input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PointerRoute {
+    /// Straight into the window host's `CursorMoved`, `CursorLeft` and
+    /// `MouseInput` handlers, then the remount poll and a frame.
+    Handlers,
+    /// Through the debug server's commands (`move`, `press`, `release`,
+    /// `click-at`, `drag`, `leave`), as `schnellui-debug` drives an app
+    /// started with `--headless-windowed`. Each command draws its own frame,
+    /// so this route cannot batch.
+    Debug,
 }
 
 /// A clipboard command, as Ctrl+C, Ctrl+X and Ctrl+V give the window host.
@@ -100,6 +113,7 @@ pub struct HeadlessHost {
     /// While set, input is delivered without a redraw after each event, as
     /// events that arrive faster than the display refreshes are.
     batching: bool,
+    route: PointerRoute,
 }
 
 impl HeadlessHost {
@@ -114,6 +128,7 @@ impl HeadlessHost {
             held: [false; 2],
             now: Instant::now(),
             batching: false,
+            route: PointerRoute::Handlers,
             host: WindowedApp {
                 app,
                 clipboard: HostClipboard::Memory(None),
@@ -204,10 +219,31 @@ impl HeadlessHost {
         self.host.sync_ime();
     }
 
+    /// Chooses how pointer input reaches the app from here on.
+    pub fn set_route(&mut self, route: PointerRoute) {
+        self.route = route;
+        if route == PointerRoute::Debug {
+            self.set_batching(false);
+        }
+    }
+
+    /// Runs one debug server command as the event loop does and returns the
+    /// HTTP status of its reply. The command settles the app itself.
+    fn debug(&mut self, command: DebugCommand) -> u16 {
+        self.pin_clock();
+        self.host.remount_trigger = "debug_instrumentation";
+        let status = self.host.handle_debug_command(None, command).status;
+        // A command that swapped in a remounted app left its clock unpinned.
+        self.pin_clock();
+        status
+    }
+
     /// With batching on, input events are handled without a redraw between
     /// them, as a burst that arrives within one display frame is. Turning it
-    /// off, or calling [`HeadlessHost::frame`], draws the frame.
+    /// off, or calling [`HeadlessHost::frame`], draws the frame. The debug
+    /// route draws after every command and stays unbatched.
     pub fn set_batching(&mut self, batching: bool) {
+        let batching = batching && self.route == PointerRoute::Handlers;
         self.batching = batching;
         if !batching {
             self.frame();
@@ -237,6 +273,11 @@ impl HeadlessHost {
     /// Whether a pointer button is down.
     pub fn held(&self) -> bool {
         self.held.iter().any(|&down| down)
+    }
+
+    /// Whether `button` is down.
+    pub fn holding(&self, button: PointerButton) -> bool {
+        self.held[button as usize]
     }
 
     /// Whether an animated theme change is still in flight. Each of its
@@ -276,22 +317,38 @@ impl HeadlessHost {
         self.settle();
     }
 
+    /// `p` moved inside the window, since a real pointer never reports a
+    /// point outside it.
+    fn inside(&self, p: Point) -> Point {
+        let size = self.host.app.size();
+        Point {
+            x: p.x.clamp(0.0, (size.width - 1.0).max(0.0)),
+            y: p.y.clamp(0.0, (size.height - 1.0).max(0.0)),
+        }
+    }
+
     /// Moves the pointer to a logical point. Points outside the window are
     /// clamped to its edge, since a real pointer never reports one.
     pub fn pointer_move(&mut self, p: Point) {
-        let size = self.host.app.size();
+        let p = self.inside(p);
+        if self.route == PointerRoute::Debug {
+            self.debug(DebugCommand::PointerMove(DebugPoint { x: p.x, y: p.y }));
+            return;
+        }
         let scale = f64::from(self.host.app.scale());
-        let x = p.x.clamp(0.0, (size.width - 1.0).max(0.0));
-        let y = p.y.clamp(0.0, (size.height - 1.0).max(0.0));
         self.host.on_cursor_moved(PhysicalPosition::new(
-            f64::from(x) * scale,
-            f64::from(y) * scale,
+            f64::from(p.x) * scale,
+            f64::from(p.y) * scale,
         ));
         self.settle();
     }
 
     /// The pointer leaves the window.
     pub fn pointer_leave(&mut self) {
+        if self.route == PointerRoute::Debug {
+            self.debug(DebugCommand::PointerLeave);
+            return;
+        }
         let _ = self.host.on_cursor_left();
         self.settle();
     }
@@ -299,6 +356,14 @@ impl HeadlessHost {
     /// Presses a button. Pressing one that is already held does nothing.
     pub fn press(&mut self, button: PointerButton) {
         if std::mem::replace(&mut self.held[button as usize], true) {
+            return;
+        }
+        if self.route == PointerRoute::Debug {
+            self.debug(DebugCommand::PointerPress(DebugPress {
+                x: None,
+                y: None,
+                button: debug_button(button),
+            }));
             return;
         }
         self.host
@@ -311,9 +376,113 @@ impl HeadlessHost {
         if !std::mem::replace(&mut self.held[button as usize], false) {
             return;
         }
+        if self.route == PointerRoute::Debug {
+            self.debug(DebugCommand::PointerRelease(DebugPress {
+                x: None,
+                y: None,
+                button: debug_button(button),
+            }));
+            return;
+        }
         self.host
             .on_mouse_input(ElementState::Released, winit_button(button));
         self.settle();
+    }
+
+    /// Moves to `p` and presses there: the debug `press` command with a
+    /// point, or a move and a press. Does nothing while the button is held.
+    pub fn press_at(&mut self, p: Point, button: PointerButton) {
+        if self.held[button as usize] {
+            return;
+        }
+        if self.route == PointerRoute::Debug {
+            let p = self.inside(p);
+            self.held[button as usize] = true;
+            self.debug(DebugCommand::PointerPress(DebugPress {
+                x: Some(p.x),
+                y: Some(p.y),
+                button: debug_button(button),
+            }));
+            return;
+        }
+        self.pointer_move(p);
+        self.press(button);
+    }
+
+    /// Moves to `p` and releases there: the debug `release` command with a
+    /// point, or a move and a release. Does nothing while the button is up.
+    pub fn release_at(&mut self, p: Point, button: PointerButton) {
+        if !self.held[button as usize] {
+            return;
+        }
+        if self.route == PointerRoute::Debug {
+            let p = self.inside(p);
+            self.held[button as usize] = false;
+            self.debug(DebugCommand::PointerRelease(DebugPress {
+                x: Some(p.x),
+                y: Some(p.y),
+                button: debug_button(button),
+            }));
+            return;
+        }
+        self.pointer_move(p);
+        self.release(button);
+    }
+
+    /// A left click at `p`: the debug `click-at` command, or a move, a press
+    /// and a release. Does nothing while the left button is held. Returns
+    /// whether the click was delivered; `click-at` refuses a point with no
+    /// widget under it.
+    pub fn click_at(&mut self, p: Point) -> bool {
+        if self.held[PointerButton::Left as usize] {
+            return false;
+        }
+        if self.route == PointerRoute::Debug {
+            let p = self.inside(p);
+            return self.debug(DebugCommand::PointerClick(DebugPoint { x: p.x, y: p.y })) == 200;
+        }
+        self.pointer_move(p);
+        self.press(PointerButton::Left);
+        self.release(PointerButton::Left);
+        true
+    }
+
+    /// Presses at `from`, moves to `to` in `steps` equal steps and releases
+    /// there: the debug `drag` command, or the same events one by one. Does
+    /// nothing while the button is held.
+    pub fn drag(&mut self, from: Point, to: Point, steps: u32, button: PointerButton) {
+        if self.held[button as usize] {
+            return;
+        }
+        let (from, to) = (self.inside(from), self.inside(to));
+        let steps = steps.clamp(1, 1000);
+        if self.route == PointerRoute::Debug {
+            self.debug(DebugCommand::PointerDrag(DebugDrag {
+                x1: from.x,
+                y1: from.y,
+                x2: to.x,
+                y2: to.y,
+                steps: Some(steps),
+                button: debug_button(button),
+            }));
+            return;
+        }
+        self.pointer_move(from);
+        self.press(button);
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            self.pointer_move(Point {
+                x: from.x + (to.x - from.x) * t,
+                y: from.y + (to.y - from.y) * t,
+            });
+        }
+        self.release(button);
+    }
+
+    /// What the host holds of a pointer gesture under way: the `pointer`
+    /// part of the debug server's status, as JSON text.
+    pub fn pointer_state(&self) -> String {
+        self.host.debug_status()["pointer"].to_string()
     }
 
     /// Delivers one input-method event, as the window's `Ime` event does.
@@ -436,6 +605,13 @@ impl HeadlessHost {
         self.host.poll_remount();
         self.pin_clock();
         self.host.on_redraw_requested();
+    }
+}
+
+fn debug_button(button: PointerButton) -> DebugButton {
+    match button {
+        PointerButton::Left => DebugButton::Left,
+        PointerButton::Right => DebugButton::Right,
     }
 }
 

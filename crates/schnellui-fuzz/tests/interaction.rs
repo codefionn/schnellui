@@ -4,6 +4,10 @@
 //! every step and paint the same once quiet, and the retained-state checks
 //! and the component's own accessibility rules hold throughout.
 //!
+//! `routes`: the same input through the window host's pointer handlers and
+//! through the debug server's pointer commands reads, selects and paints the
+//! same after every step.
+//!
 //! `history`: whatever the input, driving the component to its canonical
 //! state leaves it painting and reading like a fresh mount driven there.
 
@@ -26,6 +30,15 @@ macro_rules! interaction_properties {
                 fn twin(m in mount(&component()), ops in ops::ops(40)) {
                     let _serial = serial();
                     verdict(oracle::twin(&component(), m, &ops))?;
+                }
+
+                #[test]
+                fn routes(
+                    m in mount(&component()),
+                    ops in proptest::collection::vec(ops::route_op(), 1..40),
+                ) {
+                    let _serial = serial();
+                    verdict(oracle::routes(&component(), m, &ops))?;
                 }
 
                 #[test]
@@ -60,4 +73,5 @@ interaction_properties!(
     todo,
     rich_text,
     rich_links,
+    click_targets,
 );

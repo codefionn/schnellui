@@ -69,4 +69,5 @@ resize_properties!(
     todo,
     rich_text,
     rich_links,
+    click_targets,
 );

@@ -157,8 +157,8 @@ impl HostClipboard {
     }
 }
 
-const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(500);
-const MULTI_CLICK_SLOP: f32 = 5.0;
+pub(crate) const MULTI_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+pub(crate) const MULTI_CLICK_SLOP: f32 = 5.0;
 
 fn raw_modifiers(modifiers: ModifiersState, physical_control: bool) -> RawModifiers {
     RawModifiers {

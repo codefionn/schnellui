@@ -10,11 +10,19 @@
 //!
 //! `pace`: the same input as one burst, one event every 400 ms, and a
 //! random mix of the two ends in the same state. Its input includes wheel,
-//! page keys and AccessKit scroll actions on a viewport.
+//! page keys and AccessKit scroll actions on a viewport, and fast clicks
+//! aimed at widgets.
+//!
+//! `multi_click`: one double or triple click inside a single frame and the
+//! same click spread over frames, every press inside the double-click
+//! interval of the one before, end the same.
+//!
+//! `not_a_multi_click`: a click that comes after the interval or lands
+//! outside the slop starts over as a single click.
 
 use proptest::prelude::*;
 use schnellui_fuzz::components::Mount;
-use schnellui_fuzz::{components, config, mount, ops, oracle, serial, verdict};
+use schnellui_fuzz::{clicks, components, config, mount, ops, oracle, serial, verdict};
 
 macro_rules! timing_properties {
     ($($component:ident),* $(,)?) => {$(
@@ -96,6 +104,42 @@ macro_rules! pace_properties {
     )*};
 }
 
+macro_rules! click_properties {
+    ($($component:ident),* $(,)?) => {$(
+        mod $component {
+            use super::*;
+
+            fn component() -> components::Component {
+                components::named(stringify!($component))
+            }
+
+            proptest! {
+                #![proptest_config(config(24))]
+
+                #[test]
+                fn multi_click(
+                    m in mount(&component()),
+                    before in proptest::collection::vec(ops::pace_op(), 0..12),
+                    click in clicks::any_multi_click(),
+                ) {
+                    let _serial = serial();
+                    verdict(clicks::multi_click(&component(), m, &before, &click))?;
+                }
+
+                #[test]
+                fn not_a_multi_click(
+                    m in mount(&component()),
+                    before in proptest::collection::vec(ops::pace_op(), 0..12),
+                    broken in clicks::any_broken(),
+                ) {
+                    let _serial = serial();
+                    verdict(clicks::not_a_multi_click(&component(), m, &before, &broken))?;
+                }
+            }
+        }
+    )*};
+}
+
 timing_properties!(
     buttons,
     toggles,
@@ -117,6 +161,7 @@ timing_properties!(
     todo,
     rich_text,
     rich_links,
+    click_targets,
 );
 
 // A virtual list measures its rows as it mounts them and keeps its viewport
@@ -152,5 +197,35 @@ mod pace {
         todo,
         rich_text,
         rich_links,
+        click_targets,
+    );
+}
+
+/// The multi-click properties, for the same components as `pace`.
+mod click {
+    use super::*;
+
+    click_properties!(
+        buttons,
+        toggles,
+        sliders,
+        tabs,
+        list,
+        table,
+        text_input,
+        text_area,
+        scroll,
+        scroll_form,
+        scroll_nested,
+        scroll_area,
+        scroll_resize,
+        dropdown,
+        context_menu,
+        dialogs,
+        grouped_tabs,
+        todo,
+        rich_text,
+        rich_links,
+        click_targets,
     );
 }

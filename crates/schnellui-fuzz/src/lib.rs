@@ -23,6 +23,20 @@
 //!   no animation runs past ten seconds; both end painting the same.
 //! - Pace. One input sequence delivered as a single burst, one event every
 //!   400 ms, and a seeded mix of the two ends in the same state.
+//! - Fast clicks. `Op::Click` aims at a widget and presses and releases up to
+//!   three times inside one frame, in every property. `multi_click` delivers
+//!   one double or triple click within a single frame and spread over frames
+//!   inside the double-click interval, and both end the same: the same word
+//!   or line selected, the same activation counts. `not_a_multi_click` breaks
+//!   a run with a click that comes too late or lands too far away, and it
+//!   ends as a run of single clicks does. See [`clicks`].
+//! - Routes. The same input through the window host's pointer handlers and
+//!   through the debug server's pointer commands (`move`, `press`, `release`,
+//!   `click-at`, `drag`, `leave`), which is how `schnellui-debug` drives an
+//!   app started with `--headless-windowed`. Both hosts read, select and
+//!   paint the same after every step. One difference is allowed for:
+//!   `click-at` refuses a point with no widget under it, so it cannot click
+//!   the bare page.
 //! - Scrolling. Wheel (trackpad steps, notches, flings, bursts, at a point other
 //!   than the pointer), scrollbar thumb drags and track pages, page and arrow
 //!   keys, and AccessKit scroll actions are ops, in the ordinary and the pace
@@ -48,6 +62,7 @@
 //! CI does not run this crate. It is for hunting, and a failing property
 //! prints the shrunk input that reproduces it.
 
+pub mod clicks;
 pub mod components;
 pub mod curve;
 pub mod ops;
@@ -59,7 +74,9 @@ use std::sync::{Mutex, MutexGuard};
 use proptest::test_runner::Config;
 use schnellui::widgets::{ComponentInteractions, InteractionStates, InteractionStyle, Theme};
 
-pub use schnellui::testing::fuzz::{ClipboardAction, HeadlessHost, HostKey, PointerButton};
+pub use schnellui::testing::fuzz::{
+    ClipboardAction, HeadlessHost, HostKey, PointerButton, PointerRoute,
+};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 

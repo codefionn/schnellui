@@ -8,7 +8,15 @@
 //! matches the paint it sits on, a decoration sized for paint that has since
 //! moved, or a tooltip or floating layer that left the window.
 
-pub use crate::windowed::headless::{ClipboardAction, HeadlessHost, HostKey, PointerButton};
+pub use crate::windowed::headless::{
+    ClipboardAction, HeadlessHost, HostKey, PointerButton, PointerRoute,
+};
+/// How soon after a press the next press on the same text field still counts
+/// as the next click of a double or triple click.
+pub const MULTI_CLICK_INTERVAL: std::time::Duration = crate::windowed::MULTI_CLICK_INTERVAL;
+/// How far from a press, on either axis and in logical pixels, the next
+/// press may land and still count with it.
+pub const MULTI_CLICK_SLOP: f32 = crate::windowed::MULTI_CLICK_SLOP;
 
 use schnellui::widgets::{ComponentInteractions, InteractionStates, InteractionStyle, Theme};
 use schnellui::App;

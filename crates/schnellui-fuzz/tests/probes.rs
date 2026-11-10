@@ -285,3 +285,286 @@ fn a_text_area_band_off_screen_is_not_a_paint_difference() {
     ];
     assert_eq!(oracle::animation(&component, mount, &ops), Ok(()));
 }
+
+// --- the click oracles, on clicks whose outcome is known -----------------------
+//
+// `multi_click` and `not_a_multi_click` compare two hosts, so they would pass
+// if neither host ever counted a double click. These pin down that the host
+// does count them, and where it stops.
+
+mod click_oracles {
+    use std::time::Duration;
+
+    use schnellui::a11y::Role;
+    use schnellui::scene::Point;
+    use schnellui_fuzz::clicks::{self, Break, Broken, MultiClick};
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::ops::{actionable, fast_click};
+    use schnellui_fuzz::{serial, HeadlessHost, PointerButton, THEMES};
+
+    fn mount() -> Mount {
+        Mount {
+            theme: THEMES[1],
+            size: components::CLICK_TARGETS.size,
+            scale: 1.0,
+            animate: false,
+        }
+    }
+
+    fn mounted() -> HeadlessHost {
+        (components::CLICK_TARGETS.mount)(&mount())
+    }
+
+    /// A point on the first word of the field with `role`.
+    fn in_field(host: &HeadlessHost, role: Role) -> Point {
+        let id = host.app().find_widget(role, None).expect("the field");
+        let r = host.app().scene().layout(id).unwrap().rect;
+        Point {
+            x: r.x + 24.0,
+            y: r.y + r.height.min(40.0) / 2.0 + 6.0,
+        }
+    }
+
+    fn click(host: &mut HeadlessHost, p: Point) {
+        host.pointer_move(p);
+        host.press(PointerButton::Left);
+        host.release(PointerButton::Left);
+    }
+
+    fn selected(host: &HeadlessHost) -> String {
+        host.app().selected_text().unwrap_or_default()
+    }
+
+    fn counters(host: &HeadlessHost) -> String {
+        components::nodes(host.app(), Role::Label)
+            .into_iter()
+            .filter_map(|n| n.name)
+            .find(|n| n.starts_with("added"))
+            .expect("the counters")
+    }
+
+    #[test]
+    fn a_double_click_in_one_frame_selects_a_word_and_a_triple_click_the_line() {
+        let _serial = serial();
+        let mut host = mounted();
+        let p = in_field(&host, Role::TextInput);
+        fast_click(&mut host, p, PointerButton::Left, 1);
+        assert_eq!(selected(&host), "");
+        host.forget_clicks();
+        fast_click(&mut host, p, PointerButton::Left, 2);
+        assert_eq!(selected(&host), "alpha");
+        host.forget_clicks();
+        fast_click(&mut host, p, PointerButton::Left, 3);
+        assert_eq!(selected(&host), "alpha beta gamma delta");
+
+        let mut host = mounted();
+        let p = in_field(&host, Role::MultilineTextInput);
+        fast_click(&mut host, p, PointerButton::Left, 2);
+        assert_eq!(selected(&host), "one");
+        host.forget_clicks();
+        fast_click(&mut host, p, PointerButton::Left, 3);
+        assert!(
+            selected(&host).starts_with("one two three"),
+            "selected {:?}",
+            selected(&host)
+        );
+    }
+
+    #[test]
+    fn the_interval_and_the_slop_are_the_last_values_that_count() {
+        let _serial = serial();
+        let interval = u64::from(clicks::interval_ms());
+        for (gap, word) in [(interval, "alpha"), (interval + 1, "")] {
+            let mut host = mounted();
+            let p = in_field(&host, Role::TextInput);
+            click(&mut host, p);
+            host.advance(Duration::from_millis(gap));
+            click(&mut host, p);
+            assert_eq!(selected(&host), word, "{gap} ms after the first press");
+        }
+        for (step, word) in [(5.0, "alpha"), (5.5, "")] {
+            for (dx, dy) in [(step, 0.0), (0.0, step)] {
+                let mut host = mounted();
+                let p = in_field(&host, Role::TextInput);
+                click(&mut host, p);
+                click(
+                    &mut host,
+                    Point {
+                        x: p.x + dx,
+                        y: p.y + dy,
+                    },
+                );
+                assert_eq!(selected(&host), word, "{dx}, {dy} from the first press");
+            }
+        }
+    }
+
+    #[test]
+    fn every_click_of_a_fast_triple_click_activates_a_control() {
+        let _serial = serial();
+        let mut host = mounted();
+        let targets = actionable(host.app());
+        for (role, name) in [(Role::Button, "Add"), (Role::CheckBox, "Flag")] {
+            let id = host.app().find_widget(role, Some(name)).unwrap();
+            assert!(targets.contains(&id));
+            let r = host.app().scene().layout(id).unwrap().rect;
+            let p = Point {
+                x: r.x + r.width / 2.0,
+                y: r.y + r.height / 2.0,
+            };
+            fast_click(&mut host, p, PointerButton::Left, 3);
+        }
+        assert_eq!(counters(&host), "added 3 flips 3 tabs 0 rows 0");
+        assert_eq!(
+            components::nodes(host.app(), Role::CheckBox)[0]
+                .state
+                .iter()
+                .filter(|s| *s == "checked")
+                .count(),
+            1,
+            "three flips leave the box checked"
+        );
+    }
+
+    /// Both oracles stay quiet on a field, where a double click does select:
+    /// a triple click at any speed, and a run broken by a late or a far click.
+    #[test]
+    fn the_click_oracles_pass_on_a_text_field() {
+        let _serial = serial();
+        let host = mounted();
+        let field = host.app().find_widget(Role::TextInput, None).unwrap();
+        let n = actionable(host.app())
+            .iter()
+            .position(|id| *id == field)
+            .unwrap() as u8;
+        drop(host);
+        let click = MultiClick {
+            n,
+            corner: false,
+            count: 3,
+            drift: [(0.0, 0.0); 2],
+            hold: [10, 10, 10],
+            pause: [20, 20],
+        };
+        clicks::multi_click(&components::CLICK_TARGETS, mount(), &[], &click).unwrap();
+        for how in [Break::Late(clicks::interval_ms() + 1), Break::Far(0.0, 6.0)] {
+            for at in [1, 2] {
+                let broken = Broken {
+                    click: click.clone(),
+                    at,
+                    how,
+                };
+                clicks::not_a_multi_click(&components::CLICK_TARGETS, mount(), &[], &broken)
+                    .unwrap();
+            }
+        }
+    }
+}
+
+// --- the debug route, on input whose outcome is known ----------------------------
+
+mod debug_route {
+    use schnellui::a11y::Role;
+    use schnellui::scene::Point;
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::{serial, HeadlessHost, PointerButton, PointerRoute, THEMES};
+
+    fn mounted() -> HeadlessHost {
+        let mut host = (components::CLICK_TARGETS.mount)(&Mount {
+            theme: THEMES[1],
+            size: components::CLICK_TARGETS.size,
+            scale: 1.0,
+            animate: false,
+        });
+        host.set_route(PointerRoute::Debug);
+        host
+    }
+
+    fn centre(host: &HeadlessHost, role: Role, name: Option<&str>) -> Point {
+        let id = host.app().find_widget(role, name).expect("the widget");
+        let r = host.app().scene().layout(id).unwrap().rect;
+        Point {
+            x: r.x + r.width / 2.0,
+            y: r.y + r.height / 2.0,
+        }
+    }
+
+    fn counters(host: &HeadlessHost) -> String {
+        components::nodes(host.app(), Role::Label)
+            .into_iter()
+            .filter_map(|n| n.name)
+            .find(|n| n.starts_with("added"))
+            .expect("the counters")
+    }
+
+    /// The debug commands do reach the app: `click-at` and `press` with
+    /// `release` each click a button once, and three `click-at` commands in a
+    /// row are a triple click in a field.
+    #[test]
+    fn the_debug_commands_click_and_count_clicks() {
+        let _serial = serial();
+        let mut host = mounted();
+        let add = centre(&host, Role::Button, Some("Add"));
+        assert!(host.click_at(add));
+        host.press_at(add, PointerButton::Left);
+        host.release_at(add, PointerButton::Left);
+        assert_eq!(counters(&host), "added 2 flips 0 tabs 0 rows 0");
+
+        let field = host.app().find_widget(Role::TextInput, None).unwrap();
+        let r = host.app().scene().layout(field).unwrap().rect;
+        let p = Point {
+            x: r.x + 24.0,
+            y: r.y + r.height / 2.0 + 6.0,
+        };
+        assert!(host.click_at(p));
+        assert!(host.click_at(p));
+        assert_eq!(host.app().selected_text().as_deref(), Some("alpha"));
+        assert!(host.click_at(p));
+        assert_eq!(
+            host.app().selected_text().as_deref(),
+            Some("alpha beta gamma delta")
+        );
+    }
+
+    /// The `drag` command selects text in a field as a drag by hand does.
+    #[test]
+    fn the_debug_drag_selects_text() {
+        let _serial = serial();
+        let mut host = mounted();
+        let field = host.app().find_widget(Role::TextInput, None).unwrap();
+        let r = host.app().scene().layout(field).unwrap().rect;
+        let y = r.y + r.height / 2.0 + 6.0;
+        host.drag(
+            Point { x: r.x + 14.0, y },
+            Point { x: r.x + 80.0, y },
+            4,
+            PointerButton::Left,
+        );
+        let selected = host.app().selected_text().unwrap_or_default();
+        assert!(
+            selected.len() > 3 && "alpha beta gamma delta".contains(&selected),
+            "the drag selected {selected:?}"
+        );
+        assert_eq!(
+            host.pointer_state(),
+            r#"{"left_down":false,"raw_captured":0,"scrollbar_drag":false,"slider_drag":false,"text_drag":false}"#
+        );
+    }
+
+    /// Known difference, which the `routes` property allows for: `click-at`
+    /// on the bare page answers 404 and does not click, so unlike a click by
+    /// hand it leaves focus where it was.
+    #[test]
+    fn click_at_does_not_click_the_bare_page() {
+        let _serial = serial();
+        let mut host = mounted();
+        let add = centre(&host, Role::Button, Some("Add"));
+        assert!(host.click_at(add));
+        assert!(host.app().focused_widget().is_some());
+        assert!(!host.click_at(Point { x: 0.0, y: 0.0 }));
+        assert!(host.app().focused_widget().is_some(), "focus stayed");
+        host.set_route(PointerRoute::Handlers);
+        assert!(host.click_at(Point { x: 0.0, y: 0.0 }));
+        assert_eq!(host.app().focused_widget(), None, "a real click blurs");
+    }
+}

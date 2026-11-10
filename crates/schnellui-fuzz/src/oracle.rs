@@ -4,14 +4,14 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use schnellui::a11y::A11yTreeDump;
-use schnellui::scene::{Primitive, WidgetId, WidgetKind};
+use schnellui::scene::{Point, Primitive, WidgetId, WidgetKind};
 use schnellui::testing::fuzz::{invariants, strip_interactions};
 use schnellui::App;
 
 use crate::components::{Component, Mount};
-use crate::ops::{aim_point, apply, quiesce, Op};
+use crate::ops::{apply, pinned, quiesce, Op};
 use crate::scrolling::{self, Watch};
-use crate::{HeadlessHost, CLASSIC_THEMES, THEMES};
+use crate::{HeadlessHost, PointerButton, PointerRoute, CLASSIC_THEMES, THEMES};
 
 /// One primitive with what a person sees of it: kind, place, size and
 /// colour. Atlas coordinates are left out, since they depend on the order in
@@ -510,14 +510,6 @@ pub fn animation(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), 
             // still shows the last one, so aim at whatever either host has
             // laid out and send both the same point.
             let op = match *op {
-                Op::Aim { n, corner } => [&moving, &still]
-                    .into_iter()
-                    .find_map(|host| {
-                        let p = aim_point(host.app(), n, corner)?;
-                        let size = host.app().size();
-                        Some(Op::Wander(p.x / size.width, p.y / size.height))
-                    })
-                    .unwrap_or_else(|| op.clone()),
                 // The still host rebuilds at once, the animated one frame by
                 // frame, so a press across a theme change would see the tree
                 // rebuilt under it in one host only, and a rebuild drops
@@ -525,7 +517,13 @@ pub fn animation(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), 
                 // drag, a deferred remount). Keep presses and theme changes
                 // apart here; `twin` covers presses during a fade, where
                 // both hosts rebuild on the same frames.
-                Op::Press(_) if moving.theme_fading() => continue,
+                Op::Press(_) | Op::Click { .. } | Op::ClickAt { .. } if moving.theme_fading() => {
+                    continue
+                }
+                Op::Aim { .. } | Op::Click { .. } => [&moving, &still]
+                    .into_iter()
+                    .find_map(|host| pinned(host.app(), op))
+                    .unwrap_or_else(|| op.clone()),
                 Op::Theme(_) | Op::ThemeFade(..) if still.held() => continue,
                 ref other => other.clone(),
             };
@@ -593,8 +591,18 @@ pub enum Pace {
     Random(u64),
 }
 
-fn paced(component: &Component, mount: Mount, ops: &[Op], pace: Pace) -> HeadlessHost {
+/// Replays `ops` at `pace`. With `pin`, every aimed op is first resolved
+/// against what this host shows ([`pinned`]); the ops as replayed come back
+/// with the host, for the other paces to repeat point for point.
+fn paced(
+    component: &Component,
+    mount: Mount,
+    ops: &[Op],
+    pace: Pace,
+    pin: bool,
+) -> (HeadlessHost, Vec<Op>) {
     let mut host = (component.mount)(&mount);
+    let mut replayed = Vec::with_capacity(ops.len());
     let mut seed = match pace {
         Pace::Random(seed) => seed | 1,
         _ => 0,
@@ -603,10 +611,22 @@ fn paced(component: &Component, mount: Mount, ops: &[Op], pace: Pace) -> Headles
         host.set_batching(true);
     }
     for op in ops {
-        apply(&mut host, op, mount.size, false);
+        let op = if pin {
+            // Nothing to aim at: no pointer input happens at any pace.
+            let Some(op) = pinned(host.app(), op) else {
+                continue;
+            };
+            op
+        } else {
+            op.clone()
+        };
+        apply(&mut host, &op, mount.size, false);
+        replayed.push(op);
         // Two presses close in time and place are a double click, so one input
         // read at two speeds is two different inputs. This property is about
-        // where input lands, not how it is timed: every press is a single click.
+        // where input lands, not how it is timed: every press op is a single
+        // click. A `Click` carries its own count and delivers it in one frame
+        // at every pace, so its double and triple clicks do take part.
         host.forget_clicks();
         match pace {
             Pace::Burst => {}
@@ -625,20 +645,25 @@ fn paced(component: &Component, mount: Mount, ops: &[Op], pace: Pace) -> Headles
         }
     }
     quiesce(&mut host);
-    host
+    (host, replayed)
 }
 
 /// The same keyboard and pointer input at three paces: a single burst, one
 /// event every 400 ms, and a random mix. Where the input lands cannot depend
-/// on how fast it came, so all three end painting and reading the same.
+/// on how fast it came, so all three end painting and reading the same. The
+/// slow replay sees every frame, as a person does, so it is the one that aims
+/// the clicks; the others click the same points.
 pub fn pace(component: &Component, mount: Mount, ops: &[Op], seed: u64) -> Result<(), String> {
     guarded(|| {
-        let slow = paced(component, mount, ops, Pace::Slow);
+        let (slow, ops) = paced(component, mount, ops, Pace::Slow, true);
         for pace in [Pace::Burst, Pace::Random(seed)] {
-            let other = paced(component, mount, ops, pace);
+            let (other, _) = paced(component, mount, &ops, pace, false);
             let label = format!("{pace:?}");
             if let Some(d) = semantics_diff(&label, other.app(), "Slow", slow.app()) {
-                return Err(d);
+                return Err(format!(
+                    "{d}
+as replayed: {ops:?}"
+                ));
             }
             if let Some(d) = diff(
                 &label,
@@ -646,9 +671,79 @@ pub fn pace(component: &Component, mount: Mount, ops: &[Op], seed: u64) -> Resul
                 "Slow",
                 &snapshot(slow.app()),
             ) {
-                return Err(format!("the pace of input changed the outcome: {d}"));
+                return Err(format!(
+                    "the pace of input changed the outcome: {d}
+as replayed: {ops:?}"
+                ));
             }
         }
         Ok(())
+    })
+}
+
+/// The same input through the window host's pointer handlers and through the
+/// debug server's pointer commands (`move`, `press`, `release`, `click-at`,
+/// `drag`, `leave`), which is how an app started with `--headless-windowed`
+/// is driven. A command stands for the events it names, so after every step
+/// both hosts read, select and paint the same and hold the same gesture, and
+/// they still agree once quiet. The handler host aims; the other gets the
+/// same points.
+pub fn routes(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), String> {
+    guarded(|| {
+        let mut direct = (component.mount)(&mount);
+        let mut debug = (component.mount)(&mount);
+        debug.set_route(PointerRoute::Debug);
+        let agree = |direct: &HeadlessHost, debug: &HeadlessHost| {
+            if let Some(d) = semantics_diff("handlers", direct.app(), "debug", debug.app()) {
+                return Err(d);
+            }
+            let (a, b) = (direct.app().selected_text(), debug.app().selected_text());
+            if a != b {
+                return Err(format!("handlers select {a:?}, debug selects {b:?}"));
+            }
+            let (a, b) = (direct.pointer_state(), debug.pointer_state());
+            if a != b {
+                return Err(format!("the handlers hold {a}, the debug commands {b}"));
+            }
+            match diff(
+                "handlers",
+                &snapshot(direct.app()),
+                "debug",
+                &snapshot(debug.app()),
+            ) {
+                Some(d) => Err(d),
+                None => Ok(()),
+            }
+        };
+        for (step, op) in ops.iter().enumerate() {
+            let Some(op) = pinned(direct.app(), op) else {
+                continue;
+            };
+            match op {
+                // `click-at` answers 404 for a point with no widget under it
+                // and leaves the pointer there without clicking, so it cannot
+                // click the bare page. There it stands for the move alone.
+                Op::Tap(x, y) if !direct.holding(PointerButton::Left) => {
+                    let size = direct.app().size();
+                    let p = Point {
+                        x: size.width * x,
+                        y: size.height * y,
+                    };
+                    if debug.click_at(p) {
+                        direct.click_at(p);
+                    } else {
+                        direct.pointer_move(p);
+                    }
+                }
+                _ => {
+                    apply(&mut direct, &op, mount.size, false);
+                    apply(&mut debug, &op, mount.size, false);
+                }
+            }
+            agree(&direct, &debug).map_err(|e| format!("after step {step} {op:?}: {e}"))?;
+        }
+        quiesce(&mut direct);
+        quiesce(&mut debug);
+        agree(&direct, &debug).map_err(|e| format!("once quiet: {e}"))
     })
 }

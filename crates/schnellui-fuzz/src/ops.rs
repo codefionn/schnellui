@@ -27,6 +27,53 @@ pub enum Op {
     Wander(f32, f32),
     Press(PointerButton),
     Release(PointerButton),
+    /// A fast click: point at the `n`th actionable widget as `Aim` does, then
+    /// press and release `count` times with no frame between any of it. Two
+    /// is a double click, three a triple click.
+    Click {
+        n: u8,
+        corner: bool,
+        button: PointerButton,
+        count: u8,
+    },
+    /// The same fast click at a fixed point, as fractions of the window. What
+    /// [`pinned`] turns a `Click` into, so that several hosts get one point.
+    ClickAt {
+        x: f32,
+        y: f32,
+        button: PointerButton,
+        count: u8,
+    },
+    /// A left click on the `n`th actionable widget as the debug server's
+    /// `click-at` delivers it: move, press, release, a frame after each.
+    TapOn {
+        n: u8,
+        corner: bool,
+    },
+    /// The same click at a fixed point, as fractions of the window.
+    Tap(f32, f32),
+    /// Move to a point of the window and press there, as the debug server's
+    /// `press` with a point does.
+    PressAt(f32, f32, PointerButton),
+    /// Move to a point of the window and release there.
+    ReleaseAt(f32, f32, PointerButton),
+    /// A whole drag as the debug server's `drag` delivers it: press on the
+    /// `n`th actionable widget, move to a point of the window in `steps`
+    /// equal steps, release.
+    DragFrom {
+        n: u8,
+        corner: bool,
+        to: (f32, f32),
+        steps: u8,
+        button: PointerButton,
+    },
+    /// The same drag between two fixed points.
+    Drag {
+        from: (f32, f32),
+        to: (f32, f32),
+        steps: u8,
+        button: PointerButton,
+    },
     Leave,
     Key(HostKey, bool),
     /// A key with Ctrl held (Ctrl+Home, Ctrl+End, Ctrl+arrows).
@@ -196,10 +243,24 @@ fn key() -> impl Strategy<Value = HostKey> {
     ]
 }
 
+/// A fast click on a widget: mostly the left button, once, twice or three
+/// times.
+fn click() -> impl Strategy<Value = Op> {
+    let button = prop_oneof![6 => Just(PointerButton::Left), 1 => Just(PointerButton::Right)];
+    let count = prop_oneof![3 => Just(1u8), 2 => Just(2u8), 1 => Just(3u8)];
+    (any::<u8>(), any::<bool>(), button, count).prop_map(|(n, corner, button, count)| Op::Click {
+        n,
+        corner,
+        button,
+        count,
+    })
+}
+
 /// Any single op, weighted towards pointing and pressing.
 pub fn op() -> impl Strategy<Value = Op> {
     let button = prop_oneof![4 => Just(PointerButton::Left), 1 => Just(PointerButton::Right)];
     prop_oneof![
+        4 => click(),
         8 => (any::<u8>(), any::<bool>()).prop_map(|(n, corner)| Op::Aim { n, corner }),
         2 => (0.0f32..1.0, 0.0f32..1.0).prop_map(|(x, y)| Op::Wander(x, y)),
         4 => button.clone().prop_map(Op::Press),
@@ -231,12 +292,14 @@ pub fn timed_ops(max: usize) -> impl Strategy<Value = Vec<Op>> {
     proptest::collection::vec(timed_op(), 1..max)
 }
 
-/// Keyboard and pointer input whose target does not depend on layout that
-/// the input itself changes: keys, typing, and pointing at fixed points of
-/// the window. Pace properties replay it at different speeds.
+/// Keyboard and pointer input for the pace properties, which replay it at
+/// different speeds: keys, typing, pointing at fixed points of the window,
+/// and fast clicks on widgets. A click is aimed once, by the slowest replay,
+/// and [`pinned`] to that point for the others.
 pub fn pace_op() -> impl Strategy<Value = Op> {
     let button = prop_oneof![4 => Just(PointerButton::Left), 1 => Just(PointerButton::Right)];
     prop_oneof![
+        3 => click(),
         3 => (0.0f32..1.0, 0.0f32..1.0).prop_map(|(x, y)| Op::Wander(x, y)),
         2 => button.clone().prop_map(Op::Press),
         2 => button.prop_map(Op::Release),
@@ -245,6 +308,34 @@ pub fn pace_op() -> impl Strategy<Value = Op> {
         3 => scroll_input_fixed(),
         1 => Just(Op::Blur),
         1 => clipboard(),
+    ]
+}
+
+/// Input for the route property, which replays it through the window host's
+/// handlers and through the debug server's commands: everything the debug
+/// server has a pointer command for, with keys, wheel and waits between.
+/// Every event gets its own frame, since a debug command always draws one.
+pub fn route_op() -> impl Strategy<Value = Op> {
+    let button = || prop_oneof![4 => Just(PointerButton::Left), 1 => Just(PointerButton::Right)];
+    let spot = || (0.0f32..1.0, 0.0f32..1.0);
+    prop_oneof![
+        3 => (any::<u8>(), any::<bool>()).prop_map(|(n, corner)| Op::Aim { n, corner }),
+        2 => spot().prop_map(|(x, y)| Op::Wander(x, y)),
+        2 => button().prop_map(Op::Press),
+        2 => button().prop_map(Op::Release),
+        1 => (spot(), button()).prop_map(|((x, y), b)| Op::PressAt(x, y, b)),
+        1 => (spot(), button()).prop_map(|((x, y), b)| Op::ReleaseAt(x, y, b)),
+        5 => (any::<u8>(), any::<bool>()).prop_map(|(n, corner)| Op::TapOn { n, corner }),
+        2 => spot().prop_map(|(x, y)| Op::Tap(x, y)),
+        3 => (any::<u8>(), any::<bool>(), spot(), 1u8..6, button()).prop_map(
+            |(n, corner, to, steps, button)| Op::DragFrom { n, corner, to, steps, button }
+        ),
+        1 => Just(Op::Leave),
+        5 => (key(), proptest::bool::weighted(0.2)).prop_map(|(k, shift)| Op::Key(k, shift)),
+        2 => scroll_input_fixed(),
+        1 => Just(Op::Blur),
+        1 => clipboard(),
+        1 => prop_oneof![0u32..20, 20u32..250, 250u32..1500].prop_map(Op::Wait),
     ]
 }
 
@@ -321,9 +412,108 @@ pub fn aim_point(app: &App, n: u8, corner: bool) -> Option<Point> {
     })
 }
 
+/// `op` with its target resolved against what `app` shows now: an `Aim`
+/// becomes a `Wander` and a `Click` a `ClickAt`, so every host that replays
+/// the result points at the same place whatever its own layout says. `None`
+/// when the op aims and nothing is laid out to aim at. Other ops come back
+/// unchanged.
+pub fn pinned(app: &App, op: &Op) -> Option<Op> {
+    let size = app.size();
+    Some(match *op {
+        Op::Aim { n, corner } => {
+            let p = aim_point(app, n, corner)?;
+            Op::Wander(p.x / size.width, p.y / size.height)
+        }
+        Op::Click {
+            n,
+            corner,
+            button,
+            count,
+        } => {
+            let p = aim_point(app, n, corner)?;
+            Op::ClickAt {
+                x: p.x / size.width,
+                y: p.y / size.height,
+                button,
+                count,
+            }
+        }
+        Op::TapOn { n, corner } => {
+            let p = aim_point(app, n, corner)?;
+            Op::Tap(p.x / size.width, p.y / size.height)
+        }
+        Op::DragFrom {
+            n,
+            corner,
+            to,
+            steps,
+            button,
+        } => {
+            let p = aim_point(app, n, corner)?;
+            Op::Drag {
+                from: (p.x / size.width, p.y / size.height),
+                to,
+                steps,
+                button,
+            }
+        }
+        ref other => other.clone(),
+    })
+}
+
+/// Moves to `p` and clicks `count` times there, all inside one display frame.
+/// A host that was drawing after every event draws once at the end.
+pub fn fast_click(host: &mut HeadlessHost, p: Point, button: PointerButton, count: u8) {
+    let drawing = !host.batching();
+    host.set_batching(true);
+    host.pointer_move(p);
+    for _ in 0..count {
+        host.press(button);
+        host.release(button);
+    }
+    if drawing {
+        host.set_batching(false);
+    }
+}
+
+/// The point of the window that the fractions `fx`, `fy` name.
+fn spot(host: &HeadlessHost, fx: f32, fy: f32) -> Point {
+    let size = host.app().size();
+    Point {
+        x: size.width * fx,
+        y: size.height * fy,
+    }
+}
+
 /// Replays one op. `plain` hosts get the undecorated version of a theme.
 pub fn apply(host: &mut HeadlessHost, op: &Op, mounted: (u32, u32), plain: bool) {
     match op {
+        Op::TapOn { .. } | Op::DragFrom { .. } => {
+            if let Some(op) = pinned(host.app(), op) {
+                apply(host, &op, mounted, plain);
+            }
+        }
+        Op::Tap(x, y) => {
+            let p = spot(host, *x, *y);
+            host.click_at(p);
+        }
+        Op::PressAt(x, y, button) => {
+            let p = spot(host, *x, *y);
+            host.press_at(p, *button);
+        }
+        Op::ReleaseAt(x, y, button) => {
+            let p = spot(host, *x, *y);
+            host.release_at(p, *button);
+        }
+        Op::Drag {
+            from,
+            to,
+            steps,
+            button,
+        } => {
+            let (from, to) = (spot(host, from.0, from.1), spot(host, to.0, to.1));
+            host.drag(from, to, u32::from(*steps), *button);
+        }
         Op::Aim { n, corner } => {
             if let Some(p) = aim_point(host.app(), *n, *corner) {
                 host.pointer_move(p);
@@ -338,6 +528,33 @@ pub fn apply(host: &mut HeadlessHost, op: &Op, mounted: (u32, u32), plain: bool)
         }
         Op::Press(button) => host.press(*button),
         Op::Release(button) => host.release(*button),
+        Op::Click {
+            n,
+            corner,
+            button,
+            count,
+        } => {
+            if let Some(p) = aim_point(host.app(), *n, *corner) {
+                fast_click(host, p, *button, *count);
+            }
+        }
+        Op::ClickAt {
+            x,
+            y,
+            button,
+            count,
+        } => {
+            let size = host.app().size();
+            fast_click(
+                host,
+                Point {
+                    x: size.width * x,
+                    y: size.height * y,
+                },
+                *button,
+                *count,
+            );
+        }
         Op::Leave => host.pointer_leave(),
         Op::Key(key, shift) => host.key(key, *shift, false),
         Op::Chord(key) => host.key(key, false, true),
