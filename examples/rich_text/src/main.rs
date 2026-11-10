@@ -22,8 +22,8 @@ use schnellui::scene::Color;
 use schnellui::signal::create_signal;
 use schnellui::testing::{assert_value_contains, find_by_role_name, SnapshotConfig};
 use schnellui::widgets::{
-    Align, Column, EditKey, Pad, RichDoc, RichSpan, RichText, Row, SpanStyle, Text, TextArea,
-    Theme, ThemeProvider, View, WrapMode, DEFAULT_THEME,
+    Align, Column, EditKey, Flex, Pad, RichDoc, RichSpan, RichText, Row, Scroll, SpanStyle, Stack,
+    Text, TextArea, Theme, ThemeProvider, View, WrapMode, DEFAULT_THEME,
 };
 use schnellui::App;
 use strum::IntoEnumIterator;
@@ -356,37 +356,52 @@ fn pane_caption(text: &'static str) -> impl View {
     )
 }
 
+/// The padded work area under a viewport-filling stack: a definite box, so a
+/// pane can take the height its captions leave and scroll its content inside.
+fn stage(content: impl View) -> impl View {
+    Stack::new().fill().child(Pad::all(24.0).child(content))
+}
+
 fn document_view(width: f32) -> impl View {
     let status = create_signal(NO_LINK.to_string());
-    Pad::all(24.0).child(
-        Column::new()
-            .width(width - 48.0)
-            .gap(16.0)
-            .child(
-                RichText::new(showcase_doc())
-                    .on_link(move |target| status.set(format!("Opened link: {target}"))),
-            )
-            .child(Text::dynamic(move || status.get()).size(13.0)),
+    stage(
+        Scroll::new().fill().scrollbar(true).child(
+            Column::new()
+                .width(width - 48.0)
+                .gap(16.0)
+                .child(
+                    RichText::new(showcase_doc())
+                        .on_link(move |target| status.set(format!("Opened link: {target}"))),
+                )
+                .child(Text::dynamic(move || status.get()).size(13.0)),
+        ),
     )
 }
 
 fn editor_view(width: f32) -> impl View {
-    Pad::all(24.0).child(
+    stage(
         Column::new()
+            .fill()
             .width(width - 48.0)
             .gap(8.0)
             .child(RichText::new(RichDoc::new().heading(2, ["Source editor"])))
             .child(pane_caption(
                 "main.rs · keywords, strings, numbers and comments are colored by the example",
             ))
+            // The area grows with its text, so it scrolls inside the room the
+            // captions leave; the caret reveal then keeps typing in view.
             .child(
-                TextArea::new(EDITOR_SOURCE)
-                    .placeholder("type some rust")
-                    .size(15.0)
-                    .rows(23)
-                    .wrap(WrapMode::Word)
-                    .line_numbers(1, EDITOR_SOURCE.lines().count(), CAPTION)
-                    .highlight(highlight_rust),
+                Flex::new().grow(1.0).shrink(1.0).child(
+                    Scroll::new().scrollbar(true).child(
+                        TextArea::new(EDITOR_SOURCE)
+                            .placeholder("type some rust")
+                            .size(15.0)
+                            .rows(23)
+                            .wrap(WrapMode::Word)
+                            .line_numbers(1, EDITOR_SOURCE.lines().count(), CAPTION)
+                            .highlight(highlight_rust),
+                    ),
+                ),
             ),
     )
 }
@@ -394,31 +409,44 @@ fn editor_view(width: f32) -> impl View {
 fn preview_view(width: f32) -> impl View {
     let source = schnellui::signal::create_signal(PREVIEW_SOURCE.to_string());
     let pane = ((width - 48.0 - 24.0) / 2.0).floor();
-    Pad::all(24.0).child(
+    stage(
         Row::new()
+            .fill()
             .gap(24.0)
             .align(Align::Start)
             .child(
                 Column::new()
+                    .fill()
                     .width(pane)
                     .gap(8.0)
                     .child(pane_caption("MARKUP SOURCE"))
                     .child(
-                        TextArea::new(PREVIEW_SOURCE)
-                            .placeholder("mini markup source")
-                            .size(15.0)
-                            .rows(25)
-                            .wrap(WrapMode::Word)
-                            .highlight(highlight_markup)
-                            .on_input(move |v| source.set(v.to_string())),
+                        Flex::new().grow(1.0).shrink(1.0).child(
+                            Scroll::new().scrollbar(true).child(
+                                TextArea::new(PREVIEW_SOURCE)
+                                    .placeholder("mini markup source")
+                                    .size(15.0)
+                                    .rows(25)
+                                    .wrap(WrapMode::Word)
+                                    .highlight(highlight_markup)
+                                    .on_input(move |v| source.set(v.to_string())),
+                            ),
+                        ),
                     ),
             )
             .child(
                 Column::new()
+                    .fill()
                     .width(pane)
                     .gap(8.0)
                     .child(pane_caption("PREVIEW"))
-                    .child(RichText::dynamic(move || parse_mini_markup(&source.get()))),
+                    .child(
+                        Flex::new().grow(1.0).shrink(1.0).child(
+                            Scroll::new()
+                                .scrollbar(true)
+                                .child(RichText::dynamic(move || parse_mini_markup(&source.get()))),
+                        ),
+                    ),
             ),
     )
 }
@@ -643,4 +671,74 @@ fn main() -> ExitCode {
 /// One `--manifest` entry (SOUL §7.1).
 fn manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
     format!("{{\"scenario\":\"{name}\",\"path\":\"{path}\",\"width\":{width},\"height\":{height}}}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in. Below about
+    /// 200px of height the pane captions alone fill the window, so that is not
+    /// tried.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(880, 640), (360, 240), (420, 300)] {
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
+
+    /// Typing past the bottom of a pane keeps the caret in the window: the
+    /// area scrolls inside its pane instead of growing off the page.
+    #[test]
+    fn caret_stays_in_the_window_while_typing_and_arrowing() {
+        use schnellui::testing::fuzz::visible_in_window;
+        use schnellui::UiKey;
+        for scenario in [Scenario::Editor, Scenario::Preview] {
+            for (w, h) in [(880, 640), (360, 240)] {
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                app.frame();
+                let id = app
+                    .find_widget(Role::MultilineTextInput, None)
+                    .expect("the text area");
+                app.focus(Some(id));
+                app.dispatch_key(UiKey::End {
+                    shift: false,
+                    ctrl: true,
+                });
+                for n in 0..40 {
+                    app.dispatch_key(UiKey::Enter);
+                    app.dispatch_key(UiKey::Char("x"));
+                    app.frame();
+                    assert!(
+                        visible_in_window(&mut app, id),
+                        "{scenario:?} at {w}x{h}: caret left the window after {n} lines"
+                    );
+                }
+                for n in 0..60 {
+                    app.dispatch_key(UiKey::Up { shift: false });
+                    app.frame();
+                    assert!(
+                        visible_in_window(&mut app, id),
+                        "{scenario:?} at {w}x{h}: caret left the window after {n} Up presses"
+                    );
+                }
+                for n in 0..80 {
+                    app.dispatch_key(UiKey::Down { shift: false });
+                    app.frame();
+                    assert!(
+                        visible_in_window(&mut app, id),
+                        "{scenario:?} at {w}x{h}: caret left the window after {n} Down presses"
+                    );
+                }
+            }
+        }
+    }
 }
