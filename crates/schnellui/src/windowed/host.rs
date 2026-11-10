@@ -543,6 +543,7 @@ impl WindowedApp {
         // A drag target from the old tree must not extend selections in the new one.
         self.drag_text = None;
         self.drag_slider = None;
+        self.backdrop_press = None;
         self.last_text_click = None;
         if !continuing_raw_capture {
             self.raw_pointer_capture.clear();
@@ -1464,6 +1465,7 @@ pub fn run(
         drag_text: None,
         last_text_click: None,
         drag_slider: None,
+        backdrop_press: None,
         left_pointer_down: false,
         remount,
     };
@@ -1547,6 +1549,7 @@ pub(crate) fn run_headless(
         drag_text: None,
         last_text_click: None,
         drag_slider: None,
+        backdrop_press: None,
         left_pointer_down: false,
         remount,
     };

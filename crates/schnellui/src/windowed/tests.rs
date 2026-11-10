@@ -422,6 +422,7 @@ fn windowed_host(
         drag_text: None,
         last_text_click: None,
         drag_slider: None,
+        backdrop_press: None,
         left_pointer_down: false,
         remount,
     }
@@ -1886,5 +1887,90 @@ mod debug_pointer {
             .app
             .find_widget(Role::MenuItem, Some("Copy"))
             .is_some());
+    }
+}
+
+/// A modal backdrop dismisses like a browser click: the press and the release
+/// both land on it.
+mod backdrop_click {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{ElementState, MouseButton};
+
+    use super::super::{event_handler::EventTail, WindowedApp};
+    use crate::a11y::Role;
+    use crate::widgets::{Button, Dialog, Stack, Text};
+    use crate::App;
+
+    fn host() -> (Rc<Cell<u32>>, WindowedApp) {
+        let dismissed = Rc::new(Cell::new(0));
+        let d = dismissed.clone();
+        let mut app = App::mount_with_size(
+            Stack::new().fill().child(
+                Dialog::new("Approval")
+                    .size(240.0, 160.0)
+                    .child(Text::new("Sure?"))
+                    .child(Button::new("Yes").on_click(|| {}))
+                    .on_dismiss(move || d.set(d.get() + 1)),
+            ),
+            640,
+            480,
+        );
+        app.frame();
+        (dismissed, super::windowed_host(app, None))
+    }
+
+    fn to(host: &mut WindowedApp, x: f32, y: f32) {
+        host.on_cursor_moved(PhysicalPosition::new(f64::from(x), f64::from(y)));
+    }
+
+    fn button(host: &mut WindowedApp, state: ElementState) {
+        if host.on_mouse_input(state, MouseButton::Left) == EventTail::Normal {
+            host.poll_remount();
+        }
+    }
+
+    fn inside(host: &WindowedApp) -> (f32, f32) {
+        let id = host
+            .app
+            .find_widget(Role::Dialog, Some("Approval"))
+            .unwrap();
+        let r = host.app.scene().layout(id).unwrap().rect;
+        (r.x + r.width / 2.0, r.y + r.height - 10.0)
+    }
+
+    #[test]
+    fn press_and_release_on_the_backdrop_dismisses_once() {
+        let (dismissed, mut host) = host();
+        to(&mut host, 10.0, 10.0);
+        button(&mut host, ElementState::Pressed);
+        to(&mut host, 30.0, 20.0);
+        button(&mut host, ElementState::Released);
+        assert_eq!(dismissed.get(), 1);
+    }
+
+    #[test]
+    fn a_backdrop_press_released_inside_the_dialog_does_not_dismiss() {
+        let (dismissed, mut host) = host();
+        let (x, y) = inside(&host);
+        to(&mut host, 10.0, 10.0);
+        button(&mut host, ElementState::Pressed);
+        to(&mut host, 120.0, 100.0);
+        to(&mut host, x, y);
+        button(&mut host, ElementState::Released);
+        assert_eq!(dismissed.get(), 0);
+    }
+
+    #[test]
+    fn a_dialog_press_released_on_the_backdrop_does_not_dismiss() {
+        let (dismissed, mut host) = host();
+        let (x, y) = inside(&host);
+        to(&mut host, x, y);
+        button(&mut host, ElementState::Pressed);
+        to(&mut host, 10.0, 10.0);
+        button(&mut host, ElementState::Released);
+        assert_eq!(dismissed.get(), 0);
     }
 }

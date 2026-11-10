@@ -528,6 +528,10 @@ struct WindowedApp {
     /// The slider captured by a left-button press. Pointer movement scrubs its
     /// value even after the cursor leaves the original hit box.
     drag_slider: Option<SceneWidgetId>,
+    /// The modal dialog layer a left press landed on. Its backdrop dismisses on
+    /// the release, and only when that release is on the same backdrop, the
+    /// way a browser click needs the press and the release on one target.
+    backdrop_press: Option<SceneWidgetId>,
     /// Tracks the ordinary left-button stream for opt-in pointer-edge scrolling.
     left_pointer_down: bool,
     /// The host's structural update hook. Ordinary input polls it immediately;

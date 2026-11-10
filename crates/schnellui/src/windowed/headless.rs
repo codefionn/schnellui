@@ -151,6 +151,7 @@ impl HeadlessHost {
                 drag_text: None,
                 last_text_click: None,
                 drag_slider: None,
+                backdrop_press: None,
                 left_pointer_down: false,
                 remount: None,
             },

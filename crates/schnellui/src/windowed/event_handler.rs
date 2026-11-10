@@ -822,8 +822,16 @@ impl WindowedApp {
                     // on anything else (or nothing) blurs — `focus`
                     // filters non-focusable targets down to a blur.
                     redraw |= self.app.pointer_focus(hit);
+                    self.backdrop_press = None;
                     if !self.app.begin_drag(p) {
-                        if let Some(id) = hit {
+                        let backdrop = hit.filter(|&id| {
+                            self.app.scene().node(id).map(|n| n.kind)
+                                == Some(WidgetKind::DialogLayer)
+                        });
+                        if backdrop.is_some() {
+                            // Dismissal waits for the release.
+                            self.backdrop_press = backdrop;
+                        } else if let Some(id) = hit {
                             redraw |= schnellui::widgets::dispatch_click(
                                 &self.app.widgets.clone(),
                                 self.app.scene_mut(),
@@ -842,6 +850,22 @@ impl WindowedApp {
                 self.app.end_dialog_pointer();
                 self.drag_text = None;
                 self.drag_slider = None;
+                let backdrop_press = self.backdrop_press.take();
+                let mut backdrop_dismissed = false;
+                if let Some(layer) = backdrop_press {
+                    let hit = schnellui::widgets::hit_test(
+                        &self.app.widgets.clone(),
+                        self.app.scene(),
+                        p,
+                    );
+                    if hit == Some(layer) {
+                        backdrop_dismissed = schnellui::widgets::dispatch_click(
+                            &self.app.widgets.clone(),
+                            self.app.scene_mut(),
+                            layer,
+                        );
+                    }
+                }
                 let release = self.app.end_drag(p);
                 self.trace_with(
                     "content_drag_release",
@@ -867,7 +891,7 @@ impl WindowedApp {
                         }
                     }
                 }
-                if active_changed || proximity_changed {
+                if active_changed || proximity_changed || backdrop_dismissed {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
