@@ -12,7 +12,7 @@ use schnellui::accesskit_reexport::TreeId;
 use schnellui::scene::{Color, Primitive, Rect, Size, WidgetId, WidgetKind};
 use schnellui::testing::find_by_role_name;
 use schnellui::widgets::{
-    Align, Badge, Button, ButtonAppearance, Checkbox, Column, Divider, Flex, Justify, Pad,
+    Align, Badge, Button, ButtonAppearance, Checkbox, Column, Divider, Flex, Form, Justify, Pad,
     ProgressBar, Row, Scroll, Shape, Stack, Tab, TabBar, Text, TextInput, Theme, ThemeProvider,
     View,
 };
@@ -123,6 +123,7 @@ enum Scenario {
     DayPlan,
     TaskCompleted,
     TaskAdded,
+    EmptyTitleRejected,
     CompletedView,
     Cleared,
 }
@@ -133,6 +134,7 @@ impl Scenario {
             Self::DayPlan => "day_plan",
             Self::TaskCompleted => "task_completed",
             Self::TaskAdded => "task_added",
+            Self::EmptyTitleRejected => "empty_title_rejected",
             Self::CompletedView => "completed_view",
             Self::Cleared => "cleared",
         }
@@ -389,12 +391,12 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
         );
     }
 
-    let add_runtime = runtime.clone();
-    // The button's height includes its 3px block shadow.
+    let submit_runtime = runtime.clone();
+    // A submit button: with an empty title it focuses the field instead of
+    // doing nothing. The button's height includes its 3px block shadow.
     let add_button = Button::new("Add task")
         .height(ENTRY_HEIGHT + TODO_THEME.shape.shadow)
-        .on_click(move || add_draft(&add_runtime));
-    let submit_runtime = runtime.clone();
+        .submit();
 
     let clear_runtime = runtime.clone();
     let clear_button = Button::new("Clear completed")
@@ -491,21 +493,29 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
         )
         .child(Divider::new())
         .child(
-            Row::new()
+            // Enter in the field submits the form too, so the Add button and
+            // Enter share one path and one answer to an empty title.
+            Form::new()
+                .label("New task")
                 .width(772.0)
-                .gap(12.0)
-                .align(Align::Center)
+                .on_submit(move || add_draft(&submit_runtime))
                 .child(
-                    TextInput::new(state.draft)
-                        .hint("Add a next step…")
-                        .width(360.0)
-                        .height(ENTRY_HEIGHT)
-                        .on_input(move |value| {
-                            runtime.update(|store| store.draft = value.to_string())
-                        })
-                        .on_submit(move || add_draft(&submit_runtime)),
-                )
-                .child(add_button),
+                    Row::new()
+                        .width(772.0)
+                        .gap(12.0)
+                        .align(Align::Center)
+                        .child(
+                            TextInput::new(state.draft)
+                                .hint("Add a next step…")
+                                .required(true)
+                                .width(360.0)
+                                .height(ENTRY_HEIGHT)
+                                .on_input(move |value| {
+                                    runtime.update(|store| store.draft = value.to_string())
+                                }),
+                        )
+                        .child(add_button),
+                ),
         )
         .child(
             Row::new()
@@ -595,6 +605,11 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> (Tod
             click(&mut app, Role::Button, "Add task");
             remount_if_requested(&runtime, &mut app, width, height, scale);
         }
+        Scenario::EmptyTitleRejected => {
+            // Add with nothing typed: the form blocks it and focuses the field.
+            click(&mut app, Role::Button, "Add task");
+            remount_if_requested(&runtime, &mut app, width, height, scale);
+        }
         Scenario::CompletedView => {
             click(&mut app, Role::Tab, "DONE  1");
             remount_if_requested(&runtime, &mut app, width, height, scale);
@@ -648,6 +663,26 @@ fn run_assertions(scenario: Scenario, app: &App) -> Result<(), String> {
                 .ok_or("new task is missing")?;
             if !has_status_value(root, "1 landed  ·  5 in flight") {
                 return Err("added-task summary is incorrect".into());
+            }
+            Ok(())
+        }
+        Scenario::EmptyTitleRejected => {
+            let input = find_by_role_name(&tree, "text_input", Some("Add a next step…"))
+                .ok_or("missing task input")?;
+            for state in ["required", "invalid"] {
+                if !input.state.iter().any(|s| s == state) {
+                    return Err(format!("task input is not {state}"));
+                }
+            }
+            if tree.focus != Some(input.id) {
+                return Err("the empty task input did not take focus".into());
+            }
+            if find_by_role_name(&tree, "form", Some("New task")).is_none() {
+                return Err("missing the task form".into());
+            }
+            // Nothing was added.
+            if !has_status_value(root, "1 landed  ·  4 in flight") {
+                return Err("an empty title changed the task list".into());
             }
             Ok(())
         }

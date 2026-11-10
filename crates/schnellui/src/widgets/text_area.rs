@@ -1187,6 +1187,7 @@ pub struct TextArea {
     wrap: WrapMode,
     line_numbers: Option<LineNumbers>,
     read_only: bool,
+    required: bool,
     on_input: Option<InputHandler>,
     highlight: Option<HighlightFn>,
     context_menu: Option<ContextMenu>,
@@ -1202,10 +1203,19 @@ impl TextArea {
             wrap: WrapMode::NoWrap,
             line_numbers: None,
             read_only: false,
+            required: false,
             on_input: None,
             highlight: None,
             context_menu: None,
         }
+    }
+
+    /// Requires a value before the enclosing [`Form`] can be submitted. A submit
+    /// with this area empty marks it invalid and focuses it. Enter still inserts
+    /// a newline; only a submit button submits.
+    pub fn required(mut self, required: bool) -> TextArea {
+        self.required = required;
+        self
     }
 
     /// Gray hint shown while the value is empty (also the accessible name).
@@ -1357,7 +1367,16 @@ fn commit_area_change(
             if !copied {
                 return false;
             }
+            let was_invalid = scene
+                .a11y(id)
+                .and_then(|a| a.value.as_deref())
+                .is_some_and(|value| !value.is_empty())
+                && crate::widgets::clear_invalid_on_value(scene, id);
             emit_text_area_paint(runtime, scene, shaper, atlas, id);
+            if was_invalid {
+                // A splice keeps the error-coloured ring the area wears.
+                crate::widgets::reapply_focus_ring(runtime, scene, id);
+            }
             scene.mark_dirty(id, DirtyFlags::PAINT);
             // An added/removed line or a new widest line changes the measured
             // size — flag LAYOUT so Taffy re-runs (SOUL §8.1 dirty channels).

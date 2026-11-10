@@ -2718,3 +2718,484 @@ mod uncontrolled_state_across_rebuilds {
         assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some("x"));
     }
 }
+
+/// Submittable forms: required fields, submit buttons, implicit submission.
+mod forms {
+    use super::*;
+    use schnellui::a11y::{accesskit_reexport::Action, StateFlags};
+    use schnellui::scene::{Color, Primitive, WidgetId};
+    use schnellui::widgets::{Button, Checkbox, Column, Form, TextArea, TextInput};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    fn flags(app: &App, id: WidgetId) -> StateFlags {
+        StateFlags(app.scene().a11y(id).unwrap().state)
+    }
+
+    fn invalid(app: &App, id: WidgetId) -> bool {
+        flags(app, id).contains(StateFlags::INVALID)
+    }
+
+    fn input(app: &App, name: &str) -> WidgetId {
+        app.find_widget(Role::TextInput, Some(name)).unwrap()
+    }
+
+    fn submit_button(app: &App) -> WidgetId {
+        app.find_widget(Role::Button, Some("Send")).unwrap()
+    }
+
+    /// The colour of a field's outer border rect, its first primitive.
+    fn border(app: &App, id: WidgetId) -> Color {
+        match app.scene().paint(id).unwrap().primitives[0] {
+            Primitive::SolidRect { color, .. } => color,
+            ref other => panic!("expected a border rect, got {other:?}"),
+        }
+    }
+
+    /// The colour of the focus ring stroke a field wears, if any.
+    fn ring(app: &App, id: WidgetId) -> Option<Color> {
+        app.scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .rev()
+            .find_map(|p| match p {
+                Primitive::StrokeRect { color, .. } => Some(*color),
+                _ => None,
+            })
+    }
+
+    fn type_text(app: &mut App, text: &'static str) {
+        for ch in text.char_indices() {
+            let end = ch.0 + ch.1.len_utf8();
+            assert!(app.dispatch_key(UiKey::Char(&text[ch.0..end])));
+        }
+    }
+
+    /// Two required inputs, one optional input and a submit button.
+    fn contact_form(submits: Rc<Cell<u32>>) -> Form {
+        Form::new()
+            .label("Contact")
+            .on_submit(move || submits.set(submits.get() + 1))
+            .child(TextInput::new("").label("Name").required(true))
+            .child(TextInput::new("").label("Email").required(true))
+            .child(TextInput::new("").label("Nickname"))
+            .child(Button::new("Send").submit())
+    }
+
+    fn find_dump<'a>(
+        node: &'a schnellui::a11y::A11yNodeDump,
+        role: &str,
+        name: &str,
+    ) -> Option<&'a schnellui::a11y::A11yNodeDump> {
+        if node.role == role && node.name.as_deref() == Some(name) {
+            return Some(node);
+        }
+        node.children
+            .iter()
+            .find_map(|child| find_dump(child, role, name))
+    }
+
+    #[test]
+    fn empty_required_fields_block_submit_then_enter_submits() {
+        let submits = Rc::new(Cell::new(0));
+        let mut app = App::mount(contact_form(submits.clone()));
+        app.frame();
+        let (name, email, nick) = (
+            input(&app, "Name"),
+            input(&app, "Email"),
+            input(&app, "Nickname"),
+        );
+        assert!(flags(&app, name).contains(StateFlags::REQUIRED));
+        assert!(flags(&app, email).contains(StateFlags::REQUIRED));
+        assert!(!flags(&app, nick).contains(StateFlags::REQUIRED));
+        assert!(app.find_widget(Role::Form, Some("Contact")).is_some());
+
+        // Nothing filled: blocked, first required field focused with the ring.
+        assert!(app.dispatch_click(submit_button(&app)));
+        // The change reaches the incremental AccessKit update, not only a rebuild.
+        let incremental = app.a11y_tree_update();
+        for id in [name, email] {
+            let key = schnellui::a11y::to_access_id(id);
+            let (_, node) = incremental.nodes.iter().find(|(k, _)| *k == key).unwrap();
+            assert_eq!(node.invalid(), Some(accesskit::Invalid::True));
+        }
+        assert!(incremental
+            .nodes
+            .iter()
+            .all(|(k, _)| *k != schnellui::a11y::to_access_id(nick)));
+        app.frame();
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(name));
+        assert!(app.focus_ring_shown());
+        assert!(invalid(&app, name) && invalid(&app, email));
+        assert!(!invalid(&app, nick), "an optional field is never invalid");
+
+        // The a11y dump and the real AccessKit tree agree with the scene.
+        let dump = schnellui::a11y::dump_tree(app.scene()).root.unwrap();
+        assert!(find_dump(&dump, "form", "Contact").is_some());
+        for field in ["Name", "Email"] {
+            let node = find_dump(&dump, "text_input", field).unwrap();
+            assert!(node.state.contains(&"required".to_string()));
+            assert!(node.state.contains(&"invalid".to_string()));
+        }
+        let nick_dump = find_dump(&dump, "text_input", "Nickname").unwrap();
+        assert!(nick_dump.state.is_empty());
+        let update = schnellui::a11y::build_full_tree_update(app.scene());
+        let node_of = |id: WidgetId| {
+            let key = schnellui::a11y::to_access_id(id);
+            &update.nodes.iter().find(|(k, _)| *k == key).unwrap().1
+        };
+        assert!(node_of(name).is_required());
+        assert_eq!(node_of(name).invalid(), Some(accesskit::Invalid::True));
+        assert_eq!(node_of(nick).invalid(), None);
+        assert_eq!(
+            node_of(app.find_widget(Role::Form, None).unwrap()).role(),
+            accesskit::Role::Form
+        );
+
+        // What is painted matches: error outline on exactly the invalid fields.
+        let error = app.active_theme().invalid_color();
+        assert_eq!(border(&app, name), error);
+        assert_eq!(border(&app, email), error);
+        assert_ne!(border(&app, nick), error);
+        // The focus ring does not hide the error: it wears the error colour.
+        assert_eq!(ring(&app, name), Some(error));
+
+        // Typing a value clears that field's own INVALID, and only its own.
+        type_text(&mut app, "Ann");
+        assert!(!invalid(&app, name));
+        assert!(invalid(&app, email));
+        assert_ne!(border(&app, name), error);
+        assert_ne!(ring(&app, name), Some(error));
+        assert!(ring(&app, name).is_some(), "still focused, still ringed");
+
+        // The next submit skips the filled field and focuses the next one.
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(email));
+        assert!(invalid(&app, email));
+
+        // Fill it and press Enter in it: implicit submission, exactly once.
+        type_text(&mut app, "a@b.c");
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!(submits.get(), 1);
+        for id in [name, email, nick] {
+            assert!(!invalid(&app, id));
+        }
+        assert_ne!(border(&app, email), error);
+    }
+
+    #[test]
+    fn required_checkbox_blocks_submission_and_takes_focus() {
+        let submits = Rc::new(Cell::new(0));
+        let s = submits.clone();
+        let mut app = App::mount(
+            Form::new()
+                .on_submit(move || s.set(s.get() + 1))
+                .child(TextInput::new("x").label("Name").required(true))
+                .child(Checkbox::new(false).name("Agree").required(true))
+                .child(Button::new("Send").submit()),
+        );
+        app.frame();
+        let agree = app.find_widget(Role::CheckBox, Some("Agree")).unwrap();
+        assert!(flags(&app, agree).contains(StateFlags::REQUIRED));
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(agree));
+        assert!(app.focus_ring_shown());
+        assert!(invalid(&app, agree));
+        assert!(
+            !invalid(&app, input(&app, "Name")),
+            "a filled field is valid"
+        );
+        assert_eq!(border(&app, agree), app.active_theme().invalid_color());
+
+        // Ticking it clears INVALID; the form then submits.
+        assert!(app.dispatch_key(UiKey::Space { shift: false }));
+        assert!(!invalid(&app, agree));
+        assert_ne!(border(&app, agree), app.active_theme().invalid_color());
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 1);
+
+        // Unticking again makes it missing again.
+        assert!(app.dispatch_click(agree));
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 1);
+        assert!(invalid(&app, agree));
+    }
+
+    #[test]
+    fn an_input_with_its_own_on_submit_keeps_enter() {
+        let form = Rc::new(Cell::new(0));
+        let own = Rc::new(Cell::new(0));
+        let (f, o) = (form.clone(), own.clone());
+        let mut app = App::mount(
+            Form::new()
+                .on_submit(move || f.set(f.get() + 1))
+                .child(
+                    TextInput::new("")
+                        .label("Search")
+                        .required(true)
+                        .on_submit(move || o.set(o.get() + 1)),
+                )
+                .child(TextInput::new("").label("Plain")),
+        );
+        app.frame();
+        let search = input(&app, "Search");
+        app.focus(Some(search));
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!((own.get(), form.get()), (1, 0));
+        assert!(!invalid(&app, search), "its own handler does not validate");
+
+        // The plain field, with nothing required missing, submits the form.
+        type_text(&mut app, "q");
+        let plain = input(&app, "Plain");
+        app.focus(Some(plain));
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!((own.get(), form.get()), (1, 1));
+    }
+
+    #[test]
+    fn access_kit_click_on_submit_matches_a_pointer_click() {
+        let click = |app: &mut App| {
+            app.dispatch_action(&accesskit_action::ActionRequest {
+                action: Action::Click,
+                target_tree: accesskit_reexport::TreeId::ROOT,
+                target_node: schnellui::a11y::to_access_id(submit_button(app)),
+                data: None,
+            })
+        };
+        let submits = Rc::new(Cell::new(0));
+        let mut app = App::mount(contact_form(submits.clone()));
+        app.frame();
+        assert!(click(&mut app));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(input(&app, "Name")));
+        assert!(app.focus_ring_shown());
+        assert!(invalid(&app, input(&app, "Name")));
+        assert!(invalid(&app, input(&app, "Email")));
+
+        for (field, text) in [("Name", "Ann"), ("Email", "a@b.c")] {
+            let id = input(&app, field);
+            assert!(app.dispatch_action(&accesskit_action::ActionRequest {
+                action: Action::SetValue,
+                target_tree: accesskit_reexport::TreeId::ROOT,
+                target_node: schnellui::a11y::to_access_id(id),
+                data: Some(accesskit_action::ActionData::Value(text.into())),
+            }));
+            assert!(!invalid(&app, id), "SetValue clears INVALID like typing");
+        }
+        assert!(click(&mut app));
+        assert_eq!(submits.get(), 1);
+    }
+
+    #[test]
+    fn keyboard_activates_the_submit_button() {
+        let submits = Rc::new(Cell::new(0));
+        let mut app = App::mount(contact_form(submits.clone()));
+        app.frame();
+        let send = submit_button(&app);
+        app.focus(Some(send));
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(input(&app, "Name")));
+        type_text(&mut app, "Ann");
+        app.focus(Some(input(&app, "Email")));
+        type_text(&mut app, "a@b.c");
+        app.focus(Some(send));
+        assert!(app.dispatch_key(UiKey::Space { shift: false }));
+        assert_eq!(submits.get(), 1);
+    }
+
+    #[test]
+    fn a_form_keeps_working_across_a_theme_switch() {
+        let submits = Rc::new(Cell::new(0));
+        let s = submits.clone();
+        let mut app = App::mount_themed(theme::LIGHT, move || contact_form(s.clone()));
+        app.frame();
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(input(&app, "Name")));
+
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        let (name, email) = (input(&app, "Name"), input(&app, "Email"));
+        assert!(flags(&app, name).contains(StateFlags::REQUIRED));
+        // INVALID is not carried across a rebuild: the next submit marks it again.
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 0);
+        assert!(invalid(&app, name) && invalid(&app, email));
+        assert_eq!(app.focused_widget(), Some(name));
+        assert_eq!(border(&app, name), app.active_theme().invalid_color());
+
+        type_text(&mut app, "Ann");
+        app.focus(Some(email));
+        type_text(&mut app, "a@b.c");
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!(submits.get(), 1);
+
+        // A successful form survives another rebuild with its typed values.
+        assert!(app.set_theme(theme::LIGHT));
+        app.frame();
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 2);
+    }
+
+    #[test]
+    fn a_submit_button_submits_only_its_own_form() {
+        let (a_count, b_count) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (a, b) = (a_count.clone(), b_count.clone());
+        let mut app = App::mount(
+            Column::new()
+                .child(
+                    Form::new()
+                        .label("A")
+                        .on_submit(move || a.set(a.get() + 1))
+                        .child(TextInput::new("").label("A field").required(true))
+                        .child(Button::new("Send A").submit()),
+                )
+                .child(
+                    Form::new()
+                        .label("B")
+                        .on_submit(move || b.set(b.get() + 1))
+                        .child(TextInput::new("").label("B field").required(true))
+                        .child(Button::new("Send B").submit()),
+                ),
+        );
+        app.frame();
+        let send = |app: &App, name| app.find_widget(Role::Button, Some(name)).unwrap();
+        assert!(app.dispatch_click(send(&app, "Send B")));
+        assert_eq!((a_count.get(), b_count.get()), (0, 0));
+        assert!(invalid(&app, input(&app, "B field")));
+        assert!(
+            !invalid(&app, input(&app, "A field")),
+            "form A is untouched"
+        );
+        assert_eq!(app.focused_widget(), Some(input(&app, "B field")));
+
+        // A filled field in A does not let B's button submit A, or B itself.
+        app.focus(Some(input(&app, "A field")));
+        type_text(&mut app, "x");
+        assert!(app.dispatch_click(send(&app, "Send B")));
+        assert_eq!((a_count.get(), b_count.get()), (0, 0));
+
+        app.focus(Some(input(&app, "B field")));
+        type_text(&mut app, "y");
+        assert!(app.dispatch_click(send(&app, "Send B")));
+        assert_eq!((a_count.get(), b_count.get()), (0, 1));
+        assert!(app.dispatch_click(send(&app, "Send A")));
+        assert_eq!((a_count.get(), b_count.get()), (1, 1));
+    }
+
+    #[test]
+    fn nested_forms_submit_the_nearest_one() {
+        let (outer, inner) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (o, i) = (outer.clone(), inner.clone());
+        let mut app = App::mount(
+            Form::new()
+                .label("Outer")
+                .on_submit(move || o.set(o.get() + 1))
+                .child(TextInput::new("").label("Outer field").required(true))
+                .child(
+                    Form::new()
+                        .label("Inner")
+                        .on_submit(move || i.set(i.get() + 1))
+                        .child(TextInput::new("").label("Inner field").required(true))
+                        .child(Button::new("Send").submit()),
+                ),
+        );
+        app.frame();
+        assert!(app.dispatch_click(submit_button(&app)));
+        // Only the inner form's field is checked and focused.
+        assert!(invalid(&app, input(&app, "Inner field")));
+        assert!(!invalid(&app, input(&app, "Outer field")));
+        app.focus(Some(input(&app, "Inner field")));
+        type_text(&mut app, "x");
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!((outer.get(), inner.get()), (0, 1));
+    }
+
+    #[test]
+    fn enter_in_a_text_area_inserts_a_newline_and_required_areas_count() {
+        let submits = Rc::new(Cell::new(0));
+        let s = submits.clone();
+        let mut app = App::mount(
+            Form::new()
+                .on_submit(move || s.set(s.get() + 1))
+                .child(TextArea::new("").placeholder("Notes").required(true))
+                .child(Button::new("Send").submit()),
+        );
+        app.frame();
+        let notes = app
+            .find_widget(Role::MultilineTextInput, Some("Notes"))
+            .unwrap();
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 0);
+        assert_eq!(app.focused_widget(), Some(notes));
+        assert!(invalid(&app, notes));
+        assert_eq!(border(&app, notes), app.active_theme().invalid_color());
+        assert_eq!(ring(&app, notes), Some(app.active_theme().invalid_color()));
+
+        type_text(&mut app, "a");
+        assert!(!invalid(&app, notes));
+        assert_ne!(ring(&app, notes), Some(app.active_theme().invalid_color()));
+        assert_ne!(border(&app, notes), app.active_theme().invalid_color());
+        assert!(app.dispatch_key(UiKey::Enter));
+        assert_eq!(submits.get(), 0, "Enter in a text area is a newline");
+        assert_eq!(
+            app.scene().a11y(notes).unwrap().value.as_deref(),
+            Some("a\n")
+        );
+        assert!(app.dispatch_click(submit_button(&app)));
+        assert_eq!(submits.get(), 1);
+    }
+
+    #[test]
+    fn a_submit_button_outside_a_form_is_inert_and_a_plain_button_does_not_submit() {
+        let submits = Rc::new(Cell::new(0));
+        let clicks = Rc::new(Cell::new(0));
+        let (s, c) = (submits.clone(), clicks.clone());
+        let mut app = App::mount(
+            Column::new()
+                .child(
+                    Button::new("Orphan")
+                        .submit()
+                        .on_click(move || c.set(c.get() + 1)),
+                )
+                .child(
+                    Form::new()
+                        .on_submit(move || s.set(s.get() + 1))
+                        .child(Button::new("Plain").on_click(|| {})),
+                ),
+        );
+        app.frame();
+        let orphan = app.find_widget(Role::Button, Some("Orphan")).unwrap();
+        assert!(app.dispatch_click(orphan));
+        assert_eq!(clicks.get(), 1, "its own on_click still runs");
+        let plain = app.find_widget(Role::Button, Some("Plain")).unwrap();
+        assert!(app.dispatch_click(plain));
+        assert_eq!(submits.get(), 0);
+    }
+
+    #[test]
+    fn a_host_dispatching_through_the_widget_api_submits_on_its_next_frame() {
+        let submits = Rc::new(Cell::new(0));
+        let mut app = App::mount(contact_form(submits.clone()));
+        app.frame();
+        let send = submit_button(&app);
+        let widgets = app.widgets.clone();
+        // The windowed pointer path calls `dispatch_click` on the widget layer.
+        assert!(schnellui::widgets::dispatch_click(
+            &widgets,
+            app.scene_mut(),
+            send
+        ));
+        assert_eq!(app.focused_widget(), None, "nothing ran yet");
+        app.frame();
+        assert_eq!(app.focused_widget(), Some(input(&app, "Name")));
+        assert!(invalid(&app, input(&app, "Email")));
+        assert_eq!(submits.get(), 0);
+    }
+}

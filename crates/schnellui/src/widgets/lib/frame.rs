@@ -772,14 +772,27 @@ pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> boo
                     .get_mut(id)
                     .and_then(|h| h.click.take())
             });
-            let Some(mut cb) = cb else { return false };
-            cb();
-            runtime.with(|rt| {
-                if let Some(h) = rt.borrow_mut().handlers.get_mut(id) {
-                    h.click = Some(cb);
+            let mut handled = false;
+            if let Some(mut cb) = cb {
+                cb();
+                runtime.with(|rt| {
+                    if let Some(h) = rt.borrow_mut().handlers.get_mut(id) {
+                        h.click = Some(cb);
+                    }
+                });
+                handled = true;
+            }
+            // A submit button asks its form to submit after its own handler ran.
+            // Pointer, keyboard and AccessKit all arrive here (SOUL §6.3).
+            let submits =
+                runtime.with(|rt| rt.borrow().handlers.get(id).is_some_and(|h| h.submits_form));
+            if submits {
+                if let Some(form) = enclosing_form(scene, id) {
+                    request_submit(runtime, form);
+                    handled = true;
                 }
-            });
-            true
+            }
+            handled
         }
         WidgetKind::Checkbox => {
             let new = {
@@ -794,6 +807,9 @@ pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> boo
                 a.state = s.0;
                 now
             };
+            if new {
+                let _ = clear_invalid_on_value(scene, id);
+            }
             emit_checkbox_paint(runtime, scene, id, new);
             // The re-emit cleared the primitives; a hovered or focused checkbox keeps
             // its decorations.

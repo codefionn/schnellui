@@ -23,6 +23,11 @@ impl View for TextArea {
             acts.insert(ActionFlags::SHOW_CONTEXT_MENU);
         }
         a.actions = acts.0;
+        if this.required {
+            let mut state = StateFlags::default();
+            state.insert(StateFlags::REQUIRED);
+            a.state = state.0;
+        }
         crate::widgets::context_menu::register_context_menu(&ctx.runtime, id, context_menu);
 
         // Retained edit state (caret parked at the end, like TextInput).
@@ -641,11 +646,18 @@ enum Section {
 
 /// The surface: border + inset background (same family as TextInput, §8.1),
 /// all from the ambient theme, like TextInput's own paint.
-fn surface(rect: Rect, focused: bool, th: &crate::widgets::Theme) -> [Primitive; 2] {
+fn surface(rect: Rect, focused: bool, invalid: bool, th: &crate::widgets::Theme) -> [Primitive; 2] {
     [
         Primitive::SolidRect {
             rect,
-            color: if focused { th.accent } else { th.outline },
+            // A failed validation outranks focus; the focus ring still shows on top.
+            color: if invalid {
+                th.invalid_color()
+            } else if focused {
+                th.accent
+            } else {
+                th.outline
+            },
             corner_radius: 3.0,
         },
         Primitive::SolidRect {
@@ -806,10 +818,13 @@ fn emit_area(
     atlas: &mut GlyphAtlas,
     id: WidgetId,
 ) -> (Size, Restyle) {
-    let focused = scene
-        .a11y(id)
-        .map(|a| StateFlags(a.state).contains(StateFlags::FOCUSED))
-        .unwrap_or(false);
+    let (focused, invalid) = scene.a11y(id).map_or((false, false), |a| {
+        let state = StateFlags(a.state);
+        (
+            state.contains(StateFlags::FOCUSED),
+            state.contains(StateFlags::INVALID),
+        )
+    });
     let th = crate::widgets::theme_for(runtime, id);
     let scale = st.scale;
     let inv = 1.0 / norm_scale(scale);
@@ -945,7 +960,7 @@ fn emit_area(
         text: th.text,
         band,
     };
-    let head = surface(rect, focused, &th);
+    let head = surface(rect, focused, invalid, &th);
     let selections = selection_list(st.caret, st.anchor, &st.secondary);
     let value = st.value.as_str();
 

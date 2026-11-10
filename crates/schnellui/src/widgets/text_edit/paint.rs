@@ -107,10 +107,13 @@ pub(crate) fn emit_text_input_paint(
     atlas: &mut GlyphAtlas,
     id: WidgetId,
 ) -> Size {
-    let focused = scene
-        .a11y(id)
-        .map(|a| StateFlags(a.state).contains(StateFlags::FOCUSED))
-        .unwrap_or(false);
+    let (focused, invalid) = scene.a11y(id).map_or((false, false), |a| {
+        let state = StateFlags(a.state);
+        (
+            state.contains(StateFlags::FOCUSED),
+            state.contains(StateFlags::INVALID),
+        )
+    });
     let Some((
         value,
         placeholder,
@@ -248,7 +251,14 @@ pub(crate) fn emit_text_input_paint(
     // has no stroked-rect primitive, SOUL §3.2)
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        color: if focused { t.accent } else { t.outline },
+        // A failed validation outranks focus; the focus ring still shows on top.
+        color: if invalid {
+            t.invalid_color()
+        } else if focused {
+            t.accent
+        } else {
+            t.outline
+        },
         corner_radius: radius,
     });
     pd.primitives.push(Primitive::SolidRect {

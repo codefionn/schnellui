@@ -147,6 +147,9 @@ roles! {
     MenuItem = 29 => MenuItem, "menu_item", "menu-item";
     /// A single-line editable whose value is visually and semantically protected.
     PasswordInput = 30 => PasswordInput, "password_input", "password-input";
+    /// A submittable group of fields: a [`Role::Button`] marked as a submit
+    /// button activates the nearest enclosing form.
+    Form = 31 => Form, "form", "form";
 }
 
 impl Role {
@@ -171,6 +174,12 @@ impl StateFlags {
     /// The node exposes a binary expanded/collapsed state. `EXPANDED` distinguishes
     /// the open state; without it, the node is explicitly collapsed.
     pub const COLLAPSIBLE: StateFlags = StateFlags(1 << 6);
+    /// The field must have a value before its form can be submitted
+    /// (`aria-required`).
+    pub const REQUIRED: StateFlags = StateFlags(1 << 7);
+    /// The field's value failed validation, such as a required field left
+    /// empty by a submit (`aria-invalid`).
+    pub const INVALID: StateFlags = StateFlags(1 << 8);
 
     #[inline]
     pub fn contains(self, f: StateFlags) -> bool {
@@ -190,6 +199,8 @@ impl StateFlags {
             (Self::SELECTED, "selected"),
             (Self::FOCUSED, "focused"),
             (Self::MODAL, "modal"),
+            (Self::REQUIRED, "required"),
+            (Self::INVALID, "invalid"),
         ] {
             if self.contains(bit) {
                 v.push(name.to_string());
@@ -764,6 +775,12 @@ fn build_node(
     }
     if state.contains(StateFlags::MODAL) {
         node.set_modal();
+    }
+    if state.contains(StateFlags::REQUIRED) {
+        node.set_required();
+    }
+    if state.contains(StateFlags::INVALID) {
+        node.set_invalid(accesskit::Invalid::True);
     }
     if state.contains(StateFlags::SELECTED) {
         node.set_selected(true);

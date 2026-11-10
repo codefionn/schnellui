@@ -361,7 +361,10 @@ impl App {
             {
                 self.focus(Some(id))
             }
-            Action::Click => schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id),
+            Action::Click => {
+                schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id)
+                    | self.run_pending_submit()
+            }
             _ => schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id),
         };
         dismissed | raised | changed

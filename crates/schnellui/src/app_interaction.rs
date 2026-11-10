@@ -335,6 +335,14 @@ impl App {
                     {
                         return focus_visible | changed;
                     }
+                    // No handler of its own: Enter submits the enclosing form,
+                    // the way a browser submits a form from one of its fields.
+                    if let Some(form) =
+                        schnellui::widgets::implicit_submit_form(&self.widgets, &self.scene, id)
+                    {
+                        schnellui::widgets::request_submit(&self.widgets, form);
+                        return focus_visible | self.run_pending_submit();
+                    }
                 }
                 let edit = match key {
                     UiKey::Char(t) => Some(EditKey::Insert(t)),
@@ -458,7 +466,7 @@ impl App {
             if let Some(changed) =
                 schnellui::widgets::dispatch_key_activate(&self.widgets, &mut self.scene, f, k)
             {
-                return focus_visible | changed;
+                return focus_visible | changed | self.run_pending_submit();
             }
         }
 
@@ -925,7 +933,36 @@ impl App {
             let can_paste = true;
             return self.open_context_menu(source, position, can_paste);
         }
-        schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id)
+        let clicked = schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id);
+        clicked | self.run_pending_submit()
+    }
+
+    /// Runs the form submit a submit button or Enter asked for since the last
+    /// call: marks every missing required field invalid and focuses the first
+    /// one with the ring (the path Tab takes), or runs the form's `on_submit`
+    /// when none is missing. A host that dispatches clicks through the widget
+    /// API directly gets this at the start of its next frame instead.
+    /// Returns `true` if anything changed.
+    pub(crate) fn run_pending_submit(&mut self) -> bool {
+        let Some(form) = schnellui::widgets::take_pending_submit(&self.widgets) else {
+            return false;
+        };
+        if self.scene.node(form).is_none() {
+            return false;
+        }
+        match schnellui::widgets::submit_form(
+            &self.widgets,
+            &mut self.scene,
+            &mut self.text,
+            &mut self.atlas,
+            form,
+        ) {
+            schnellui::widgets::SubmitOutcome::Submitted => true,
+            schnellui::widgets::SubmitOutcome::Blocked { first } => {
+                self.focus(Some(first));
+                true
+            }
+        }
     }
 
     /// Resolves the deepest interactive widget at a logical point.

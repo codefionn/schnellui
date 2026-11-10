@@ -304,6 +304,9 @@ impl App {
         // poll it before every other pull so a changed design rebuilds first and
         // the remainder of this frame operates exclusively on the replacement.
         // Subscription readiness is delivered by the flush, so settle first.
+        // A submit requested through the widget API directly (a host calling
+        // `dispatch_click`) runs before anything else reads the tree.
+        let _ = self.run_pending_submit();
         schnellui::signal::Runtime::flush();
         self.poll_theme_binding();
         self.poll_hot_reload();

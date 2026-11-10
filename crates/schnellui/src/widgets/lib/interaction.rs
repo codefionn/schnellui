@@ -275,6 +275,14 @@ pub(crate) fn apply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: WidgetI
     if scene.node(id).map(|node| node.kind) == Some(WidgetKind::DropdownOption) {
         style = theme.interaction_style(component, InteractionState::Hover);
     }
+    // A field that failed validation keeps saying so while it has focus: the
+    // ring would otherwise cover its error outline.
+    if scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::INVALID))
+    {
+        style.border = Some(theme.invalid_color());
+    }
     if let Some(decoration) = apply_interaction_style(runtime, scene, id, style, FOCUS_RING_W) {
         runtime.with(|rt| rt.borrow_mut().ring = Some(decoration));
     }

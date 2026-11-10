@@ -168,6 +168,9 @@ fn commit_change(
                 return false;
             };
             scene.set_a11y_value(id, Some(display_value(&value, password)));
+            if !value.is_empty() {
+                let _ = crate::widgets::clear_invalid_on_value(scene, id);
+            }
             emit_text_input_paint(runtime, scene, shaper, atlas, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
             fire_on_input(runtime, id, &value);

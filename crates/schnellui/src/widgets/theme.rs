@@ -355,6 +355,31 @@ impl Theme {
         pole
     }
 
+    /// The outline of a field that failed validation, such as a required field
+    /// a submit found empty.
+    ///
+    /// Themes carry no dedicated error token (adding one would break every
+    /// theme literal outside this crate), so this is the `attention` color,
+    /// moved toward the text color until it reaches 3:1 against the page and
+    /// the field surface, the WCAG non-text contrast an outline needs. The
+    /// built-in themes already use a red attention color that passes as is.
+    pub fn invalid_color(self) -> Color {
+        const MIN_CONTRAST: f32 = 3.0;
+        let worst = |candidate| {
+            contrast_ratio(candidate, self.page).min(contrast_ratio(candidate, self.surface))
+        };
+        if worst(self.attention) >= MIN_CONTRAST {
+            return self.attention;
+        }
+        for step in 1..=20 {
+            let candidate = mix_color(self.attention, self.text, step as f32 / 20.0);
+            if worst(candidate) >= MIN_CONTRAST {
+                return candidate;
+            }
+        }
+        self.text
+    }
+
     /// Text color for links and other accent-colored text.
     ///
     /// The accent is kept when it reads as text (4.5:1) on both the page and

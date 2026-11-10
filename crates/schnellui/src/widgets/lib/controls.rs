@@ -134,6 +134,7 @@ pub struct Button {
     pub(crate) text_size: Option<f32>,
     pub(crate) display: Option<Cow<'static, str>>,
     pub(crate) menu: Option<crate::widgets::ContextMenu>,
+    pub(crate) submit: bool,
 }
 
 impl Button {
@@ -154,7 +155,17 @@ impl Button {
             text_size: None,
             display: None,
             menu: None,
+            submit: false,
         }
+    }
+
+    /// Makes this a submit button: activating it by pointer, Enter or Space, or
+    /// an AccessKit `Click`, submits the nearest enclosing [`Form`]. An
+    /// `on_click` handler, if any, runs first. Outside a form it does nothing
+    /// beyond that handler.
+    pub fn submit(mut self) -> Button {
+        self.submit = true;
+        self
     }
 
     /// Opens `menu` under the button when it is clicked, by pointer or
@@ -339,6 +350,9 @@ impl View for Button {
         if let Some(cb) = this.on_click {
             with_handlers(&ctx.runtime, id, |h| h.click = Some(cb));
         }
+        if this.submit {
+            with_handlers(&ctx.runtime, id, |h| h.submits_form = true);
+        }
         if this.on_drag_start.is_some() || this.on_drag_end.is_some() || this.on_drop.is_some() {
             with_handlers(&ctx.runtime, id, |handlers| {
                 handlers.drag_start = this.on_drag_start;
@@ -355,6 +369,7 @@ pub struct Checkbox {
     pub(crate) checked: bool,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_toggle: Option<Box<dyn FnMut(bool) + 'static>>,
+    pub(crate) required: bool,
 }
 
 impl Checkbox {
@@ -363,7 +378,13 @@ impl Checkbox {
             checked,
             name: None,
             on_toggle: None,
+            required: false,
         }
+    }
+    /// Requires the box to be checked before its [`Form`] can be submitted.
+    pub fn required(mut self, required: bool) -> Checkbox {
+        self.required = required;
+        self
     }
     /// Gives the checkbox an accessible name.
     pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Checkbox {
@@ -397,6 +418,9 @@ impl View for Checkbox {
             let mut st = StateFlags::default();
             if this.checked {
                 st.insert(StateFlags::CHECKED);
+            }
+            if this.required {
+                st.insert(StateFlags::REQUIRED);
             }
             a.state = st.0;
         }
@@ -547,6 +571,7 @@ pub struct TextInput {
     pub(crate) text_size: Option<f32>,
     pub(crate) hint: bool,
     pub(crate) min_height: f32,
+    pub(crate) required: bool,
 }
 
 impl TextInput {
@@ -562,7 +587,14 @@ impl TextInput {
             text_size: None,
             hint: false,
             min_height: 0.0,
+            required: false,
         }
+    }
+    /// Requires a value before the enclosing [`Form`] can be submitted. A submit
+    /// with this field empty marks it invalid and focuses it.
+    pub fn required(mut self, required: bool) -> TextInput {
+        self.required = required;
+        self
     }
     /// Sets the least height of the field, so it lines up with buttons
     /// beside it. A hint and the value center in the taller field.
@@ -605,7 +637,8 @@ impl TextInput {
         self
     }
     /// Runs `f` when Enter is pressed while the field has focus, the way a
-    /// browser submits a one-field form. Without it Enter does nothing.
+    /// browser submits a one-field form. Without it Enter submits the enclosing
+    /// [`Form`], if there is one, and otherwise does nothing.
     pub fn on_submit(mut self, f: impl FnMut() + 'static) -> TextInput {
         self.on_submit = Some(Box::new(f));
         self
@@ -666,6 +699,11 @@ impl View for TextInput {
                 acts.insert(ActionFlags::SHOW_CONTEXT_MENU);
             }
             a.actions = acts.0;
+            if this.required {
+                let mut state = StateFlags::default();
+                state.insert(StateFlags::REQUIRED);
+                a.state = state.0;
+            }
         }
         // Retained edit state (value + caret/anchor) — the paint emission below and
         // the focus/keyboard/pointer dispatches all read it (SOUL §6.3).
@@ -726,6 +764,12 @@ impl PasswordInput {
     }
     pub fn on_input(mut self, f: impl FnMut(&str) + 'static) -> PasswordInput {
         self.0.on_input = Some(Box::new(f));
+        self
+    }
+    /// Requires a value before the enclosing [`Form`] can be submitted, as
+    /// [`TextInput::required`] does.
+    pub fn required(mut self, required: bool) -> PasswordInput {
+        self.0.required = required;
         self
     }
     /// Runs `f` when Enter is pressed in the field, as [`TextInput::on_submit`] does.

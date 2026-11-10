@@ -45,6 +45,8 @@ mod context;
 pub use context::Context;
 mod dialog;
 pub use dialog::*;
+mod form;
+pub use form::*;
 mod grouped_tabs;
 pub use grouped_tabs::*;
 mod panel;
@@ -770,7 +772,12 @@ fn emit_checkbox_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, check
     // An unchecked box is an outlined well; a checked one fills with the
     // accent and carries a check mark, like the switch and radio beside it.
     let frame = sh.frame.max(CHECKBOX_BORDER);
-    let edge = if checked && sh.frame == 0.0 {
+    let invalid = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::INVALID));
+    let edge = if invalid {
+        t.invalid_color()
+    } else if checked && sh.frame == 0.0 {
         t.accent
     } else {
         t.outline
@@ -978,8 +985,11 @@ pub(crate) struct Handlers {
     toggle: Option<Box<dyn FnMut(bool) + 'static>>,
     change: Option<Box<dyn FnMut(f32) + 'static>>,
     input: Option<InputHandler>,
-    /// Fired when Enter is pressed in a focused single-line text input.
+    /// Fired when Enter is pressed in a focused single-line text input. On a
+    /// [`Form`] it is the form's `on_submit`.
     submit: Option<ClickHandler>,
+    /// A [`Button::submit`]: activating it submits the nearest enclosing form.
+    submits_form: bool,
     /// Pointer-drag lifecycle for dockable/reorderable content. Drag input is
     /// deliberately separate from `click`: a short press still activates the
     /// widget, while crossing the movement threshold starts capture.
@@ -1313,6 +1323,9 @@ struct WidgetRuntime {
     /// Instant of the last floating-label tick that moved a label; `None` while
     /// no label transition is running.
     label_clock: Option<Instant>,
+    /// A form a submit button or Enter asked to submit, until the app runs the
+    /// check (it needs the shaper to repaint fields and the app to move focus).
+    pending_submit: Option<WidgetId>,
     /// Pointer-proximity visibility for unobtrusive drag handles.
     proximity_reveals: SecondaryMap<WidgetId, ProximityRevealState>,
     /// Dense index of `proximity_reveals` (walked on every pointer move).
@@ -1478,6 +1491,7 @@ pub fn reset(runtime: &Runtime) {
         rt.spinner_ids.clear();
         rt.spinner_clock = None;
         rt.label_clock = None;
+        rt.pending_submit = None;
         rt.proximity_reveals.clear();
         rt.proximity_ids.clear();
         rt.hover_tooltips.clear();
@@ -1540,6 +1554,9 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
 
     runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
+        if rt.pending_submit.is_some_and(|form| removed(form)) {
+            rt.pending_submit = None;
+        }
         for &id in nodes {
             rt.handlers.remove(id);
             rt.tab_appearances.remove(id);
