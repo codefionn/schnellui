@@ -395,3 +395,54 @@ fn a_hovered_scroll_view_border_follows_a_resized_window() {
         );
     }
 }
+
+/// A viewport owns its hover and focus decoration, and its scrollbar chrome
+/// shares that paint. Scrolling rewrote the chrome over the hover wash and
+/// left the record pointing at a primitive that was no longer a wash.
+#[test]
+fn scrolling_a_hovered_viewport_keeps_its_hover_wash() {
+    use schnellui::widgets::{Column, Scroll, Text};
+    for scrollbar in [false, true] {
+        let states = |r: u8| {
+            let style = |r: u8| InteractionStyle {
+                background: Some(Color::rgba(r, 40, 90, 0x50)),
+                foreground: None,
+                border: Some(Color::rgb(r, 120, 30)),
+            };
+            InteractionStates {
+                hover: style(r),
+                focus: style(r + 20),
+                active: style(r + 40),
+            }
+        };
+        let mut theme = layered_theme();
+        theme.component_interactions.raw_surface = Some(states(200));
+        let mut col = Column::new();
+        for i in 0..30 {
+            col = col.child(Text::new(format!("Row {i}")));
+        }
+        let mut app = App::mount_with_theme_size_scaled(
+            theme,
+            Scroll::new()
+                .scrollbar(scrollbar)
+                .size(200.0, 80.0)
+                .child(col),
+            400,
+            200,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let sv = app.find_widget(Role::ScrollView, None).unwrap();
+        app.update_pointer_proximity(centre(&app, sv));
+        for _ in 0..2 {
+            assert!(app.dispatch_scroll(sv, 20.0));
+            app.frame();
+            assert_eq!(
+                schnellui::widgets::probes::decoration_faults(&app.widgets, &app.scene),
+                None,
+                "scrollbar {scrollbar}"
+            );
+        }
+    }
+}

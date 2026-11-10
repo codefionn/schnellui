@@ -104,24 +104,63 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             },
         ]
     });
-    // The chrome is the viewport's ordinary paint. A ring or other decoration
-    // stroked after it is not ours to clear or compare.
-    let end = scene
-        .paint(id)
-        .map_or(0, |paint| ordinary_primitive_end(runtime, id, paint));
-    let changed = match (scene.paint(id), desired.as_ref()) {
-        (None, None) => false,
-        (Some(_), None) => end > 0,
-        (Some(paint), Some(primitives)) => paint.primitives[..end] != *primitives,
-        (None, Some(_)) => true,
+    // The chrome is the viewport's ordinary paint. A wash laid under it and a
+    // ring or border stroked after it are decorations, not ours to clear or
+    // compare.
+    let (end, washes) = scene.paint(id).map_or((0, [usize::MAX; 3]), |paint| {
+        (
+            ordinary_primitive_end(runtime, id, paint),
+            decoration_washes(runtime, id),
+        )
+    });
+    let changed = match scene.paint(id) {
+        None => desired.is_some(),
+        Some(paint) => {
+            let mut current = paint.primitives[..end]
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| !washes.contains(at))
+                .map(|(_, primitive)| primitive);
+            match desired.as_ref() {
+                Some(primitives) => !current.eq(primitives.iter()),
+                None => current.next().is_some(),
+            }
+        }
     };
     if !changed {
         return true;
     }
     let paint = scene.paint_mut(id);
-    paint
-        .primitives
-        .splice(..end, desired.into_iter().flatten());
+    if washes.iter().all(|&at| at == usize::MAX) {
+        paint
+            .primitives
+            .splice(..end, desired.into_iter().flatten());
+    } else {
+        // Keep the washes at the front, in order, and the chrome after them.
+        let mut at = 0;
+        paint.primitives.retain(|_| {
+            at += 1;
+            at > end || washes.contains(&(at - 1))
+        });
+        let kept = paint.primitives.len() - (at - end);
+        paint
+            .primitives
+            .splice(kept..kept, desired.into_iter().flatten());
+        runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            let rt = &mut *rt;
+            for decoration in [&mut rt.ring, &mut rt.active, &mut rt.hover]
+                .into_iter()
+                .flatten()
+            {
+                if let Some((owner, position)) = decoration.background.as_mut() {
+                    if *owner == id {
+                        *position = washes.iter().filter(|&&other| other < *position).count();
+                    }
+                }
+            }
+        });
+    }
     scene.mark_dirty(id, DirtyFlags::PAINT);
     true
 }
