@@ -720,20 +720,16 @@ pub fn routes(component: &Component, mount: Mount, ops: &[Op]) -> Result<(), Str
                 continue;
             };
             match op {
-                // `click-at` answers 404 for a point with no widget under it
-                // and leaves the pointer there without clicking, so it cannot
-                // click the bare page. There it stands for the move alone.
+                // `click-at` is a move, a press and a release wherever the
+                // point is, the bare page included.
                 Op::Tap(x, y) if !direct.holding(PointerButton::Left) => {
                     let size = direct.app().size();
                     let p = Point {
                         x: size.width * x,
                         y: size.height * y,
                     };
-                    if debug.click_at(p) {
-                        direct.click_at(p);
-                    } else {
-                        direct.pointer_move(p);
-                    }
+                    debug.click_at(p);
+                    direct.click_at(p);
                 }
                 _ => {
                     apply(&mut direct, &op, mount.size, false);

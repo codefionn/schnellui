@@ -1222,26 +1222,28 @@ impl WindowedApp {
                 if let Err(error) = self.move_debug_pointer(&point) {
                     return DebugReply::error(422, error);
                 }
-                let logical = Point {
-                    x: point.x,
-                    y: point.y,
-                };
-                if schnellui::widgets::hit_test(
+                // The widget under the point, or null for the bare page. The
+                // click goes ahead either way: a click on the page is what
+                // blurs a field and closes a dropdown or menu.
+                let target = schnellui::widgets::hit_test(
                     &self.app.widgets.clone(),
                     self.app.scene(),
-                    logical,
+                    Point {
+                        x: point.x,
+                        y: point.y,
+                    },
                 )
-                .is_none()
-                {
-                    return DebugReply::error(404, "no widget at pointer coordinates");
-                };
+                .map_or(Value::Null, |id| widget_json(&self.app, id));
                 // A real click: the press and the release go through the
                 // window's own handlers, so a text field places its caret,
                 // a button clicks once and focus moves as for a mouse.
                 self.debug_mouse_button(winit::event::ElementState::Pressed, DebugButton::Left);
                 self.debug_mouse_button(winit::event::ElementState::Released, DebugButton::Left);
                 self.settle_debug_command();
-                self.debug_pointer_reply()
+                DebugReply::json(
+                    200,
+                    json!({ "changed": true, "target": target, "status": self.debug_status() }),
+                )
             }
             DebugCommand::Key(request) => self.handle_debug_key(request),
             DebugCommand::Quit => {

@@ -431,8 +431,7 @@ impl HeadlessHost {
 
     /// A left click at `p`: the debug `click-at` command, or a move, a press
     /// and a release. Does nothing while the left button is held. Returns
-    /// whether the click was delivered; `click-at` refuses a point with no
-    /// widget under it.
+    /// whether the click was delivered, which it is wherever the point is.
     pub fn click_at(&mut self, p: Point) -> bool {
         if self.held[PointerButton::Left as usize] {
             return false;

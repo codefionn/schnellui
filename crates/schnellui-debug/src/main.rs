@@ -96,7 +96,7 @@ enum Command {
     },
     /// Move the framework's logical pointer and update hover/cursor state.
     Move { x: f32, y: f32 },
-    /// Click the widget hit at logical coordinates.
+    /// Move to logical coordinates, press and release the left button, on the bare page too.
     ClickAt { x: f32, y: f32 },
     /// Press a pointer button, first moving to X Y when given.
     Press {

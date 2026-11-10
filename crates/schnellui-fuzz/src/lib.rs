@@ -34,9 +34,8 @@
 //!   through the debug server's pointer commands (`move`, `press`, `release`,
 //!   `click-at`, `drag`, `leave`), which is how `schnellui-debug` drives an
 //!   app started with `--headless-windowed`. Both hosts read, select and
-//!   paint the same after every step. One difference is allowed for:
-//!   `click-at` refuses a point with no widget under it, so it cannot click
-//!   the bare page.
+//!   paint the same after every step, `click-at` on the bare page
+//!   included.
 //! - Scrolling. Wheel (trackpad steps, notches, flings, bursts, at a point other
 //!   than the pointer), scrollbar thumb drags and track pages, page and arrow
 //!   keys, and AccessKit scroll actions are ops, in the ordinary and the pace

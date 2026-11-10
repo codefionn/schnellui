@@ -1940,6 +1940,60 @@ mod debug_pointer {
     }
 
     #[test]
+    fn click_at_an_empty_spot_blurs_the_focused_input() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::TextInput, None));
+        run(
+            &mut rig.host,
+            DebugCommand::PointerClick(DebugPoint { x, y }),
+        );
+        assert!(rig.host.app.focused_widget().is_some());
+        let status = run(
+            &mut rig.host,
+            DebugCommand::PointerClick(DebugPoint { x: 390.0, y: 490.0 }),
+        );
+        assert!(status["status"]["focused"].is_null(), "{status}");
+        assert!(status["target"].is_null(), "{status}");
+        assert_eq!(rig.host.app.focused_widget(), None);
+    }
+
+    #[test]
+    fn click_at_names_the_widget_it_hit() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Go")));
+        let status = run(
+            &mut rig.host,
+            DebugCommand::PointerClick(DebugPoint { x, y }),
+        );
+        assert_eq!(status["target"]["name"], "Go", "{status}");
+    }
+
+    #[test]
+    fn click_at_an_empty_spot_closes_an_open_dropdown() {
+        use crate::widgets::{Dropdown, DropdownOption};
+        let toggles = Rc::new(Cell::new(0));
+        let t = toggles.clone();
+        let mut app = App::mount_with_size(
+            Column::new().child(
+                Dropdown::new("Theme")
+                    .open(true)
+                    .on_toggle(move || t.set(t.get() + 1))
+                    .option(DropdownOption::new("Light").selected(true))
+                    .option(DropdownOption::new("Dark")),
+            ),
+            400,
+            500,
+        );
+        app.frame();
+        let mut host = windowed_host(app, None);
+        run(
+            &mut host,
+            DebugCommand::PointerClick(DebugPoint { x: 390.0, y: 490.0 }),
+        );
+        assert_eq!(toggles.get(), 1, "the click away dismissed the list");
+    }
+
+    #[test]
     fn a_press_and_release_in_one_frame_places_the_caret() {
         let mut rig = rig();
         let r = rect(&rig.host, Role::TextInput, None);

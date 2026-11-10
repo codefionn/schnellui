@@ -551,20 +551,19 @@ mod debug_route {
         );
     }
 
-    /// Known difference, which the `routes` property allows for: `click-at`
-    /// on the bare page answers 404 and does not click, so unlike a click by
-    /// hand it leaves focus where it was.
+    /// `click-at` on the bare page clicks as a click by hand does: it blurs
+    /// the focused control, on either route.
     #[test]
-    fn click_at_does_not_click_the_bare_page() {
+    fn click_at_clicks_the_bare_page() {
         let _serial = serial();
-        let mut host = mounted();
-        let add = centre(&host, Role::Button, Some("Add"));
-        assert!(host.click_at(add));
-        assert!(host.app().focused_widget().is_some());
-        assert!(!host.click_at(Point { x: 0.0, y: 0.0 }));
-        assert!(host.app().focused_widget().is_some(), "focus stayed");
-        host.set_route(PointerRoute::Handlers);
-        assert!(host.click_at(Point { x: 0.0, y: 0.0 }));
-        assert_eq!(host.app().focused_widget(), None, "a real click blurs");
+        for route in [PointerRoute::Debug, PointerRoute::Handlers] {
+            let mut host = mounted();
+            host.set_route(route);
+            let add = centre(&host, Role::Button, Some("Add"));
+            assert!(host.click_at(add));
+            assert!(host.app().focused_widget().is_some());
+            assert!(host.click_at(Point { x: 0.0, y: 0.0 }));
+            assert_eq!(host.app().focused_widget(), None, "a click away blurs");
+        }
     }
 }
