@@ -7,8 +7,10 @@
 //! as one `u64` (a flag, the bits of a float, or a hash of a text). When a
 //! counterpart in the replacement was authored with the same value, the app
 //! has not spoken and the previous tree's live value carries over. A different
-//! authored value means the app wrote something new, and it wins. A bound
-//! control always authors its live value, so it is never carried.
+//! authored value means the app wrote something new, and it wins. A control
+//! with a change handler is never carried: the app heard every edit, and a
+//! rebuild that authors the first value again (a draft cleared after submit)
+//! is the app speaking, not silence.
 
 use super::*;
 use std::hash::{Hash, Hasher};
@@ -63,8 +65,70 @@ fn live_bits(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<u64> {
     })
 }
 
-/// Whether the user changed `id` away from what the app authored.
+/// Whether `id` has the handler that reports its value to the app.
+fn has_change_handler(runtime: &Runtime, id: WidgetId, kind: WidgetKind) -> bool {
+    runtime.with(|rt| {
+        rt.borrow().handlers.get(id).is_some_and(|h| match kind {
+            WidgetKind::Checkbox | WidgetKind::Switch => h.toggle.is_some(),
+            WidgetKind::Slider => h.change.is_some(),
+            WidgetKind::TextInput | WidgetKind::TextArea => h.input.is_some(),
+            _ => h.click.is_some(),
+        })
+    })
+}
+
+/// The container a selectable belongs to: its tab bar, list, table or
+/// dropdown. A pick moves between siblings, so the whole group is either the
+/// app's or the user's.
+fn selection_group(scene: &Scene, id: WidgetId) -> Option<WidgetId> {
+    let mut at = scene.node(id)?.parent;
+    while let Some(node_id) = at {
+        let node = scene.node(node_id)?;
+        let is_group = matches!(
+            node.kind,
+            WidgetKind::TabBar | WidgetKind::List | WidgetKind::Table
+        ) || node.children.iter().any(|&c| {
+            scene
+                .node(c)
+                .is_some_and(|n| n.kind == WidgetKind::Dropdown)
+        });
+        if is_group {
+            return Some(node_id);
+        }
+        at = node.parent;
+    }
+    None
+}
+
+/// Whether the app hears about changes to `id`. A control with a change
+/// handler (on_toggle, on_change, on_input, on_select) is the app's: the app
+/// was told every edit and decides what the next build shows, even when that
+/// is the value it first authored (a draft cleared after submit). A
+/// selectable counts as the app's when any pick in its group is reported.
+fn reported_to_app(runtime: &Runtime, scene: &Scene, id: WidgetId) -> bool {
+    let Some(kind) = scene.node(id).map(|n| n.kind) else {
+        return false;
+    };
+    let item_kind = match kind {
+        WidgetKind::Tab | WidgetKind::ListItem | WidgetKind::TableRow => kind,
+        WidgetKind::DropdownOption | WidgetKind::Dropdown => WidgetKind::DropdownOption,
+        _ => return has_change_handler(runtime, id, kind),
+    };
+    let Some(group) = selection_group(scene, id) else {
+        return has_change_handler(runtime, id, kind);
+    };
+    scene.subtree_nodes(group).into_iter().any(|item| {
+        scene.node(item).is_some_and(|n| n.kind == item_kind)
+            && has_change_handler(runtime, item, item_kind)
+    })
+}
+
+/// Whether the user changed `id` away from what the app authored, on a
+/// control whose value the app does not hear about.
 pub fn control_changed_by_user(runtime: &Runtime, scene: &Scene, id: WidgetId) -> bool {
+    if reported_to_app(runtime, scene, id) {
+        return false;
+    }
     let authored = runtime.with(|rt| rt.borrow().authored.get(id).copied());
     match (authored, live_bits(runtime, scene, id)) {
         (Some(authored), Some(live)) => authored != live,

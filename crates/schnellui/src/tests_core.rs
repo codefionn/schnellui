@@ -2598,15 +2598,12 @@ mod uncontrolled_state_across_rebuilds {
     #[test]
     fn a_rebuild_keeps_an_unbound_selection() {
         use schnellui::widgets::{Dropdown, DropdownOption, List, ListItem, Tab, TabBar, Table};
-        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-        let c = calls.clone();
         let mut app = App::mount_themed(theme::LIGHT, move || {
-            let c = c.clone();
             Column::new()
                 .child(
                     TabBar::new()
                         .child(Tab::new("One").selected(true))
-                        .child(Tab::new("Two").on_select(move || c.set(c.get() + 1))),
+                        .child(Tab::new("Two")),
                 )
                 .child(
                     List::new()
@@ -2638,10 +2635,8 @@ mod uncontrolled_state_across_rebuilds {
             assert!(app.dispatch_click(id), "{name}");
         }
         app.frame();
-        assert_eq!(calls.get(), 1);
         assert!(app.set_theme(theme::DARK));
         app.frame();
-        assert_eq!(calls.get(), 1, "carrying a pick does not run on_select");
         assert!(selected(&app, Role::Tab, "Two"));
         assert!(!selected(&app, Role::Tab, "One"));
         assert!(selected(&app, Role::ListItem, "Archive"));
@@ -2657,10 +2652,71 @@ mod uncontrolled_state_across_rebuilds {
         );
     }
 
-    /// Carrying a value is silent, and a control the app bound to a signal
-    /// keeps whatever the app wrote.
+    /// Sequence (todo): type a title into a field bound through on_input,
+    /// tick a bound checkbox and pick a bound tab, then the app clears the
+    /// draft and resets both, back to the values the tree was first built
+    /// with, and remounts. The field still showed the typed title, because
+    /// the rebuild authored the same values as the first build and the
+    /// user's edits were carried over the app's reset.
     #[test]
-    fn carrying_a_value_fires_no_handler_and_a_bound_control_keeps_its_signal() {
+    fn a_bound_control_the_app_resets_shows_the_reset() {
+        use schnellui::widgets::{Tab, TabBar};
+        let draft = create_signal(String::new());
+        let done = create_signal(false);
+        let tab = create_signal(0_u8);
+        let mut app = App::mount_themed(theme::LIGHT, move || {
+            Column::new()
+                .child(
+                    TextInput::new(draft.get())
+                        .label("Title")
+                        .on_input(move |v| draft.set(v.to_string())),
+                )
+                .child(
+                    Checkbox::new(done.get())
+                        .name("Done")
+                        .on_toggle(move |v| done.set(v)),
+                )
+                .child(
+                    TabBar::new()
+                        .child(Tab::new("One").selected(tab.get() == 0))
+                        .child(
+                            Tab::new("Two")
+                                .selected(tab.get() == 1)
+                                .on_select(move || tab.set(1)),
+                        ),
+                )
+        });
+        app.frame();
+        let input = app.find_widget(Role::TextInput, None).unwrap();
+        app.focus(Some(input));
+        for ch in ["m", "i", "l", "k"] {
+            assert!(app.dispatch_key(UiKey::Char(ch)));
+        }
+        let done_box = app.find_widget(Role::CheckBox, Some("Done")).unwrap();
+        assert!(app.dispatch_click(done_box));
+        let two = app.find_widget(Role::Tab, Some("Two")).unwrap();
+        assert!(app.dispatch_click(two));
+        app.frame();
+        assert_eq!(draft.get(), "milk");
+        assert!(done.get());
+        assert_eq!(tab.get(), 1);
+
+        draft.set(String::new());
+        done.set(false);
+        tab.set(0);
+        assert!(app.set_theme(theme::DARK));
+        app.frame();
+        assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some(""));
+        assert_eq!(a11y(&app, Role::CheckBox).1 & 1, 0, "the app unticked it");
+        assert!(selected(&app, Role::Tab, "One"));
+        assert!(!selected(&app, Role::Tab, "Two"));
+    }
+
+    /// A control with a change handler is the app's, even when the handler
+    /// only watches: the rebuild shows what the app authored, and nothing
+    /// fires while rebuilding. A control the app bound shows the signal.
+    #[test]
+    fn a_control_with_a_change_handler_shows_what_the_app_authored() {
         let fired = std::rc::Rc::new(std::cell::Cell::new(0));
         let bound = create_signal(false);
         let f = fired.clone();
@@ -2669,7 +2725,7 @@ mod uncontrolled_state_across_rebuilds {
             Column::new()
                 .child(
                     Checkbox::new(false)
-                        .name("Free")
+                        .name("Watched")
                         .on_toggle(move |_| a.set(a.get() + 1)),
                 )
                 .child(
@@ -2689,7 +2745,7 @@ mod uncontrolled_state_across_rebuilds {
                 )
         });
         app.frame();
-        for name in ["Free", "Bound"] {
+        for name in ["Watched", "Bound"] {
             let id = app.find_widget(Role::CheckBox, Some(name)).unwrap();
             assert!(app.dispatch_click(id));
         }
@@ -2707,15 +2763,15 @@ mod uncontrolled_state_across_rebuilds {
         assert!(bound.get());
         assert!(app.set_theme(theme::DARK));
         app.frame();
-        assert_eq!(fired.get(), before, "no handler runs while carrying");
+        assert_eq!(fired.get(), before, "no handler runs while rebuilding");
         let checked = |app: &App, name| {
             let id = app.find_widget(Role::CheckBox, Some(name)).unwrap();
             app.scene().a11y(id).unwrap().state & 1 == 1
         };
-        assert!(checked(&app, "Free"));
+        assert!(!checked(&app, "Watched"), "what the app authored");
         assert!(checked(&app, "Bound"), "the signal the app wrote");
-        assert_eq!(a11y(&app, Role::Slider).0.as_deref(), Some("1"));
-        assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some("x"));
+        assert_eq!(a11y(&app, Role::Slider).0.as_deref(), Some("0"));
+        assert_eq!(a11y(&app, Role::TextInput).0.as_deref(), Some(""));
     }
 }
 
