@@ -518,3 +518,61 @@ fn a_focused_scroll_view_keeps_its_ring_while_the_keyboard_scrolls_it() {
         }
     }
 }
+
+/// Whether the keyboard ring of `id` lies wholly inside the horizontal extent
+/// the control may paint in (every enclosing viewport's clip).
+fn ring_inside_clip_sides(app: &App, id: WidgetId) -> Result<(), String> {
+    let ring = ring_rect(app, id).ok_or("no ring")?;
+    let (offset, clip) = app.scene().composite_context(id);
+    let (left, right) = (ring.x + offset.x, ring.right() + offset.x);
+    if left < clip.x - 0.01 || right > clip.right() + 0.01 {
+        return Err(format!(
+            "ring {left}..{right} cut by clip {}..{}",
+            clip.x,
+            clip.right()
+        ));
+    }
+    Ok(())
+}
+
+/// A control flush with the side of a viewport has no room outside its box
+/// for the ring to stand in, and scrolling cannot make any. The ring steps in
+/// at that side rather than being cut off.
+#[test]
+fn a_control_flush_with_the_viewport_side_shows_its_whole_ring() {
+    use schnellui::widgets::Checkbox;
+    let panel = || {
+        Column::new()
+            .width(200.0)
+            .gap(8.0)
+            .child(Button::new("Flush").width(200.0))
+            .child(Checkbox::new(false))
+    };
+    let mut app = App::mount_with_size(Scroll::new().size(200.0, 120.0).child(panel()), 400, 300);
+    app.frame();
+    for _ in 0..2 {
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        let id = app.focused_widget().unwrap();
+        ring_inside_clip_sides(&app, id).unwrap();
+    }
+    // Nested viewports: the narrower one bounds the ring.
+    let mut app = App::mount_with_size(
+        Scroll::new().size(300.0, 200.0).child(
+            Column::new()
+                .width(300.0)
+                .child(Scroll::new().size(150.0, 100.0).child(panel_flush(150.0))),
+        ),
+        400,
+        300,
+    );
+    app.frame();
+    assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+    let id = app.focused_widget().unwrap();
+    ring_inside_clip_sides(&app, id).unwrap();
+}
+
+fn panel_flush(width: f32) -> Column {
+    Column::new()
+        .width(width)
+        .child(Button::new("Flush").width(width))
+}

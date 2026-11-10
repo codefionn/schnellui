@@ -249,6 +249,33 @@ fn surface_radius(runtime: &Runtime, scene: &Scene, owner: WidgetId) -> f32 {
     best.1
 }
 
+/// The ring `rect` grown by `-inset` (outset), with its left and right edges
+/// held inside the clip that `id` paints under. Only those two sides: a
+/// viewport scrolls vertically, so the reveal makes the room above and below,
+/// where the horizontal clip is fixed. Returns the rect, radius and inset for
+/// [`push_ring_stroke`]; unchanged when the ring fits.
+fn clamp_ring_to_clip_sides(
+    scene: &Scene,
+    id: WidgetId,
+    rect: Rect,
+    radius: f32,
+    inset: f32,
+) -> (Rect, f32, f32) {
+    let (offset, clip) = scene.composite_context(id);
+    let (min_x, max_x) = (clip.x - offset.x, clip.right() - offset.x);
+    let (left, right) = (rect.x + inset, rect.right() - inset);
+    if left >= min_x && right <= max_x {
+        return (rect, radius, inset);
+    }
+    let grown = Rect::new(
+        left.max(min_x),
+        rect.y + inset,
+        (right.min(max_x) - left.max(min_x)).max(0.0),
+        rect.height - 2.0 * inset,
+    );
+    (grown, radius - inset, 0.0)
+}
+
 /// Strips a previously-appended focus ring — the trailing [`FOCUS_RING_PRIMS`]
 /// primitives, verified against the exact outer/inner pattern so nothing else
 /// (a link's underline, a caret) is ever eaten. Returns `true` if a ring was
@@ -1039,6 +1066,14 @@ fn apply_interaction_style(
                 .radius(NAV_RING_RADIUS, rect.height)
         } else {
             radius
+        };
+        // An outset ring of a control flush with the side of a viewport (or a
+        // window frame) has no room there, and no scroll can make any: the
+        // clip would cut it off. That side steps in to the clip's edge.
+        let (rect, radius, inset) = if inset < 0.0 {
+            clamp_ring_to_clip_sides(scene, id, rect, radius, inset)
+        } else {
+            (rect, radius, inset)
         };
         push_ring_stroke(
             scene.paint_mut(owner),

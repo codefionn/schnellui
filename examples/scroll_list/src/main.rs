@@ -26,6 +26,8 @@ fn stage(content: impl View) -> impl View {
 /// How many labeled rows the scroll content holds (taller than the viewport, so it
 /// scrolls). Build-time allocation of the row strings is fine (SOUL §4 — mount).
 const ROWS: usize = 25;
+/// Room between the viewport edge and the rows, for the focus ring.
+const ROW_INSET: f32 = 6.0;
 /// The scroll viewport box width (logical px).
 const VIEWPORT_W: f32 = 320.0;
 /// The scroll viewport box height (logical px). Content taller than this scrolls.
@@ -127,7 +129,9 @@ fn scroll_list_view() -> impl View {
     Scroll::new()
         .label("Rows")
         .size(VIEWPORT_W, VIEWPORT_H)
-        .child(col)
+        // The viewport's keyboard ring runs along its edge, over whatever the
+        // content puts there: the rows keep clear of it.
+        .child(Pad::all(ROW_INSET).child(col))
 }
 
 /// Builds the app for a scenario in its target state (SOUL §7.5). `Top` is
