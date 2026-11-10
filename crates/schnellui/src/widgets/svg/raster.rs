@@ -329,7 +329,9 @@ fn raster_text(
     let mut pen = 0.0f32;
     for g in &shaped.glyphs {
         let key = shaper.glyph_key_in(g.font, g.glyph_id, phys as u32);
-        let rg = shaper.rasterize_glyph(key, scratch);
+        // The scratch atlas dies with this raster, so its rects must not
+        // enter the shaper's cache, which the app's own atlas also reads.
+        let rg = shaper.rasterize_glyph_uncached(key, scratch);
         if !rg.rect.is_empty() {
             let gx = (x0 + pen + g.x_offset + rg.left as f32).round() as i64;
             // y is the baseline (per SVG); the bitmap top sits `rg.top` above it

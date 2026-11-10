@@ -656,7 +656,31 @@ impl TextShaper {
         if let Some(g) = self.glyph_cache.get(&key) {
             return *g;
         }
+        let (g, placed) = self.raster_glyph_into(key, atlas);
+        // An atlas at its cap reports the placement but caches nothing, so
+        // the glyph is not lost for good.
+        if placed {
+            self.rasterized += 1;
+            self.glyph_cache.insert(key, g);
+        }
+        g
+    }
 
+    /// Rasterizes one glyph into `atlas` without reading or filling the glyph
+    /// cache. For a throwaway atlas, such as an SVG raster's scratch atlas:
+    /// a cached rect would point into it after it is gone, and the next
+    /// lookup, from the app's own atlas, would read someone else's texels.
+    pub fn rasterize_glyph_uncached(
+        &mut self,
+        key: GlyphKey,
+        atlas: &mut GlyphAtlas,
+    ) -> RasterGlyph {
+        self.raster_glyph_into(key, atlas).0
+    }
+
+    /// The glyph rasterized into `atlas`, and whether it found a place there
+    /// (false when the atlas is full and cannot grow).
+    fn raster_glyph_into(&mut self, key: GlyphKey, atlas: &mut GlyphAtlas) -> (RasterGlyph, bool) {
         // The key's FontId selects the embedded face's bytes (index 0 — each
         // Liberation face is a single-font file). If a face ever fails to parse
         // we cache an empty glyph so we don't retry every frame.
@@ -665,9 +689,7 @@ impl TextShaper {
             .get(key.font.0 as usize)
             .unwrap_or(&self.font_resources[EMBEDDED_FONT_ID.0 as usize]);
         let Some(font) = FontRef::from_index(resource.data.data(), resource.index as usize) else {
-            let g = RasterGlyph::default();
-            self.glyph_cache.insert(key, g);
-            return g;
+            return (RasterGlyph::default(), true);
         };
 
         let img = &mut self.scratch_image;
@@ -694,15 +716,16 @@ impl TextShaper {
                 slot = atlas.allocate(w, h);
             }
             let Some(rect) = slot else {
-                // Atlas at its cap: report the placement but cache nothing, so
-                // the glyph is not lost for good.
-                return RasterGlyph {
-                    rect: AtlasRect::default(),
-                    left: img.placement.left,
-                    top: img.placement.top,
-                    width: w,
-                    height: h,
-                };
+                return (
+                    RasterGlyph {
+                        rect: AtlasRect::default(),
+                        left: img.placement.left,
+                        top: img.placement.top,
+                        width: w,
+                        height: h,
+                    },
+                    false,
+                );
             };
             atlas.write_coverage(rect, &img.data);
             RasterGlyph {
@@ -722,10 +745,7 @@ impl TextShaper {
                 height: 0,
             }
         };
-
-        self.rasterized += 1;
-        self.glyph_cache.insert(key, g);
-        g
+        (g, true)
     }
 
     /// A new shaper sharing the font setup with a copy of this one's glyph

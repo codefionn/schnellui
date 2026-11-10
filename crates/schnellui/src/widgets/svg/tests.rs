@@ -402,6 +402,47 @@ mod tests {
     // --- text through the shaper ---
 
     #[test]
+    fn svg_text_draws_again_with_a_shaper_that_already_drew_it() {
+        // Sequence: the playground Images page mounts, its SVG text "42k"
+        // rasterizes, then the page mounts again (a remount, a tab switch).
+        // The second raster lost the text: the shaper's glyph cache pointed
+        // at a scratch atlas that no longer existed.
+        let doc = parse_svg(
+            r#"<svg viewBox="0 0 64 24">
+                 <text x="32" y="16" font-size="14" text-anchor="middle" fill="black">Hi</text>
+               </svg>"#,
+        )
+        .unwrap();
+        let mut shaper = TextShaper::new();
+        let first = rasterize_svg_with_text(&doc, 64, 24, &mut shaper);
+        let second = rasterize_svg_with_text(&doc, 64, 24, &mut shaper);
+        assert!(
+            first.chunks_exact(4).any(|p| p[3] > 0),
+            "first raster has ink"
+        );
+        assert!(first == second, "the second raster draws the same text");
+
+        // The app shares its shaper with the synchronous SVG path, so an SVG
+        // raster must not leave the shaper's cache pointing into a scratch
+        // atlas: the app's own atlas still gets the glyph's coverage.
+        let shaped = shaper.shape("Hi", 14.0, None);
+        let g = shaped.glyphs[0];
+        let key = shaper.glyph_key_in(g.font, g.glyph_id, 14);
+        let mut atlas = crate::text::GlyphAtlas::new(256, 256);
+        let rg = shaper.rasterize_glyph(key, &mut atlas);
+        assert!(!rg.rect.is_empty());
+        let stride = atlas.width() as usize;
+        let ink: u32 = (0..rg.rect.height as usize)
+            .flat_map(|row| {
+                let start = (rg.rect.y as usize + row) * stride + rg.rect.x as usize;
+                atlas.pixels()[start..start + rg.rect.width as usize].to_vec()
+            })
+            .map(u32::from)
+            .sum();
+        assert!(ink > 0, "the app atlas holds the glyph's coverage");
+    }
+
+    #[test]
     fn text_rasterizes_through_the_shaper_and_respects_anchor() {
         let runtime_handle = crate::widgets::Runtime::new();
         #[allow(unused_variables)]
