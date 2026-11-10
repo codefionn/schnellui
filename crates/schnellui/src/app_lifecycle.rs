@@ -284,12 +284,22 @@ impl App {
                         a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
                     })
                 });
+            // Focus lost with the branch, and the branch opened a window:
+            // it goes into the window, as dialog.show() does, before any
+            // neighbour. The same control, or the opener a closed window
+            // returns to, still comes first.
             let (heir, ring) = match (same_identity, opener) {
                 (Some(id), _) => (Some(id), ring),
                 (None, Some((id, opener_ring))) => (Some(id), opener_ring),
-                (None, None) => (neighbour.filter(|id| self.scene.node(*id).is_some()), ring),
+                (None, None) => (
+                    self.first_control_of_new_window(&known)
+                        .or_else(|| neighbour.filter(|id| self.scene.node(*id).is_some())),
+                    ring,
+                ),
             };
-            let heir = heir.filter(|heir| app_inherit::takes_focus(&self.scene, *heir));
+            let heir = heir
+                .filter(|heir| app_inherit::takes_focus(&self.scene, *heir))
+                .or_else(|| self.first_control_of_new_window(&known));
             let blocked = heir.is_none_or(|heir| {
                 schnellui::widgets::active_modal_panel(&self.scene).is_some_and(|panel| {
                     !schnellui::widgets::is_in_subtree(&self.scene, heir, panel)

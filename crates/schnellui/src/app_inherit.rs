@@ -183,6 +183,23 @@ impl App {
             })
         });
 
+        // The rebuild took focus from its control and opened a window in the
+        // same breath: focus goes into the window, as dialog.show() does, with
+        // the ring as it was. The opener is recorded below, so closing the
+        // window returns focus to it.
+        let known: Vec<_> = previous_panels
+            .iter()
+            .filter_map(|panel| counterparts.get(*panel))
+            .collect();
+        let restored = restored.or_else(|| {
+            let (_, ring_visible) = previous_focus?;
+            let target = self.first_control_of_new_window(&known)?;
+            Some(RemountFocus {
+                target,
+                ring_visible,
+            })
+        });
+
         // The focused control did not survive. Rather than strand a keyboard
         // user at the top of the page, hand focus to the nearest control of
         // the old tab order that did: the next one first, then the previous.
@@ -210,10 +227,6 @@ impl App {
         // counterpart of the previous focus.
         let focus_before =
             previous_focus.and_then(|(id, ring)| Some((counterparts.get(id)?, ring)));
-        let known: Vec<_> = previous_panels
-            .iter()
-            .filter_map(|panel| counterparts.get(*panel))
-            .collect();
         self.note_opened_modal(focus_before, &known);
 
         if let Some(focus) = restored {

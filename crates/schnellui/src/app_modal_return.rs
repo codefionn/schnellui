@@ -12,6 +12,35 @@ impl App {
             .map(|entry| (entry.opener, entry.ring_visible))
     }
 
+    /// The control a dialog or window that is new in this rebuild (not among
+    /// the `known` panels) takes focus at: its first control, content before
+    /// the title bar's close button as at mount. HTML `dialog.show()` runs the
+    /// dialog focusing steps, so focus that a rebuild took from its control
+    /// (removed or disabled) goes there, not to the control's neighbour.
+    pub(crate) fn first_control_of_new_window(&self, known: &[WidgetId]) -> Option<WidgetId> {
+        let panels = schnellui::widgets::dialog_panels(&self.widgets);
+        schnellui::a11y::with_tab_order(&self.scene, |order| {
+            panels
+                .iter()
+                .filter(|panel| !known.contains(panel))
+                .find_map(|&panel| {
+                    let mut inside = order.iter().copied().filter(|&id| {
+                        schnellui::widgets::is_in_subtree(&self.scene, id, panel)
+                            && crate::app_inherit::takes_focus(&self.scene, id)
+                    });
+                    let first = inside.next()?;
+                    let content = std::iter::once(first).chain(inside).find(|&id| {
+                        !schnellui::widgets::is_dialog_chrome_control(
+                            &self.widgets,
+                            &self.scene,
+                            id,
+                        )
+                    });
+                    Some(content.unwrap_or(first))
+                })
+        })
+    }
+
     /// Drops dialogs that left the tree, then records every dialog that is
     /// new, modal or modeless, with `focus_before` as its opener: the control
     /// that held focus when it appeared. `known` lists the panels that were

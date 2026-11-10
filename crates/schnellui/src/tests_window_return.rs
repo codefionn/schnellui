@@ -172,3 +172,86 @@ fn replacing_a_subtree_that_holds_a_window_returns_to_the_opener() {
     assert_eq!(focused_name(&app).as_deref(), Some("Open A"));
     assert!(app.focus_ring_shown());
 }
+
+/// Like [`view`], but the launcher stays enabled while its window is open.
+fn view_enabled(open: bool) -> Column {
+    let mut col = Column::new()
+        .child(Button::new("Open A"))
+        .child(Button::new("Elsewhere"));
+    if open {
+        col = col.child(
+            Dialog::new("Window A")
+                .modeless()
+                .non_fixed()
+                .child(Button::new("Assign")),
+        );
+    }
+    col
+}
+
+#[test]
+fn a_window_opened_with_the_keyboard_takes_focus_from_its_disabled_opener() {
+    for ring in [true, false] {
+        let mut base = mounted(0);
+        let opener = button(&base, "Open A");
+        if ring {
+            assert!(base.focus(Some(opener)));
+        } else {
+            assert!(base.pointer_focus(Some(opener)));
+        }
+        let open = remount(&base, A);
+        // Not the neighbour "Open B": the window's first control.
+        assert_eq!(
+            focused_name(&open).as_deref(),
+            Some("Assign"),
+            "ring={ring}"
+        );
+        assert_eq!(open.focus_ring_shown(), ring);
+        // Closing it still returns to the opener.
+        let closed = remount(&open, 0);
+        assert_eq!(
+            focused_name(&closed).as_deref(),
+            Some("Open A"),
+            "ring={ring}"
+        );
+        assert_eq!(closed.focus_ring_shown(), ring);
+    }
+}
+
+#[test]
+fn a_window_opened_beside_an_opener_that_keeps_focus_does_not_steal_it() {
+    let mut base = App::mount_with_size(view_enabled(false), 900, 700);
+    base.frame();
+    let opener = button(&base, "Open A");
+    assert!(base.focus(Some(opener)));
+    let mut open = App::mount_with_size(view_enabled(true), 900, 700);
+    open.inherit_remount_state(&base);
+    open.frame();
+    assert_eq!(focused_name(&open).as_deref(), Some("Open A"));
+    assert!(open.focus_ring_shown());
+}
+
+#[test]
+fn replacing_a_subtree_that_opens_a_window_over_a_removed_opener_focuses_the_window() {
+    let slot = schnellui::widgets::ComponentRef::new();
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("Elsewhere"))
+            .child(Column::new().with_ref(slot).child(Button::new("Open A"))),
+        900,
+        700,
+    );
+    app.frame();
+    let opener = button(&app, "Open A");
+    assert!(app.focus(Some(opener)));
+    let window = Column::new().child(
+        Dialog::new("Window A")
+            .modeless()
+            .non_fixed()
+            .child(Button::new("Assign")),
+    );
+    app.replace_subtree(slot, window).unwrap();
+    app.frame();
+    assert_eq!(focused_name(&app).as_deref(), Some("Assign"));
+    assert!(app.focus_ring_shown());
+}
