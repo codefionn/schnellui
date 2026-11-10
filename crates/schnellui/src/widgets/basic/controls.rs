@@ -242,6 +242,7 @@ pub struct Radio {
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_select: Option<Box<dyn FnMut() + 'static>>,
     pub(crate) arrows_select: bool,
+    pub(crate) row_height: Option<f32>,
 }
 
 impl Radio {
@@ -252,7 +253,17 @@ impl Radio {
             name: None,
             on_select: None,
             arrows_select: true,
+            row_height: None,
         }
+    }
+    /// Makes the radio fill the width it is given and at least `height` tall, while the
+    /// mark stays its size at the start. The whole box is the pointer target and the one
+    /// focus stop, so a radio laid over its own label row selects when the label is
+    /// clicked. Put the label under the radio, in a `Stack`, which needs a size of its own
+    /// (its children overlay and do not size it) and a stretching column for the radios.
+    pub fn row(mut self, height: f32) -> Radio {
+        self.row_height = Some(height);
+        self
     }
     /// Whether arrow keys select the radio they move to (the default, the browser
     /// radio-group contract). With `false` the arrows only move focus and Space or a
@@ -300,8 +311,21 @@ impl View for Radio {
         crate::widgets::note_authored(&ctx.runtime, id, u64::from(this.selected));
         emit_radio_paint(&ctx.runtime, ctx.scene, id, this.selected);
         let intrinsic = radio_intrinsic(&ctx.runtime, id);
-        ctx.layout
-            .set_measure(id, Box::new(move |_avail| intrinsic));
+        let row = this.row_height;
+        ctx.layout.set_measure(
+            id,
+            Box::new(move |avail| match row {
+                Some(height) => Size {
+                    width: if avail.width.is_finite() {
+                        avail.width.max(intrinsic.width)
+                    } else {
+                        intrinsic.width
+                    },
+                    height: height.max(intrinsic.height),
+                },
+                None => intrinsic,
+            }),
+        );
         // The selection handler is stored as the node's `click` handler — the same key
         // the ActionRequest router resolves, so pointer + a11y `Click` converge (§6.3).
         if let Some(f) = this.on_select {

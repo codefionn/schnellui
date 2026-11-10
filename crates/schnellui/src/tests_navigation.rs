@@ -1038,6 +1038,50 @@ fn radio_arrows_move_and_select_within_the_group() {
     assert!(checked(&app, radios[2]));
 }
 
+/// A `Radio::row` radio fills its row: a click anywhere on it, over a label laid
+/// under it, selects, and it is still the one focus stop with a round mark.
+#[test]
+fn a_radio_row_selects_when_the_label_under_it_is_clicked() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Align, Column, Radio, Stack, Text};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let picked = Rc::new(Cell::new(0));
+    let hit = picked.clone();
+    let view = Stack::new()
+        .min_width(300.0)
+        .min_height(30.0)
+        .child(Text::new("A long label that sits under the radio"))
+        .child(
+            Column::new().align(Align::Stretch).child(
+                Radio::new(false)
+                    .name("Pick")
+                    .row(30.0)
+                    .on_select(move || hit.set(hit.get() + 1)),
+            ),
+        );
+    let mut app = App::mount_with_size(view, 400, 300);
+    app.frame();
+    let radio = app.find_widget(Role::Radio, Some("Pick")).unwrap();
+    let rect = app.scene().layout(radio).unwrap().rect;
+    assert!(rect.width > 100.0 && rect.height >= 30.0, "{rect:?}");
+    // The far end of the row, where only the label is painted.
+    let over_label = Point {
+        x: rect.x + rect.width - 20.0,
+        y: rect.y + rect.height * 0.5,
+    };
+    assert_eq!(app.hit_test(over_label), Some(radio));
+    assert!(app.dispatch_click(radio));
+    assert_eq!(picked.get(), 1);
+    // The mark is still a circle at the start of the row.
+    for p in &app.scene().paint(radio).unwrap().primitives {
+        if let Primitive::SolidRect { rect: r, .. } = p {
+            assert!(r.width <= 18.0 && r.x >= rect.x, "{r:?}");
+        }
+    }
+}
+
 /// Arrows walk a grouped tab list's rows across groups and depths; they move
 /// focus only, as in a tab bar. Left and Right fold and unfold branches.
 #[test]
@@ -1579,6 +1623,64 @@ fn a_tab_shows_its_tooltip_on_hover() {
     });
     app.frame();
     assert!(above(&app) > before, "hovering the tab paints its tooltip");
+}
+
+/// `Tab::tooltip_when` shows the tooltip only while the window matches the query, and
+/// follows a resize.
+#[test]
+fn a_tab_tooltip_shows_only_while_the_window_matches_its_query() {
+    use schnellui::scene::{Point, Primitive};
+    use schnellui::widgets::{Column, Panel, ResponsiveQuery, Tab, TabBar};
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Panel::new().width(10.0).height(60.0))
+            .child(
+                TabBar::new().child(
+                    Tab::new("Audio")
+                        .display("")
+                        .tooltip("Audio")
+                        .tooltip_when(ResponsiveQuery::viewport().max_width(300.0))
+                        .selected(true),
+                ),
+            ),
+        400,
+        200,
+    );
+    app.frame();
+    let id = app.find_widget(Role::Tab, Some("Audio")).unwrap();
+    let r = app.scene().layout(id).unwrap().rect;
+    let at = Point {
+        x: r.x + r.width * 0.5,
+        y: r.y + r.height * 0.5,
+    };
+    let painted = |app: &App| {
+        app.scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter(|p| {
+                matches!(p, Primitive::SolidRect { rect, color, .. }
+                if color.a > 0 && rect.bottom() <= r.y)
+            })
+            .count()
+    };
+    let before = painted(&app);
+    // 400 wide: the query wants at most 300, so no tooltip.
+    app.update_pointer_proximity(at);
+    app.frame();
+    assert_eq!(painted(&app), before, "a wide window shows no tooltip");
+    // Narrower: the tooltip comes.
+    app.resize(280.0, 200.0);
+    app.frame();
+    let r = app.scene().layout(id).unwrap().rect;
+    let before = painted(&app);
+    app.update_pointer_proximity(Point {
+        x: r.x + r.width * 0.5,
+        y: r.y + r.height * 0.5,
+    });
+    app.frame();
+    assert!(painted(&app) > before, "a narrow window shows it");
 }
 
 /// A tab bar at the top of the window has no room above it, so the tooltip

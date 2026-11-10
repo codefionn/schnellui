@@ -1674,11 +1674,19 @@ pub fn update_pointer_proximity_held(
                 continue;
             };
             let own_menu_open = crate::widgets::context_menu::context_menu_open_for(runtime, id);
+            let allowed = match (registry.tooltip_when.get(id), registry.window) {
+                (Some(query), Some(window)) => query.matches(window),
+                _ => true,
+            };
             changed |= show_tooltip(
                 scene,
                 id,
                 tooltip,
-                !held && !own_menu_open && rect.contains(point) && uncovered(scene, id, hit),
+                allowed
+                    && !held
+                    && !own_menu_open
+                    && rect.contains(point)
+                    && uncovered(scene, id, hit),
             );
         }
         changed

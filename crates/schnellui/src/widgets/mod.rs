@@ -724,6 +724,17 @@ pub(crate) fn register_hover_tooltip(
     });
 }
 
+/// Limits the hover tooltip of `id` to the times the window size satisfies `query`.
+/// Only a viewport query counts: another target leaves the tooltip as it is.
+pub(crate) fn set_tooltip_when(runtime: &Runtime, id: WidgetId, query: ResponsiveQuery) {
+    if query.target != ResponsiveTarget::Viewport {
+        return;
+    }
+    runtime.with(|registry| {
+        registry.borrow_mut().tooltip_when.insert(id, query);
+    });
+}
+
 /// Paints a control that carries a hover tooltip as an overlay. Its tooltip
 /// extends beyond the control's layout box and must remain visible when the
 /// control sits at a panel edge (e.g. the settings sidebar's trailing edge
@@ -1336,6 +1347,8 @@ struct WidgetRuntime {
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
     tooltip_ids: Vec<WidgetId>,
+    /// A tooltip that shows only while the window matches its query (see `Tab::tooltip_when`).
+    tooltip_when: SecondaryMap<WidgetId, ResponsiveQuery>,
     /// The host window's logical size, which bounds tooltip placement: a root
     /// laid out wider or taller than the window must not carry tooltips off it.
     /// Host configuration, so [`reset`] keeps it.
@@ -1501,6 +1514,7 @@ pub fn reset(runtime: &Runtime) {
         rt.proximity_ids.clear();
         rt.hover_tooltips.clear();
         rt.tooltip_ids.clear();
+        rt.tooltip_when.clear();
         rt.ring = None;
         rt.hover = None;
         rt.active = None;
@@ -1588,6 +1602,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.spinners.remove(id);
             rt.proximity_reveals.remove(id);
             rt.hover_tooltips.remove(id);
+            rt.tooltip_when.remove(id);
             rt.text_layouts.remove(id);
             rt.edits.remove(id);
             rt.comboboxes.remove(id);

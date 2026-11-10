@@ -1,5 +1,6 @@
 use super::dropdown::write_selectable_semantics;
 use super::*;
+use crate::widgets::ResponsiveQuery;
 
 pub struct TabBar {
     pub(crate) children: Vec<AnyView>,
@@ -144,6 +145,8 @@ pub struct Tab {
     pub(crate) display: Option<Cow<'static, str>>,
     /// Shown while the pointer hovers the tab.
     pub(crate) tooltip: Option<Cow<'static, str>>,
+    /// The tooltip shows only while the window matches this.
+    pub(crate) tooltip_when: Option<ResponsiveQuery>,
     pub(crate) selected: bool,
     pub(crate) width: Option<f32>,
     pub(crate) appearance: TabAppearance,
@@ -164,6 +167,7 @@ impl Tab {
             label: label.into(),
             display: None,
             tooltip: None,
+            tooltip_when: None,
             selected: false,
             width: None,
             appearance: TabAppearance::Classic,
@@ -190,6 +194,13 @@ impl Tab {
     /// an icon only.
     pub fn tooltip(mut self, label: impl Into<Cow<'static, str>>) -> Tab {
         self.tooltip = Some(label.into());
+        self
+    }
+    /// Shows the [`tooltip`](Tab::tooltip) only while the window matches `query`, for
+    /// example only when a narrow window hides the labels the tooltip repeats. Only a
+    /// [`ResponsiveQuery::viewport`] query counts. The tab stays one tab.
+    pub fn tooltip_when(mut self, query: ResponsiveQuery) -> Tab {
+        self.tooltip_when = Some(query);
         self
     }
     /// Marks this tab as the initially selected one.
@@ -370,6 +381,9 @@ impl View for Tab {
                 ctx.scale,
             );
             crate::widgets::elevate_tooltip_host(ctx.scene, id);
+            if let Some(query) = this.tooltip_when {
+                crate::widgets::set_tooltip_when(&ctx.runtime, id, query);
+            }
         }
         ctx.layout.set_measure(
             id,

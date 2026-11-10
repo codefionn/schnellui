@@ -283,7 +283,16 @@ pub(crate) fn emit_radio_paint(
     id: WidgetId,
     selected: bool,
 ) {
-    let rect = node_rect(scene, id, radio_intrinsic(runtime, id));
+    let intrinsic = radio_intrinsic(runtime, id);
+    // The mark keeps its size at the start of the node, centred in its height, so a radio
+    // laid out wider or taller (see `Radio::row`) still draws a round mark.
+    let laid = node_rect(scene, id, intrinsic);
+    let rect = Rect::new(
+        laid.x,
+        laid.y + (laid.height - intrinsic.height).max(0.0) * 0.5,
+        intrinsic.width,
+        intrinsic.height,
+    );
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
     let t = theme_for(runtime, id);
