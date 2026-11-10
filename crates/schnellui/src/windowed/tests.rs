@@ -761,4 +761,36 @@ mod platform_theme_change {
         host.poll_remount();
         assert_eq!(prims(&host), resting, "a remount hovered the button");
     }
+
+    /// Press a button that has a tooltip, drag out of the window and let go
+    /// there. The button paints as it did before the pointer came: no hover
+    /// wash and no tooltip for a pointer that is gone.
+    #[test]
+    fn a_release_outside_the_window_shows_no_tooltip() {
+        let mut app = App::mount_with_size(
+            Pad::all(20.0).child(Button::new("Save").tooltip("Save the draft")),
+            300,
+            200,
+        );
+        app.frame();
+        let mut host = windowed_host(app, None);
+        let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+        let resting = host.app.scene().paint(save).unwrap().primitives.clone();
+        let r = host.app.scene().layout(save).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.on_redraw_requested();
+        host.on_mouse_input(ElementState::Pressed, MouseButton::Left);
+        host.on_redraw_requested();
+        host.on_cursor_left();
+        host.on_mouse_input(ElementState::Released, MouseButton::Left);
+        host.on_redraw_requested();
+        assert_eq!(
+            host.app.scene().paint(save).unwrap().primitives,
+            resting,
+            "the button paints as if never hovered"
+        );
+    }
 }

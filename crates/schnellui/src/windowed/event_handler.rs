@@ -566,7 +566,9 @@ impl WindowedApp {
     }
 
     pub(super) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) -> EventTail {
-        let p = self.cursor_logical();
+        // A button let go after the pointer left the window happens nowhere:
+        // it must not hover or reveal a tooltip at the last inside position.
+        let p = self.resting_pointer();
         let scrollbar_released = if button == MouseButton::Left {
             self.left_pointer_down = state == ElementState::Pressed;
             if state == ElementState::Released {
