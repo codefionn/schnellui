@@ -131,6 +131,7 @@ impl App {
             theme_transition: None,
             reopen_context_menu: None,
             modal_openers: Vec::new(),
+            pressed_dialog: None,
             redrive_content_drag: None,
             theme_binding: None,
             animations_enabled: true,

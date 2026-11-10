@@ -1231,7 +1231,12 @@ impl WindowedApp {
                 // A pointer press moves focus first, as a real mouse press
                 // does: text typed next lands in a clicked field, and a
                 // clicked row or button takes focus from the field.
-                self.app.pointer_focus(Some(target));
+                // A press in a window activates it first, as the event
+                // handler does, and its plain body keeps the activation focus.
+                let activated = self.app.activate_window_at(Some(target));
+                if !activated || self.app.pointer_focus_target(Some(target)).is_some() {
+                    self.app.pointer_focus(Some(target));
+                }
                 let request = DebugAction {
                     action: "click".into(),
                     target: DebugTarget {

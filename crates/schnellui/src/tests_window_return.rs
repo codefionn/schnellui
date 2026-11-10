@@ -2,6 +2,7 @@
 //! opened it, and never to another window's Close button.
 
 use super::*;
+use crate::windowed::headless::{HeadlessHost, PointerButton};
 use schnellui::a11y::Role;
 use schnellui::widgets::{Button, Column, Dialog, Row};
 
@@ -254,4 +255,152 @@ fn replacing_a_subtree_that_opens_a_window_over_a_removed_opener_focuses_the_win
     app.frame();
     assert_eq!(focused_name(&app).as_deref(), Some("Assign"));
     assert!(app.focus_ring_shown());
+}
+
+/// A press on the body of the open window A, on no control, through the host.
+fn click_window_a_body(open: App) -> HeadlessHost {
+    let mut host = HeadlessHost::new(open);
+    let panel = {
+        let app = host.app();
+        let assign = button(app, "Assign");
+        schnellui::widgets::enclosing_dialog_panel(&app.widgets, app.scene(), assign).unwrap()
+    };
+    let r = host.app().scene().layout(panel).unwrap().rect;
+    let p = scene::Point {
+        x: r.x + r.width - 12.0,
+        y: r.y + r.height / 2.0,
+    };
+    host.pointer_move(p);
+    host.press(PointerButton::Left);
+    host.release(PointerButton::Left);
+    assert!(
+        host.app().focused_widget().is_none(),
+        "the body takes no focus"
+    );
+    host
+}
+
+fn opened_by_pointer() -> App {
+    let mut base = mounted(0);
+    let opener = button(&base, "Open A");
+    assert!(base.pointer_focus(Some(opener)));
+    remount(&base, A)
+}
+
+#[test]
+fn closing_a_window_after_a_press_on_its_body_returns_to_its_opener() {
+    let host = click_window_a_body(opened_by_pointer());
+    let closed = remount(host.app(), 0);
+    assert_eq!(focused_name(&closed).as_deref(), Some("Open A"));
+    assert!(!closed.focus_ring_shown());
+}
+
+#[test]
+fn replacing_a_subtree_after_a_press_on_the_window_body_returns_to_the_opener() {
+    let slot = schnellui::widgets::ComponentRef::new();
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("Open A"))
+            .child(Column::new().with_ref(slot)),
+        900,
+        700,
+    );
+    app.frame();
+    let opener = button(&app, "Open A");
+    assert!(app.pointer_focus(Some(opener)));
+    let window = Column::new().child(
+        Dialog::new("Window A")
+            .modeless()
+            .non_fixed()
+            .child(Button::new("Assign")),
+    );
+    app.replace_subtree(slot, window).unwrap();
+    app.frame();
+    let mut host = click_window_a_body(app);
+    host.app_mut().replace_subtree(slot, Column::new()).unwrap();
+    host.app_mut().frame();
+    assert_eq!(focused_name(host.app()).as_deref(), Some("Open A"));
+}
+
+#[test]
+fn a_press_on_the_page_after_the_window_body_leaves_the_window_close_to_the_fallback() {
+    let mut host = click_window_a_body(opened_by_pointer());
+    // A press on empty page space, outside the window.
+    host.pointer_move(scene::Point { x: 890.0, y: 690.0 });
+    host.press(PointerButton::Left);
+    host.release(PointerButton::Left);
+    assert!(host.app().focused_widget().is_none());
+    let closed = remount(host.app(), 0);
+    assert!(closed.focused_widget().is_none());
+}
+
+#[test]
+fn focus_the_user_put_on_the_page_survives_closing_a_window_they_pressed() {
+    let host = click_window_a_body(opened_by_pointer());
+    let mut host = host;
+    let elsewhere = button(host.app(), "Elsewhere");
+    assert!(host.app_mut().pointer_focus(Some(elsewhere)));
+    let closed = remount(host.app(), 0);
+    assert_eq!(focused_name(&closed).as_deref(), Some("Elsewhere"));
+}
+
+#[test]
+fn closing_a_window_open_at_mount_after_a_press_on_its_body_leaves_the_windows() {
+    // No opener was recorded, so focus takes the fallback a closing window
+    // gives it: a control outside every window, not nothing.
+    let host = click_window_a_body(mounted(A));
+    let closed = remount(host.app(), 0);
+    assert!(outside_windows(&closed), "{:?}", focused_name(&closed));
+}
+
+fn modal_view(open: bool) -> Column {
+    let mut page = Column::new()
+        .child(Button::new("Open modal").disabled(open))
+        .child(Button::new("Elsewhere"));
+    if open {
+        page = page.child(
+            Dialog::new("Modal")
+                .child(Button::new("Confirm"))
+                .on_dismiss(|| {}),
+        );
+    }
+    page
+}
+
+/// A modal opened from "Open modal", then pressed at `point` (None: its body).
+fn closing_a_modal_after_a_press(point: Option<scene::Point>) -> String {
+    let mut base = App::mount_with_size(modal_view(false), 900, 700);
+    base.frame();
+    let opener = button(&base, "Open modal");
+    assert!(base.pointer_focus(Some(opener)));
+    let mut open = App::mount_with_size(modal_view(true), 900, 700);
+    open.inherit_remount_state(&base);
+    open.frame();
+    let confirm = button(&open, "Confirm");
+    let panel =
+        schnellui::widgets::enclosing_dialog_panel(&open.widgets, open.scene(), confirm).unwrap();
+    let r = open.scene().layout(panel).unwrap().rect;
+    let p = point.unwrap_or(scene::Point {
+        x: r.x + r.width - 12.0,
+        y: r.y + r.height / 2.0,
+    });
+    let mut host = HeadlessHost::new(open);
+    host.pointer_move(p);
+    host.press(PointerButton::Left);
+    host.release(PointerButton::Left);
+    let mut closed = App::mount_with_size(modal_view(false), 900, 700);
+    closed.inherit_remount_state(host.app());
+    closed.frame();
+    focused_name(&closed).unwrap_or_default()
+}
+
+#[test]
+fn closing_a_modal_after_a_press_on_its_body_returns_to_its_opener() {
+    assert_eq!(closing_a_modal_after_a_press(None), "Open modal");
+}
+
+#[test]
+fn closing_a_modal_after_a_press_on_its_backdrop_returns_to_its_opener() {
+    let corner = scene::Point { x: 4.0, y: 4.0 };
+    assert_eq!(closing_a_modal_after_a_press(Some(corner)), "Open modal");
 }

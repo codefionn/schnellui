@@ -12,6 +12,29 @@ impl App {
             .map(|entry| (entry.opener, entry.ring_visible))
     }
 
+    /// A control standing in for focus that a press on a window's body took
+    /// off every control: the last control of the window the user pressed, once
+    /// `gone` says the window is closing. Closing then treats focus as having
+    /// been in that window, so it returns to the opener, or else leaves the way
+    /// focus in a closing window does. `None` while a control holds focus,
+    /// since that focus is the user's own.
+    pub(crate) fn pressed_dialog_stand_in(
+        &self,
+        gone: impl Fn(WidgetId) -> bool,
+    ) -> Option<WidgetId> {
+        let panel = self.pressed_dialog.filter(|&panel| gone(panel))?;
+        if self.focused_widget().is_some() {
+            return None;
+        }
+        schnellui::a11y::with_tab_order(&self.scene, |order| {
+            order
+                .iter()
+                .rev()
+                .copied()
+                .find(|&id| schnellui::widgets::is_in_subtree(&self.scene, id, panel))
+        })
+    }
+
     /// The control a dialog or window that is new in this rebuild (not among
     /// the `known` panels) takes focus at: its first control, content before
     /// the title bar's close button as at mount. HTML `dialog.show()` runs the

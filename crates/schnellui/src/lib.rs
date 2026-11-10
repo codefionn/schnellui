@@ -535,6 +535,11 @@ pub struct App {
     /// focus when it opened. Closing a modal returns focus there. Widget ids
     /// are remapped through the counterpart map on every remount.
     modal_openers: Vec<ModalOpener>,
+    /// The dialog panel the last left press landed in, `None` when it landed
+    /// outside every dialog. A press on a window's body takes focus off every
+    /// control, so this is what tells a closing window that focus was nowhere
+    /// because the user was working in it.
+    pressed_dialog: Option<WidgetId>,
     /// A content drag that was moving when the tree was rebuilt: the point
     /// to find its drop target at again after the replacement's first layout.
     redrive_content_drag: Option<scene::Point>,

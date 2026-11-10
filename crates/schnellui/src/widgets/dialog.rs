@@ -1026,6 +1026,23 @@ pub fn remember_dialog_focus(runtime: &crate::widgets::Runtime, scene: &Scene, f
     });
 }
 
+/// The panel of the dialog or window a press on `hit` lands in, its backdrop
+/// included. `None` outside every dialog.
+pub fn pressed_dialog_panel(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    hit: WidgetId,
+) -> Option<WidgetId> {
+    let layer = dialog_layer_for_widget(scene, hit)?;
+    runtime.with(|runtime| {
+        runtime
+            .borrow()
+            .dialog_layers
+            .get(layer)
+            .map(|state| state.panel)
+    })
+}
+
 /// The modeless window a press on `hit` activates, with the control that last
 /// had focus in it. `None` when `hit` is outside every window, in a modal (which
 /// owns focus already) or in the window that already holds focus.

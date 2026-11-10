@@ -61,6 +61,9 @@ impl App {
     /// modal or outside every window changes nothing. Returns whether a window
     /// was activated.
     pub(crate) fn activate_window_at(&mut self, hit: Option<scene::WidgetId>) -> bool {
+        self.pressed_dialog = hit.and_then(|hit| {
+            schnellui::widgets::pressed_dialog_panel(&self.widgets, &self.scene, hit)
+        });
         let Some((layer, remembered)) = hit.and_then(|hit| {
             schnellui::widgets::window_to_activate(&self.widgets, &self.scene, hit)
         }) else {

@@ -187,9 +187,12 @@ impl App {
             .filter(|panel| !removed_nodes.contains(panel))
             .collect();
         let mut displaced_focus = None;
+        // Nothing focused because the user pressed the body of a window that
+        // goes with the branch counts as focus in that window.
         if let Some(focused) = self
             .focused_widget()
             .filter(|focused| removed_nodes.contains(focused))
+            .or_else(|| self.pressed_dialog_stand_in(|panel| removed_nodes.contains(&panel)))
         {
             let ring = self.focus_ring_shown();
             let reference = self.scene.component_ref(focused);

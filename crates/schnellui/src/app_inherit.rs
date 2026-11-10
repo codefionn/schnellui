@@ -153,6 +153,13 @@ impl App {
             }
         }
 
+        // A press on a window's body took focus off its controls. When that
+        // window is gone now, focus counts as having been in it.
+        let effective_focus = previous_focus.or_else(|| {
+            let stand_in =
+                previous.pressed_dialog_stand_in(|panel| counterparts.get(panel).is_none())?;
+            Some((stand_in, false))
+        });
         let restored = previous_focus.and_then(|(previous_id, ring_visible)| {
             let target = counterparts.get(previous_id).or_else(|| {
                 previous_option_trigger.and_then(|trigger| counterparts.get(trigger))
@@ -172,7 +179,7 @@ impl App {
         // A closed dialog or window returns focus to the control that opened it, when
         // that control survives.
         let restored = restored.or_else(|| {
-            let (opener, ring_visible) = previous.modal_opener_of(previous_focus?.0)?;
+            let (opener, ring_visible) = previous.modal_opener_of(effective_focus?.0)?;
             let target = counterparts.get(opener)?;
             if !takes_focus(&self.scene, target) {
                 return None;
@@ -204,7 +211,7 @@ impl App {
         // user at the top of the page, hand focus to the nearest control of
         // the old tab order that did: the next one first, then the previous.
         let restored = restored.or_else(|| {
-            let (focused, ring_visible) = previous_focus?;
+            let (focused, ring_visible) = effective_focus?;
             let target = surviving_neighbour(previous, self, focused)?;
             Some(RemountFocus {
                 target,
@@ -212,6 +219,9 @@ impl App {
             })
         });
 
+        self.pressed_dialog = previous
+            .pressed_dialog
+            .and_then(|panel| counterparts.get(panel));
         self.modal_openers = previous
             .modal_openers
             .iter()
