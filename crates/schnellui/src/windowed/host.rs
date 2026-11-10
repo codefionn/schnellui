@@ -339,7 +339,7 @@ impl WindowedApp {
         // arrives before the redraw hits the new widgets and a resting
         // pointer keeps its hover treatment.
         let _ = self.app.settle_frame();
-        let pointer = self.cursor_logical();
+        let pointer = self.resting_pointer();
         let _ = self.app.update_pointer_proximity(pointer);
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -537,7 +537,7 @@ impl WindowedApp {
                 self.glyph_atlas_id = atlas_id;
             }
         }
-        let pointer = self.cursor_logical();
+        let pointer = self.resting_pointer();
         let _ = self.app.update_pointer_proximity(pointer);
         self.remount_count = self.remount_count.saturating_add(1);
         let reason_count = self
@@ -604,7 +604,7 @@ impl WindowedApp {
         }
 
         let _ = self.app.settle_frame();
-        let pointer = self.cursor_logical();
+        let pointer = self.resting_pointer();
         let _ = self.app.update_pointer_proximity(pointer);
         self.subtree_replacement_count = self
             .subtree_replacement_count
@@ -624,6 +624,19 @@ impl WindowedApp {
         });
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    /// Where a rebuilt or remounted tree should find the pointer: its last
+    /// position while it is inside the window, nowhere once it has left.
+    pub(super) fn resting_pointer(&self) -> Point {
+        if self.cursor_inside {
+            self.cursor_logical()
+        } else {
+            Point {
+                x: f32::NEG_INFINITY,
+                y: f32::NEG_INFINITY,
+            }
         }
     }
 
@@ -841,6 +854,7 @@ impl WindowedApp {
         }
         let scale = self.app.scale();
         self.cursor = PhysicalPosition::new(f64::from(point.x * scale), f64::from(point.y * scale));
+        self.cursor_inside = true;
         Ok(self.app.update_pointer_proximity(Point {
             x: point.x,
             y: point.y,
@@ -1248,6 +1262,7 @@ pub fn run(
         accessibility_full_update_pending: true,
         accessibility_published: AccessibilityPublished::default(),
         cursor: PhysicalPosition::new(0.0, 0.0),
+        cursor_inside: false,
         cursor_icon: UiCursorIcon::Default,
         cursor_synced_key: None,
         glyph_atlas_id: app_atlas_id,
@@ -1329,6 +1344,7 @@ pub(crate) fn run_headless(
         accessibility_full_update_pending: true,
         accessibility_published: AccessibilityPublished::default(),
         cursor: PhysicalPosition::new(0.0, 0.0),
+        cursor_inside: false,
         cursor_icon: UiCursorIcon::Default,
         cursor_synced_key: None,
         glyph_atlas_id: app_atlas_id,

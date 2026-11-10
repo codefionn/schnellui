@@ -467,6 +467,7 @@ impl WindowedApp {
 
     pub(super) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) -> EventTail {
         self.cursor = position;
+        self.cursor_inside = true;
         let p = self.cursor_logical();
         if self
             .interaction_trace
@@ -542,7 +543,8 @@ impl WindowedApp {
         EventTail::Normal
     }
 
-    fn on_cursor_left(&mut self) -> EventTail {
+    pub(super) fn on_cursor_left(&mut self) -> EventTail {
+        self.cursor_inside = false;
         let snapshot = self.interaction_snapshot(self.cursor_logical());
         self.trace("pointer_left", snapshot);
         let _ = self.app.update_edge_auto_scroll(

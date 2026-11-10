@@ -104,6 +104,7 @@ impl HeadlessHost {
                 accessibility_full_update_pending: true,
                 accessibility_published: Default::default(),
                 cursor: PhysicalPosition::new(-1000.0, -1000.0),
+                cursor_inside: false,
                 cursor_icon: Default::default(),
                 cursor_synced_key: None,
                 glyph_atlas_id,
@@ -159,8 +160,7 @@ impl HeadlessHost {
 
     /// The pointer position in logical pixels, or `None` once it left.
     pub fn pointer(&self) -> Option<Point> {
-        let p = self.host.cursor_logical();
-        (p.x >= 0.0 && p.y >= 0.0).then_some(p)
+        self.host.cursor_inside.then(|| self.host.cursor_logical())
     }
 
     fn settle(&mut self) {
@@ -184,11 +184,10 @@ impl HeadlessHost {
 
     /// The pointer leaves the window.
     pub fn pointer_leave(&mut self) {
+        // A real host keeps the last position; park it off-window anyway so
+        // a stray wheel event after leaving lands nowhere.
         self.host.cursor = PhysicalPosition::new(-1000.0, -1000.0);
-        self.host.app.update_pointer_proximity(Point {
-            x: f32::NEG_INFINITY,
-            y: f32::NEG_INFINITY,
-        });
+        let _ = self.host.on_cursor_left();
         self.settle();
     }
 

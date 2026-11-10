@@ -424,6 +424,10 @@ struct WindowedApp {
     accessibility_published: host::AccessibilityPublished,
     /// last known cursor position in **physical** pixels.
     cursor: PhysicalPosition<f64>,
+    /// Whether the cursor is inside the window. `cursor` keeps its last
+    /// position after the pointer leaves, and a rebuild must not hover
+    /// whatever sits there.
+    cursor_inside: bool,
     /// Last cursor sent to the window, avoiding redundant platform calls.
     cursor_icon: UiCursorIcon,
     /// Scene render key and paint epoch (scroll offsets and paint marks) the

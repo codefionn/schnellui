@@ -375,6 +375,7 @@ fn windowed_host(
         accessibility_full_update_pending: true,
         accessibility_published: Default::default(),
         cursor: PhysicalPosition::new(0.0, 0.0),
+        cursor_inside: false,
         cursor_icon: Default::default(),
         cursor_synced_key: None,
         glyph_atlas_id,
@@ -706,5 +707,58 @@ mod platform_theme_change {
             );
         }
         assert_eq!(host.app.active_theme(), theme::DARK);
+    }
+
+    /// The pointer rests on a button, then leaves the window. Neither a theme
+    /// rebuild nor a structural remount may hover the button again from the
+    /// last position the pointer had inside.
+    #[test]
+    fn a_rebuild_after_the_pointer_left_hovers_nothing() {
+        let flagged = Rc::new(Cell::new(false));
+        let mount = || {
+            App::mount_themed_with_size_scaled(
+                ThemeMode::system(theme::LIGHT, theme::DARK),
+                || Pad::all(20.0).child(Button::new("Save")),
+                300,
+                200,
+                1.0,
+            )
+        };
+        let mut app = mount();
+        app.frame();
+        let hook_flag = flagged.clone();
+        let remount: Box<dyn FnMut(crate::scene::Size) -> Option<crate::WindowUpdate>> =
+            Box::new(move |_| {
+                if !hook_flag.replace(false) {
+                    return None;
+                }
+                let mut app = mount();
+                app.frame();
+                Some(crate::WindowUpdate::Remount(crate::Remount::new(
+                    app, "test",
+                )))
+            });
+        let mut host = windowed_host(app, Some(remount));
+        let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+        let resting = host.app.scene().paint(save).unwrap().primitives.len();
+        let r = host.app.scene().layout(save).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.on_redraw_requested();
+        host.on_cursor_left();
+        host.on_redraw_requested();
+        let prims = |host: &super::super::WindowedApp| {
+            let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
+            host.app.scene().paint(save).unwrap().primitives.len()
+        };
+        assert_eq!(prims(&host), resting);
+
+        host.on_theme_changed(WinitTheme::Dark);
+        assert_eq!(prims(&host), resting, "a theme rebuild hovered the button");
+        flagged.set(true);
+        host.poll_remount();
+        assert_eq!(prims(&host), resting, "a remount hovered the button");
     }
 }
