@@ -67,7 +67,23 @@ pub fn emit_wrapped_paint(
         }
         let rect = match scene.layout(id) {
             Some(b) if !b.rect.is_empty() => b.rect,
-            _ => continue,
+            Some(_) => {
+                // A box squeezed to nothing paints nothing, as a fresh mount
+                // at that size does; glyphs shaped for a wider box must not
+                // linger and reappear stale.
+                let had_paint = runtime.with(|rt| {
+                    rt.borrow_mut()
+                        .text_layouts
+                        .get_mut(id)
+                        .is_some_and(|tl| tl.last_emit.take().is_some())
+                });
+                if had_paint {
+                    scene.paint_mut(id).primitives.clear();
+                    scene.mark_dirty(id, DirtyFlags::PAINT);
+                }
+                continue;
+            }
+            None => continue,
         };
         // Resolve the scoped theme before mutably borrowing the widget runtime
         // below; `theme_for` reads the same registry.
@@ -541,7 +557,11 @@ pub fn fit_text_fields(
         if scene.node(id).map(|n| n.kind) != Some(WidgetKind::TextInput) {
             continue;
         }
-        let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
+        let Some(rect) = scene
+            .layout(id)
+            .map(|b| b.rect)
+            .filter(|r| r.width > 0.0 || r.height > 0.0)
+        else {
             continue;
         };
         // The field's frame is its first primitive.
@@ -615,7 +635,10 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
         return;
     }
     let (target, lay_rect) = match scene.layout(id) {
-        Some(b) if !b.rect.is_empty() => (
+        // A box squeezed to zero width or height (a heading in a window
+        // shrunk to nothing) is laid out and still owns an origin. Only a box
+        // empty on both axes can be one that was never laid out.
+        Some(b) if b.rect.width > 0.0 || b.rect.height > 0.0 => (
             Point {
                 x: b.rect.x,
                 y: b.rect.y,

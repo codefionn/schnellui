@@ -2127,4 +2127,81 @@ mod tests {
         assert_ne!(hit_test(&runtime, &scene, center(rect)), Some(last));
         assert!(scene.composited_rect(last).is_empty());
     }
+
+    /// The fuzz suite's dialogs desktop: two windows placed by `at`.
+    fn desktop() -> impl View {
+        use crate::widgets::{Pad, Stack, TextInput};
+        Stack::new()
+            .fill()
+            .child(Pad::all(16.0).child(Text::new("Desk")))
+            .child(
+                Pad::all(24.0).child(
+                    Column::new()
+                        .fill()
+                        .child(
+                            Dialog::new("Issue board")
+                                .modeless()
+                                .non_fixed()
+                                .movable()
+                                .resizable()
+                                .at(28.0, 60.0)
+                                .size(300.0, 180.0)
+                                .child(
+                                    Text::new("Margin note 12, confirm the caption.")
+                                        .wrap(crate::widgets::WrapMode::Word),
+                                )
+                                .child(Button::new("Resolve"))
+                                .child(TextInput::new("note")),
+                        )
+                        .child(
+                            Dialog::new("Proof preview")
+                                .modeless()
+                                .non_fixed()
+                                .movable()
+                                .resizable()
+                                .at(200.0, 120.0)
+                                .size(320.0, 200.0)
+                                .child(Button::new("Approve")),
+                        ),
+                ),
+            )
+    }
+
+    fn layout_dump(app: &crate::App) -> Vec<(WidgetKind, Rect, String)> {
+        let scene = app.scene();
+        let mut out = Vec::new();
+        let mut stack = vec![scene.root().unwrap()];
+        while let Some(id) = stack.pop() {
+            let node = scene.node(id).unwrap();
+            stack.extend(node.children.iter().rev().copied());
+            out.push((
+                node.kind,
+                scene.layout(id).map(|l| l.rect).unwrap_or(Rect::ZERO),
+                format!(
+                    "{:?}",
+                    scene
+                        .paint(id)
+                        .map(|p| p.primitives.clone())
+                        .filter(|p| !p.is_empty())
+                ),
+            ));
+        }
+        out
+    }
+
+    /// A window desktop resized to a tiny viewport lays out like a fresh
+    /// mount at that size.
+    #[test]
+    fn a_desktop_resized_to_a_tiny_viewport_lays_out_like_a_fresh_mount() {
+        let mut resized = crate::App::mount_with_size(desktop(), 720, 520);
+        resized.frame();
+        resized.resize(120.0, 90.0);
+        resized.frame();
+        let mut fresh = crate::App::mount_with_size(desktop(), 120, 90);
+        fresh.frame();
+        let (a, b) = (layout_dump(&resized), layout_dump(&fresh));
+        for (i, (x, y)) in a.iter().zip(&b).enumerate() {
+            assert_eq!(x, y, "node {i}");
+        }
+    }
 }
