@@ -2,6 +2,22 @@
 
 use super::*;
 
+/// The counterpart in `replacement` of the control nearest to `focused` in
+/// `previous`'s tab order, trying later controls before earlier ones. Only runs
+/// when the focused control has no counterpart, so it costs a remount nothing
+/// in the common case.
+fn surviving_neighbour(previous: &App, replacement: &Scene, focused: WidgetId) -> Option<WidgetId> {
+    schnellui::a11y::with_tab_order(&previous.scene, |order| {
+        let position = order.iter().position(|id| *id == focused)?;
+        let counterparts =
+            remount::CounterpartMap::new(&previous.scene, replacement, order.iter().copied());
+        order[position + 1..]
+            .iter()
+            .chain(order[..position].iter().rev())
+            .find_map(|id| counterparts.get(*id))
+    })
+}
+
 impl App {
     /// Transfers user-owned interaction state from a tree this app is replacing.
     ///
@@ -108,6 +124,18 @@ impl App {
             let target = counterparts.get(previous_id).or_else(|| {
                 previous_option_trigger.and_then(|trigger| counterparts.get(trigger))
             })?;
+            Some(RemountFocus {
+                target,
+                ring_visible,
+            })
+        });
+
+        // The focused control did not survive. Rather than strand a keyboard
+        // user at the top of the page, hand focus to the nearest control of
+        // the old tab order that did: the next one first, then the previous.
+        let restored = restored.or_else(|| {
+            let (focused, ring_visible) = previous_focus?;
+            let target = surviving_neighbour(previous, &self.scene, focused)?;
             Some(RemountFocus {
                 target,
                 ring_visible,

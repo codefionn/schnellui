@@ -158,8 +158,8 @@ fn remount_scroll_offsets_follow_component_refs_across_reordering() {
         }
     }
 
-    let first_ref = ComponentRef::new();
-    let second_ref = ComponentRef::new();
+    let first_ref = schnellui::widgets::ComponentRef::new();
+    let second_ref = schnellui::widgets::ComponentRef::new();
     let mut previous = App::mount(view(first_ref, second_ref, false));
     previous.frame();
     let first = previous.resolve_ref(first_ref).unwrap();
@@ -299,8 +299,8 @@ fn remount_preserves_every_editor_and_uses_component_refs_across_reordering() {
         }
     }
 
-    let first_ref = ComponentRef::new();
-    let second_ref = ComponentRef::new();
+    let first_ref = schnellui::widgets::ComponentRef::new();
+    let second_ref = schnellui::widgets::ComponentRef::new();
     let mut previous = App::mount(view(first_ref, second_ref, false));
     let first = previous.scene().resolve_ref(first_ref).unwrap();
     let second = previous.scene().resolve_ref(second_ref).unwrap();
@@ -1402,4 +1402,135 @@ fn closing_a_menu_drops_the_ring_of_its_focused_row() {
         let expected = close.map(|_| add);
         assert_eq!(app.focused_widget(), expected, "{close:?} returns focus");
     }
+}
+
+fn removable_rows(names: &[&str]) -> schnellui::widgets::Column {
+    use schnellui::widgets::{Button, Column};
+    names.iter().fold(Column::new(), |column, name| {
+        column.child(Button::new(format!("Remove {name}")))
+    })
+}
+
+fn remove_button(app: &App, name: &str) -> schnellui::scene::WidgetId {
+    app.find_widget(Role::Button, Some(&format!("Remove {name}")))
+        .unwrap()
+}
+
+/// Mounts `before`, focuses `focused` by keyboard or pointer, remounts `after`
+/// and returns the replacement together with its focus ring state.
+fn remount_without(before: &[&str], after: &[&str], focused: &str, keyboard: bool) -> (App, bool) {
+    let mut previous = App::mount_with_size(removable_rows(before), 400, 300);
+    previous.frame();
+    let target = remove_button(&previous, focused);
+    if keyboard {
+        assert!(previous.focus(Some(target)));
+        assert!(schnellui::widgets::focus_ring_visible(
+            &previous.widgets,
+            target
+        ));
+    } else {
+        assert!(previous.pointer_focus(Some(target)));
+    }
+    let mut replacement = App::mount_with_size(removable_rows(after), 400, 300);
+    replacement.inherit_remount_state(&previous);
+    let ring = replacement
+        .focused_widget()
+        .is_some_and(|id| schnellui::widgets::focus_ring_visible(&replacement.widgets, id));
+    (replacement, ring)
+}
+
+#[test]
+fn remount_moves_focus_to_the_next_row_when_the_focused_one_is_removed() {
+    let (app, ring) = remount_without(&["A", "B", "C"], &["A", "C"], "B", true);
+    assert_eq!(app.focused_widget(), Some(remove_button(&app, "C")));
+    assert!(ring, "keyboard focus keeps its ring");
+}
+
+#[test]
+fn remount_moves_focus_to_the_previous_row_when_the_last_is_removed() {
+    let (app, ring) = remount_without(&["A", "B", "C"], &["A", "B"], "C", true);
+    assert_eq!(app.focused_widget(), Some(remove_button(&app, "B")));
+    assert!(ring);
+}
+
+#[test]
+fn remount_pointer_focus_moves_to_the_neighbour_without_a_ring() {
+    let (app, ring) = remount_without(&["A", "B", "C"], &["A", "C"], "B", false);
+    assert_eq!(app.focused_widget(), Some(remove_button(&app, "C")));
+    assert!(!ring, "pointer focus stays without a ring");
+}
+
+#[test]
+fn remount_drops_focus_when_no_neighbour_survives() {
+    let (app, _) = remount_without(&["A", "B"], &["Z"], "B", true);
+    assert_eq!(app.focused_widget(), None);
+}
+
+#[test]
+fn replace_subtree_moves_focus_to_the_nearest_outside_neighbour() {
+    use schnellui::widgets::{Button, Column};
+    for (keyboard, expect_ring) in [(true, true), (false, false)] {
+        let slot = schnellui::widgets::ComponentRef::new();
+        let view = |inner: &str| {
+            Column::new()
+                .child(Button::new("Before"))
+                .child(Button::new(inner.to_string()).with_ref(slot))
+                .child(Button::new("After"))
+        };
+        let mut app = App::mount_with_size(view("Remove me"), 400, 300);
+        app.frame();
+        let target = app.find_widget(Role::Button, Some("Remove me")).unwrap();
+        if keyboard {
+            assert!(app.focus(Some(target)));
+        } else {
+            assert!(app.pointer_focus(Some(target)));
+        }
+        app.replace_subtree(slot, Column::new()).unwrap();
+        app.frame();
+        let after = app.find_widget(Role::Button, Some("After")).unwrap();
+        assert_eq!(app.focused_widget(), Some(after));
+        assert_eq!(app.focus_ring_shown(), expect_ring);
+
+        // Removing the last control falls back to the previous one.
+        let slot = schnellui::widgets::ComponentRef::new();
+        let mut app = App::mount_with_size(
+            Column::new()
+                .child(Button::new("Before"))
+                .child(Button::new("Last").with_ref(slot)),
+            400,
+            300,
+        );
+        app.frame();
+        let last = app.find_widget(Role::Button, Some("Last")).unwrap();
+        assert!(app.focus(Some(last)));
+        app.replace_subtree(slot, Column::new()).unwrap();
+        let before = app.find_widget(Role::Button, Some("Before")).unwrap();
+        assert_eq!(app.focused_widget(), Some(before));
+    }
+}
+
+#[test]
+fn replace_subtree_keeps_focus_on_the_same_identity_inside_the_branch() {
+    use schnellui::widgets::{Button, Column};
+    let slot = schnellui::widgets::ComponentRef::new();
+    let button = schnellui::widgets::ComponentRef::new();
+    let mut app = App::mount_with_size(
+        Column::new().child(Button::new("Before")).child(
+            Column::new()
+                .child(Button::new("Keep").with_ref(button))
+                .with_ref(slot),
+        ),
+        400,
+        300,
+    );
+    app.frame();
+    let keep = app.find_widget(Role::Button, Some("Keep")).unwrap();
+    assert!(app.focus(Some(keep)));
+    app.replace_subtree(
+        slot,
+        Column::new().child(Button::new("Kept").with_ref(button)),
+    )
+    .unwrap();
+    let kept = app.find_widget(Role::Button, Some("Kept")).unwrap();
+    assert_eq!(app.focused_widget(), Some(kept));
 }
