@@ -2,9 +2,9 @@ use super::*;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct WorkspaceMetrics {
-    outer_padding: f32,
+    pub(crate) outer_padding: f32,
     sidebar_width: f32,
-    content_height: f32,
+    pub(crate) content_height: f32,
     column_gap: f32,
     pub(crate) canvas_width: f32,
     pub(crate) canvas_height: f32,

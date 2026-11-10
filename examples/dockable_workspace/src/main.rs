@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, ValueEnum};
 use schnellui::a11y::Role;
 use schnellui::charts::{BarChart, LineChart};
+use schnellui::layout::EdgeInsets;
 use schnellui::scene::{Color, Point, Primitive, Rect, Size, WidgetId, WidgetKind};
 use schnellui::widgets::{
     node_rect, Align, Badge, BuildCtx, Button, ButtonAppearance, Column, ContextMenu,

@@ -39,6 +39,77 @@ mod tests {
     }
 
     #[test]
+    fn the_widget_library_keeps_its_content_inside_its_card() {
+        let named = |app: &App, name: &str| {
+            let scene = app.scene();
+            scene
+                .preorder()
+                .into_iter()
+                .find(|&id| scene.a11y(id).and_then(|a| a.name.as_deref()) == Some(name))
+                .unwrap_or_else(|| panic!("missing {name:?}"))
+        };
+        for (width, height, scale) in [(847, 540, 1.0), (847, 540, 2.0), (1210, 480, 1.5)] {
+            let runtime = WorkspaceRuntime::default();
+            let mut app = mount_workspace(runtime, width, height, scale);
+            app.frame();
+            let metrics = workspace_metrics(width as f32, height as f32);
+            let card_bottom = metrics.outer_padding + metrics.content_height;
+            let tip = named(&app, "Tip: drag any tab to move it.");
+            let scene = app.scene();
+            let mut clip = None;
+            let mut at = scene.node(tip).and_then(|n| n.parent);
+            while let Some(id) = at {
+                if scene.node(id).is_some_and(|n| n.kind == WidgetKind::Scroll) {
+                    clip = Some(scene.composited_rect(id));
+                    break;
+                }
+                at = scene.node(id).and_then(|n| n.parent);
+            }
+            let tip_rect = scene.composited_rect(tip);
+            match clip {
+                Some(viewport) => {
+                    assert!(
+                        viewport.bottom() <= card_bottom + 0.5,
+                        "{width}x{height}@{scale}: library viewport {viewport:?} ends below the card at {card_bottom}"
+                    );
+                    // Scrolled to its end, the library shows the tip.
+                    let inside = Point {
+                        x: viewport.x + viewport.width * 0.5,
+                        y: viewport.y + viewport.height * 0.5,
+                    };
+                    for _ in 0..10 {
+                        app.dispatch_wheel_at(inside, 120.0);
+                    }
+                    app.frame();
+                    let tip_rect = app.scene().composited_rect(tip);
+                    assert!(
+                        tip_rect.height > 0.0
+                            && tip_rect.y >= viewport.y - 0.5
+                            && tip_rect.bottom() <= viewport.bottom() + 0.5,
+                        "{width}x{height}@{scale}: tip {tip_rect:?} unreachable below {viewport:?}"
+                    );
+                }
+                None => assert!(
+                    tip_rect.bottom() <= card_bottom + 0.5,
+                    "{width}x{height}@{scale}: tip {tip_rect:?} spills below the card at {card_bottom}"
+                ),
+            }
+        }
+        // With room to spare the tip still sits at the bottom of the card.
+        let mut app = mount_workspace(WorkspaceRuntime::default(), 1400, 900, 1.0);
+        app.frame();
+        let metrics = workspace_metrics(1400.0, 900.0);
+        let tip = app
+            .scene()
+            .composited_rect(named(&app, "Tip: drag any tab to move it."));
+        let card_bottom = metrics.outer_padding + metrics.content_height;
+        assert!(
+            card_bottom - tip.bottom() < 40.0,
+            "tip {tip:?} should rest at the card bottom {card_bottom}"
+        );
+    }
+
+    #[test]
     fn workspace_geometry_tracks_the_viewport() {
         let runtime = WorkspaceRuntime::default();
         let mut small = mount_workspace(runtime.clone(), 900, 600, 1.0);

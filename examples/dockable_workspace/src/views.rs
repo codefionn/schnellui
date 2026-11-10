@@ -125,70 +125,87 @@ pub(crate) fn sidebar(
     let compact = state.compact;
     let hide_single_tab_bars = state.hide_single_tab_bars;
     let inner_width = width - 36.0;
-    framed(
-        width,
-        height,
-        PANEL_ALT,
-        18.0,
-        Column::new()
-            .width(inner_width)
-            .gap(13.0)
-            .child(caption("WIDGET LIBRARY", 12.0))
-            .child(Text::new("Add a widget").size(22.0).bold())
-            .child(
-                Text::new("It opens as a tab in the first pane. Drag its tab to dock it anywhere.")
-                    .size(13.0)
-                    .wrap(WrapMode::Word),
-            )
-            .child(Divider::new())
-            .child(library_button(
-                runtime.clone(),
-                "Add Pulse",
-                WidgetType::Pulse,
-                inner_width - 4.0,
-            ))
-            .child(library_button(
-                runtime.clone(),
-                "Add Focus timer",
-                WidgetType::Focus,
-                inner_width - 4.0,
-            ))
-            .child(library_button(
-                runtime.clone(),
-                "Add Notes",
-                WidgetType::Notes,
-                inner_width - 4.0,
-            ))
-            .child(library_button(
-                runtime.clone(),
-                "Add Weather",
-                WidgetType::Weather,
-                inner_width - 4.0,
-            ))
-            .child(Divider::new())
-            .child(caption("LAYOUT", 12.0))
-            .child(canvas_setting("Compact panes", compact, inner_width, {
+    let inner_height = height - 36.0;
+    // A short window can't fit the whole library, so it scrolls inside the
+    // card. The viewport reaches 14 px into the right padding for the
+    // scrollbar, which only shows when the content overflows.
+    let library = Column::new()
+        .width(inner_width)
+        .min_height(inner_height)
+        .gap(13.0)
+        .child(caption("WIDGET LIBRARY", 12.0))
+        .child(Text::new("Add a widget").size(22.0).bold())
+        .child(
+            Text::new("It opens as a tab in the first pane. Drag its tab to dock it anywhere.")
+                .size(13.0)
+                .wrap(WrapMode::Word),
+        )
+        .child(Divider::new())
+        .child(library_button(
+            runtime.clone(),
+            "Add Pulse",
+            WidgetType::Pulse,
+            inner_width - 4.0,
+        ))
+        .child(library_button(
+            runtime.clone(),
+            "Add Focus timer",
+            WidgetType::Focus,
+            inner_width - 4.0,
+        ))
+        .child(library_button(
+            runtime.clone(),
+            "Add Notes",
+            WidgetType::Notes,
+            inner_width - 4.0,
+        ))
+        .child(library_button(
+            runtime.clone(),
+            "Add Weather",
+            WidgetType::Weather,
+            inner_width - 4.0,
+        ))
+        .child(Divider::new())
+        .child(caption("LAYOUT", 12.0))
+        .child(canvas_setting("Compact panes", compact, inner_width, {
+            let runtime = runtime.clone();
+            move |value| {
+                runtime.update(|store| store.compact = value);
+                runtime.request_remount();
+            }
+        }))
+        .child(canvas_setting(
+            "Hide single tab bars",
+            hide_single_tab_bars,
+            inner_width,
+            {
                 let runtime = runtime.clone();
                 move |value| {
-                    runtime.update(|store| store.compact = value);
+                    runtime.update(|store| store.hide_single_tab_bars = value);
                     runtime.request_remount();
                 }
-            }))
-            .child(canvas_setting(
-                "Hide single tab bars",
-                hide_single_tab_bars,
-                inner_width,
-                {
-                    let runtime = runtime.clone();
-                    move |value| {
-                        runtime.update(|store| store.hide_single_tab_bars = value);
-                        runtime.request_remount();
-                    }
-                },
-            ))
-            .child(Spacer::new())
-            .child(caption("Tip: drag any tab to move it.", 12.0)),
-    )
+            },
+        ))
+        .child(Spacer::new())
+        .child(caption("Tip: drag any tab to move it.", 12.0));
+    Stack::new()
+        .size(width, height)
+        .child(Surface::new(width, height, PANEL_ALT))
+        .child(
+            Pad::insets(EdgeInsets {
+                top: 18.0,
+                right: 4.0,
+                bottom: 18.0,
+                left: 18.0,
+            })
+            .child(
+                Scroll::new()
+                    .label("Widget library")
+                    .scrollbar(true)
+                    .size(inner_width + 14.0, inner_height)
+                    .child(library),
+            ),
+        )
 }
 
 /// The heading and the one-line status shown at the top of a widget. The tab
