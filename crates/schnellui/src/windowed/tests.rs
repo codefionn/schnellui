@@ -1901,6 +1901,67 @@ mod debug_pointer {
         assert_eq!(value.as_deref(), Some("X world"));
     }
 
+    fn typed_x_value(host: &mut WindowedApp) -> Option<String> {
+        let key = DebugKey {
+            key: "text".into(),
+            shift: false,
+            ctrl: false,
+            text: Some("X".into()),
+        };
+        host.handle_debug_key(key);
+        let input = host.app.find_widget(Role::TextInput, None).unwrap();
+        host.app.scene().a11y(input).unwrap().value.clone()
+    }
+
+    #[test]
+    fn click_at_places_the_caret_in_a_text_input() {
+        let mut rig = rig();
+        let r = rect(&rig.host, Role::TextInput, None);
+        let point = DebugPoint {
+            x: r.x + 3.0,
+            y: r.y + r.height / 2.0,
+        };
+        run(&mut rig.host, DebugCommand::PointerClick(point));
+        assert_eq!(
+            typed_x_value(&mut rig.host).as_deref(),
+            Some("Xhello world")
+        );
+    }
+
+    #[test]
+    fn click_at_clicks_a_button_once() {
+        let mut rig = rig();
+        let (x, y) = centre(rect(&rig.host, Role::Button, Some("Go")));
+        run(
+            &mut rig.host,
+            DebugCommand::PointerClick(DebugPoint { x, y }),
+        );
+        assert_eq!(rig.clicks.get(), 1);
+    }
+
+    #[test]
+    fn a_press_and_release_in_one_frame_places_the_caret() {
+        let mut rig = rig();
+        let r = rect(&rig.host, Role::TextInput, None);
+        let scale = f64::from(rig.host.app.scale());
+        rig.host.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+            f64::from(r.x + 3.0) * scale,
+            f64::from(r.y + r.height / 2.0) * scale,
+        ));
+        rig.host.on_mouse_input(
+            winit::event::ElementState::Pressed,
+            winit::event::MouseButton::Left,
+        );
+        rig.host.on_mouse_input(
+            winit::event::ElementState::Released,
+            winit::event::MouseButton::Left,
+        );
+        assert_eq!(
+            typed_x_value(&mut rig.host).as_deref(),
+            Some("Xhello world")
+        );
+    }
+
     #[test]
     fn right_press_opens_the_context_menu() {
         let mut rig = rig();

@@ -93,7 +93,7 @@ and `--info` paths when running several apps. A unique default endpoint is also
 available through `schnellui-debug list` and `--pid`.
 
 Pointer input goes through the window's own handlers. Besides `move X Y` and
-`click-at X Y`, `press [X Y] [--button left|right|middle]`,
+`click-at X Y` (a move, press and release), `press [X Y] [--button left|right|middle]`,
 `release [X Y] [--button ...]`, `drag X1 Y1 X2 Y2 [--steps N] [--button ...]` and
 `leave` send a press, a release, a whole drag or a pointer exit, so slider
 scrubs, text selection, dialog moves and press-leave-release orders can be
