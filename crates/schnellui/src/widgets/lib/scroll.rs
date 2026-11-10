@@ -8,6 +8,11 @@ pub struct ScrollMetrics {
     pub offset: f32,
 }
 
+/// Overflow below this many logical pixels is layout rounding, not content:
+/// a viewport sized to its child can come out an f32 ulp short of it, and
+/// that must not draw a scrollbar or take a wheel tick.
+const SUB_PIXEL_OVERFLOW: f32 = 0.5;
+
 pub fn scroll_metrics(scene: &Scene, id: WidgetId) -> Option<ScrollMetrics> {
     if !matches!(scene.node(id), Some(node) if node.kind == WidgetKind::Scroll) {
         return None;
@@ -23,7 +28,12 @@ pub fn scroll_metrics(scene: &Scene, id: WidgetId) -> Option<ScrollMetrics> {
         }
     }
     let content_height = (max_bottom - viewport.y).max(0.0);
-    let max_offset = (content_height - viewport.height).max(0.0);
+    let overflow = content_height - viewport.height;
+    let max_offset = if overflow < SUB_PIXEL_OVERFLOW {
+        0.0
+    } else {
+        overflow
+    };
     Some(ScrollMetrics {
         viewport,
         content_height,

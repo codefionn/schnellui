@@ -981,3 +981,43 @@ fn a_column_with_a_minimum_height_still_scrolls_when_its_rows_overflow() {
         );
     }
 }
+
+/// Float layout can leave a child a fraction of a pixel taller than the
+/// viewport sized to it. A browser's `overflow: auto` shows no bar there, and
+/// neither may this: nothing to scroll, no bar, no wheel travel.
+#[test]
+fn sub_pixel_overflow_is_not_scrollable() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let avail = Size {
+        width: 400.0,
+        height: 300.0,
+    };
+    let (mut scene, _layout, _text, _atlas, scroll) = build_and_layout(
+        runtime,
+        Scroll::new()
+            .size(100.0, 100.0)
+            .scrollbar(true)
+            .child(Column::new().height(100.3)),
+        avail,
+    );
+    let metrics = scroll_metrics(&scene, scroll).expect("metrics");
+    assert_eq!(
+        metrics.max_offset, 0.0,
+        "content {}",
+        metrics.content_height
+    );
+    assert!(scrollbar_rects(metrics).is_none());
+    assert!(!dispatch_scroll(runtime, &mut scene, scroll, 10.0));
+
+    // Whole pixels of overflow still scroll.
+    reset(runtime);
+    let (scene, _layout, _text, _atlas, scroll) = build_and_layout(
+        runtime,
+        Scroll::new()
+            .size(100.0, 100.0)
+            .child(Column::new().height(101.0)),
+        avail,
+    );
+    assert_eq!(scroll_metrics(&scene, scroll).unwrap().max_offset, 1.0);
+}

@@ -640,7 +640,7 @@ fn calculator_view(
         .align(Align::Center)
         .justify(Justify::Center)
         .child(
-            Scroll::new().child(
+            Scroll::new().scrollbar(true).child(
                 Column::new()
                     .width(PANEL_WIDTH)
                     .gap(14.0)
@@ -849,5 +849,19 @@ mod tests {
             }
         }
         assert!(stops > 0, "no scenario has a Tab stop");
+    }
+
+    /// At the default size the panel fits, at any scale: float layout may leave
+    /// it a hair over the viewport, which must not draw a bar or scroll.
+    #[test]
+    fn a_fitting_panel_has_no_scrollbar_at_any_scale() {
+        for scale in [1.0, 1.5, 2.0] {
+            let mut app = scenario_app(Scenario::Ready, 430, 610, scale);
+            app.frame();
+            assert!(
+                schnellui::testing::fuzz::scrollbars(&app).is_empty(),
+                "scrollbar at scale {scale}"
+            );
+        }
     }
 }
