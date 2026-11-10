@@ -3563,7 +3563,7 @@ mod overlays_in_a_window {
             Column::new().child(host)
         };
         let mut app = App::mount_with_size(
-            Column::new().child(window(at, size).child(content)),
+            Column::new().fill().child(window(at, size).child(content)),
             800,
             600,
         );
@@ -3609,7 +3609,7 @@ mod overlays_in_a_window {
     #[test]
     fn a_window_still_clips_the_content_it_owns_next_to_its_overlays() {
         let mut app = App::mount_with_size(
-            Column::new().child(
+            Column::new().fill().child(
                 window((200.0, 100.0), (300.0, 120.0)).child(
                     Column::new()
                         .child(Button::new("Close").tooltip("Close the window"))
@@ -3633,7 +3633,7 @@ mod overlays_in_a_window {
 
     #[test]
     fn a_dropdown_popup_extends_past_the_bottom_of_its_window_and_takes_clicks_there() {
-        let view = Column::new().child(
+        let view = Column::new().fill().child(
             window((150.0, 100.0), (320.0, 150.0)).child(
                 Dropdown::new("Keymap")
                     .open(true)
@@ -3668,7 +3668,7 @@ mod overlays_in_a_window {
 
     #[test]
     fn a_context_menu_opened_in_a_text_field_in_a_window_is_not_clipped() {
-        let view = Column::new().child(
+        let view = Column::new().fill().child(
             window((150.0, 100.0), (260.0, 120.0)).child(
                 TextInput::new("note").label("Note").context_menu(
                     ContextMenu::new()
@@ -3695,5 +3695,121 @@ mod overlays_in_a_window {
         assert!(rect.bottom() > frame.bottom(), "{rect:?} vs {frame:?}");
         assert_eq!(rect, app.scene().layout(item).unwrap().rect);
         assert_eq!(app.hit_test(center(rect)), Some(item));
+    }
+
+    /// A tooltip host is an overlay root, so it must not escape the window
+    /// clip itself: shrink the window below the button and it neither paints
+    /// nor takes hits outside the frame; grow it back and its tooltip still
+    /// paints past the frame edge.
+    #[test]
+    fn a_tooltip_button_in_a_shrunk_window_is_clipped_but_its_tooltip_is_not() {
+        let mut column = Column::new();
+        for n in 0..6 {
+            column = column.child(Button::new(format!("Row {n}")).height(40.0));
+        }
+        let column = column.child(Button::new("Deep").height(40.0).tooltip("Deep tooltip"));
+        let view = Column::new().fill().child(
+            window((200.0, 60.0), (360.0, 440.0))
+                .resizable()
+                .min_size(220.0, 120.0)
+                .child(column),
+        );
+        let mut app = App::mount_with_size(view, 800, 600);
+        app.frame();
+        let deep = app.find_widget(Role::Button, Some("Deep")).unwrap();
+        let big = panel(&app);
+        let fits = app.scene().composited_rect(deep);
+        assert!(
+            !fits.is_empty() && fits.bottom() <= big.bottom(),
+            "{fits:?} in {big:?}"
+        );
+
+        let grip = Point {
+            x: big.right() - 2.0,
+            y: big.bottom() - 2.0,
+        };
+        assert!(app.begin_dialog_pointer(grip));
+        app.update_dialog_pointer(Point {
+            x: grip.x - 500.0,
+            y: grip.y - 500.0,
+        });
+        app.end_dialog_pointer();
+        app.frame();
+        let small = panel(&app);
+        assert_eq!((small.width, small.height), (220.0, 120.0));
+        let laid = app.scene().layout(deep).unwrap().rect;
+        assert!(laid.y > small.bottom(), "{laid:?} vs {small:?}");
+        assert!(
+            app.scene().composited_rect(deep).is_empty(),
+            "the button paints outside the frame: {:?}",
+            app.scene().composited_rect(deep)
+        );
+        assert!(app.scene().accessibility_rect(deep).is_empty());
+        assert_ne!(app.hit_test(center(laid)), Some(deep));
+
+        // Grow back, hover it: the tooltip pokes out of the frame's edge.
+        let corner = Point {
+            x: small.right() - 2.0,
+            y: small.bottom() - 2.0,
+        };
+        assert!(app.begin_dialog_pointer(corner));
+        app.update_dialog_pointer(Point {
+            x: corner.x + 500.0,
+            y: corner.y + 500.0,
+        });
+        app.end_dialog_pointer();
+        app.frame();
+        let frame = panel(&app);
+        let at = center(app.scene().composited_rect(deep));
+        assert!(!app.scene().composited_rect(deep).is_empty());
+        app.update_pointer_proximity(Point {
+            x: at.x + 1.0,
+            y: at.y,
+        });
+        app.frame();
+        app.update_pointer_proximity(at);
+        app.frame();
+        let tip = tooltip_bounds(&app, deep);
+        let (_, clip) = app.scene().composite_context(deep);
+        assert_eq!(
+            clip.intersect(&tip),
+            tip,
+            "the window clip {clip:?} cuts {tip:?}"
+        );
+        assert!(tip.y < frame.bottom());
+    }
+
+    /// The title bar's own close button: its row height is fractional, which
+    /// must not make the window think the button pokes out of the frame.
+    #[test]
+    fn a_windows_close_button_tooltip_shows_above_the_window() {
+        let view = Column::new().fill().child(
+            window((200.0, 100.0), (320.0, 236.0))
+                .resizable()
+                .padding(18.0)
+                .gap(9.0)
+                .on_dismiss(|| {})
+                .child(Button::new("Body")),
+        );
+        let mut app = App::mount_with_size(view, 800, 600);
+        app.frame();
+        let close = app.find_widget(Role::Button, Some("Close Window")).unwrap();
+        let frame = panel(&app);
+        let at = center(app.scene().composited_rect(close));
+        app.update_pointer_proximity(Point {
+            x: at.x + 1.0,
+            y: at.y,
+        });
+        app.frame();
+        app.update_pointer_proximity(at);
+        app.frame();
+        let tip = tooltip_bounds(&app, close);
+        assert!(tip.y < frame.y, "{tip:?} should poke above {frame:?}");
+        let (_, clip) = app.scene().composite_context(close);
+        assert_eq!(
+            clip.intersect(&tip),
+            tip,
+            "the window clip {clip:?} cuts {tip:?}"
+        );
     }
 }

@@ -124,6 +124,10 @@ pub struct Scene {
     /// Mutable order within an overlay level. Focusing/pressing a modeless window
     /// raises its overlay root without changing its shared plane.
     overlay_order: SecondaryMap<WidgetId, u64>,
+    /// Overlay roots that are controls with a floating tail (a hover tooltip
+    /// painted with the control). They escape a window's frame clip only while
+    /// the control itself lies inside it. See [`Scene::set_overlay_tail`].
+    overlay_tail: SecondaryMap<WidgetId, ()>,
     /// Dense list of overlay roots plus each root's position in it. A
     /// `SecondaryMap` iterates every slot up to the highest index ever inserted,
     /// so enumerating it costs O(scene size) once any overlay sits at a high slot.
@@ -267,6 +271,7 @@ impl Scene {
             properties: SecondaryMap::new(),
             overlay: SecondaryMap::new(),
             overlay_order: SecondaryMap::new(),
+            overlay_tail: SecondaryMap::new(),
             overlay_roots: Vec::new(),
             overlay_pos: SecondaryMap::new(),
             next_overlay_order: 1,
@@ -381,6 +386,7 @@ impl Scene {
             }
         }
         self.overlay_order.remove(id);
+        self.overlay_tail.remove(id);
         self.hidden.remove(id);
         if let Some(reference) = self.component_refs_by_node.remove(id) {
             self.component_refs.remove(&reference);
@@ -603,6 +609,11 @@ impl Scene {
             return;
         }
         self.layout.insert(id, b);
+        if self.overlay_tail.contains_key(id) {
+            // Whether the control still lies inside its window's frame decides
+            // its overlay clip, which instance fragments bake in.
+            self.render_revision = self.render_revision.wrapping_add(1);
+        }
         self.mark_bounds_dirty(id);
         // Bounds are part of the node's AccessKit description, so a moved box
         // re-sends exactly that node instead of forcing a full tree.
@@ -892,8 +903,8 @@ impl Scene {
         self.inherited_context_in(id, false)
     }
 
-    /// `spare` is set once the walk up has crossed an overlay root, so frame
-    /// clips above that root do not apply.
+    /// `spare` is set once the walk up has crossed an overlay root that escapes
+    /// frame clips, so frame clips above that root do not apply.
     fn composite_context_in(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
         let (mut offset, mut clip) = self.inherited_context_in(id, spare);
         let properties = self.composite_properties(id);
@@ -913,7 +924,7 @@ impl Scene {
         match self.tree.get(id).and_then(|node| node.parent) {
             Some(parent) => {
                 let (mut offset, mut clip) =
-                    self.composite_context_in(parent, spare || self.is_overlay(id));
+                    self.composite_context_in(parent, spare || self.overlay_spares_frame_clips(id));
                 if self.tree[parent].kind == WidgetKind::Scroll {
                     if let Some(layout) = self.layout.get(parent) {
                         let mut viewport = layout.rect;
@@ -929,6 +940,75 @@ impl Scene {
             }
             None => (Point::default(), UNBOUNDED),
         }
+    }
+
+    /// Marks overlay root `id` as a control whose overlay is only a tail that
+    /// extends past its layout box (a hover tooltip). Frame clips of the window
+    /// that holds it still clip the control itself, so it escapes them only
+    /// while it lies wholly inside the frame, where they cut nothing of it.
+    pub fn set_overlay_tail(&mut self, id: WidgetId) {
+        if self.overlay_tail.insert(id, ()).is_none() {
+            self.render_revision = self.render_revision.wrapping_add(1);
+        }
+    }
+
+    /// `true` if frame clips (`clip_spares_overlays`) above overlay root `id` do
+    /// not apply to it: a popup, menu or dialog layer always, a tail control
+    /// (see [`Scene::set_overlay_tail`]) while it lies inside them.
+    pub fn overlay_spares_frame_clips(&self, id: WidgetId) -> bool {
+        if !self.is_overlay(id) {
+            return false;
+        }
+        if !self.overlay_tail.contains_key(id) {
+            return true;
+        }
+        let Some(layout) = self.layout.get(id) else {
+            return true;
+        };
+        // The context with every frame clip applied, for the control's own box.
+        let (offset, clip) = self.full_context(id);
+        let mut rect = layout.rect;
+        rect.x += offset.x;
+        rect.y += offset.y;
+        // Edges, not `intersect == rect`: width and height do not survive the
+        // round trip through the far edge in f32.
+        const EPS: f32 = 0.01;
+        rect.is_empty()
+            || (rect.x >= clip.x - EPS
+                && rect.y >= clip.y - EPS
+                && rect.right() <= clip.right() + EPS
+                && rect.bottom() <= clip.bottom() + EPS)
+    }
+
+    /// [`Scene::composite_context`] where no overlay root spares any clip.
+    fn full_context(&self, id: WidgetId) -> (Point, Rect) {
+        let (mut offset, mut clip) = match self.tree.get(id).and_then(|node| node.parent) {
+            Some(parent) => {
+                let (mut offset, mut clip) = self.full_context(parent);
+                if self.tree[parent].kind == WidgetKind::Scroll {
+                    if let Some(layout) = self.layout.get(parent) {
+                        let mut viewport = layout.rect;
+                        viewport.x += offset.x;
+                        viewport.y += offset.y;
+                        clip = clip.intersect(&viewport);
+                    }
+                    let scroll = self.scroll_offset(parent);
+                    offset.x -= scroll.x;
+                    offset.y -= scroll.y;
+                }
+                (offset, clip)
+            }
+            None => (Point::default(), UNBOUNDED),
+        };
+        let properties = self.composite_properties(id);
+        offset.x += properties.translation.x;
+        offset.y += properties.translation.y;
+        if let Some(mut local) = properties.clip {
+            local.x += offset.x;
+            local.y += offset.y;
+            clip = clip.intersect(&local);
+        }
+        (offset, clip)
     }
 
     /// Geometry in the accessibility coordinate space: like
@@ -952,8 +1032,8 @@ impl Scene {
     fn accessibility_context(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
         let (mut offset, mut clip) = match self.tree.get(id).and_then(|node| node.parent) {
             Some(parent) => {
-                let (offset, clip) =
-                    self.accessibility_context(parent, spare || self.is_overlay(id));
+                let (offset, clip) = self
+                    .accessibility_context(parent, spare || self.overlay_spares_frame_clips(id));
                 if self.tree[parent].kind == WidgetKind::Scroll {
                     (offset, UNBOUNDED)
                 } else {

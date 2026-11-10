@@ -1383,10 +1383,11 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
             if nested || !attached || !scene.is_effectively_visible(id) {
                 continue;
             }
+            let spare = scene.overlay_spares_frame_clips(id);
             let mut offset = Point::default();
             let mut clip = None;
             for &ancestor in chain.iter().rev() {
-                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, true);
+                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, spare);
                 (offset, clip) = child_composite_state(scene, ancestor, offset, clip);
             }
             if clip.is_some_and(|clip| !clip.contains(p)) {
@@ -1449,10 +1450,11 @@ pub fn hit_test(runtime: &Runtime, scene: &Scene, p: Point) -> Option<WidgetId> 
             if nearest != Some(parent) || !attached || !scene.is_effectively_visible(id) {
                 continue;
             }
+            let spare = scene.overlay_spares_frame_clips(id);
             let mut offset = Point::default();
             let mut clip = None;
             for &ancestor in chain.iter().rev() {
-                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, true);
+                (offset, clip) = property_composite_state(scene, ancestor, offset, clip, spare);
                 (offset, clip) = child_composite_state(scene, ancestor, offset, clip);
             }
             let hit = nested_hit(runtime, scene, root, id, p)

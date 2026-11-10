@@ -746,6 +746,9 @@ pub(crate) fn set_tooltip_when(runtime: &Runtime, id: WidgetId, query: Responsiv
 /// the content laid out on top of it, such as text over a backdrop picture.
 pub(crate) fn elevate_tooltip_host(scene: &mut Scene, id: WidgetId) {
     scene.set_overlay_level(id, TOOLTIP_OVERLAY_LEVEL);
+    // Only the tooltip tail floats free of a window's frame clip; the control
+    // itself stays clipped to it.
+    scene.set_overlay_tail(id);
 }
 
 /// The largest media, on either axis, whose alt-text tooltip host is painted

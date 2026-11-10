@@ -1069,3 +1069,37 @@ fn paint_range_mut_records_ranges_until_an_untracked_write() {
     scene.paint_range_mut(id, 1..2)[0] = quad(1.5);
     assert_eq!(scene.paint_dirty_ranges(id), Some(&[1..2][..]));
 }
+
+/// A tail control whose box sits inside a frame clip escapes it even when its
+/// height does not survive the round trip through its far edge in f32.
+#[test]
+fn a_tail_overlay_inside_a_sparing_frame_clip_escapes_it_and_one_outside_does_not() {
+    use crate::scene::CompositeProperties;
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Column, None);
+    scene.set_root(root);
+    let frame = scene.insert(WidgetKind::Column, Some(root));
+    scene.set_composite_properties(
+        frame,
+        CompositeProperties {
+            clip: Some(Rect::new(519.0, 145.0, 368.0, 280.0)),
+            clip_spares_overlays: true,
+            ..Default::default()
+        },
+    );
+    let inside = scene.insert(WidgetKind::Button, Some(frame));
+    let outside = scene.insert(WidgetKind::Button, Some(frame));
+    let popup = scene.insert(WidgetKind::Column, Some(frame));
+    scene.set_rect(inside, Rect::new(834.0, 162.0, 36.0, 43.397_655));
+    scene.set_rect(outside, Rect::new(834.0, 500.0, 36.0, 40.0));
+    for id in [inside, outside, popup] {
+        scene.set_overlay_level(id, 5);
+    }
+    scene.set_overlay_tail(inside);
+    scene.set_overlay_tail(outside);
+    assert!(scene.overlay_spares_frame_clips(inside));
+    assert!(!scene.overlay_spares_frame_clips(outside));
+    assert!(scene.overlay_spares_frame_clips(popup));
+    assert!(scene.composited_rect(outside).is_empty());
+    assert!(!scene.composited_rect(inside).is_empty());
+}
