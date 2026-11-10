@@ -258,3 +258,43 @@ fn a_shown_tooltip_stays_inside_a_window_narrowed_under_it() {
         "tooltip {tooltip:?} leaves a window {width} wide"
     );
 }
+
+/// Drag a button over a drop target while the pointer hovers the target, in
+/// either order, then move away. Hover strokes are found by counting from the
+/// end of the paint, and the drop preview's lines were appended after them,
+/// so taking either off removed the other's primitives and left a stray line.
+#[test]
+fn hover_and_a_drop_preview_come_off_in_any_order() {
+    use schnellui::widgets::{Button, Row};
+    for hover_first in [true, false] {
+        let mut app = mount(
+            Row::new()
+                .gap(40.0)
+                .child(Button::new("source").on_drag_start(|| {}))
+                .child(Button::new("target").on_drop(|| {})),
+        );
+        let source = app.find_widget(Role::Button, Some("source")).unwrap();
+        let target = app.find_widget(Role::Button, Some("target")).unwrap();
+        let base = prims(&app, target);
+        let over = centre(&app, target);
+        assert!(app.begin_drag(centre(&app, source)));
+        app.update_drag(Point { x: 2.0, y: 150.0 });
+        if hover_first {
+            app.update_pointer_proximity(over);
+            app.update_drag(over);
+        } else {
+            app.update_drag(over);
+            app.update_pointer_proximity(over);
+        }
+        app.frame();
+        app.update_pointer_proximity(AWAY);
+        app.update_drag(Point { x: 2.0, y: 150.0 });
+        app.end_drag(Point { x: 2.0, y: 150.0 });
+        app.frame();
+        assert_eq!(
+            prims(&app, target),
+            base,
+            "hover first: {hover_first}, the target keeps preview or hover ink"
+        );
+    }
+}

@@ -72,7 +72,41 @@ pub fn register_tab_reorder(
     });
 }
 
-fn strip_drop_preview(scene: &mut Scene, hover: DropHover) {
+/// Runs `paint` on drop-preview paint with hover, press and focus lifted off,
+/// then lays them again on top. Those decorations find their strokes by
+/// counting from the end of the paint, so preview lines must never land
+/// after them, and taking the preview off must not cut into them.
+fn under_decorations(runtime: &Runtime, scene: &mut Scene, paint: impl FnOnce(&mut Scene)) {
+    let (ring, active, hover) = runtime.with(|rt| {
+        let rt = rt.borrow();
+        (
+            rt.ring.as_ref().map(|d| d.target),
+            rt.active.as_ref().map(|d| d.target),
+            rt.hover.as_ref().map(|d| d.target),
+        )
+    });
+    if let Some(id) = ring {
+        remove_focus_ring(runtime, scene, id);
+    }
+    strip_active_decoration(runtime, scene);
+    strip_hover_decoration(runtime, scene);
+    paint(scene);
+    if let Some(id) = hover {
+        apply_hover_decoration(runtime, scene, id);
+    }
+    if let Some(id) = active {
+        apply_active_decoration(runtime, scene, id);
+    }
+    if let Some(id) = ring {
+        apply_focus_ring(runtime, scene, id);
+    }
+}
+
+fn strip_drop_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
+    under_decorations(runtime, scene, |scene| strip_preview_lines(scene, hover));
+}
+
+fn strip_preview_lines(scene: &mut Scene, hover: DropHover) {
     let Some(pd) = scene.paint(hover.preview) else {
         return;
     };
@@ -212,6 +246,10 @@ fn resolve_drop_hover(
 }
 
 fn apply_drop_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
+    under_decorations(runtime, scene, |scene| push_preview(runtime, scene, hover));
+}
+
+fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
     let rect = if hover.preview_prims == DOCK_PREVIEW_PRIMS {
         let Some(layout) = scene.layout(hover.target) else {
             return;
@@ -343,7 +381,7 @@ pub fn update_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> bool {
         .filter(|hover| hover.target != capture.source);
     if hovered != capture.hovered {
         if let Some(previous) = capture.hovered {
-            strip_drop_preview(scene, previous);
+            strip_drop_preview(runtime, scene, previous);
         }
         if let Some(target) = hovered {
             apply_drop_preview(runtime, scene, target);
@@ -366,7 +404,7 @@ pub fn end_drag(runtime: &Runtime, scene: &mut Scene, _point: Point) -> DragRele
         return DragRelease::Click(capture.source);
     }
     if let Some(hover) = capture.hovered {
-        strip_drop_preview(scene, hover);
+        strip_drop_preview(runtime, scene, hover);
     }
     let accepted = capture.hovered.is_some();
     if let Some(hover) = capture.hovered {
