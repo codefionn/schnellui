@@ -25,6 +25,14 @@ pub enum PointerButton {
     Right,
 }
 
+/// A clipboard command, as Ctrl+C, Ctrl+X and Ctrl+V give the window host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ClipboardAction {
+    Copy,
+    Cut,
+    Paste,
+}
+
 /// A key the headless host can deliver, named as the debug server names them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum HostKey {
@@ -337,6 +345,17 @@ impl HeadlessHost {
         {
             self.pointer_leave();
         }
+    }
+
+    /// Copies, cuts or pastes through the window host's own clipboard
+    /// commands, against an in-memory clipboard.
+    pub fn clipboard(&mut self, action: ClipboardAction) {
+        let _ = match action {
+            ClipboardAction::Copy => self.host.copy_or_cut(false),
+            ClipboardAction::Cut => self.host.copy_or_cut(true),
+            ClipboardAction::Paste => self.host.paste(),
+        };
+        self.settle();
     }
 
     /// Clears keyboard focus.

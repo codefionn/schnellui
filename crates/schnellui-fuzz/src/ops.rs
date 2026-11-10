@@ -7,7 +7,7 @@ use proptest::prelude::*;
 use schnellui::scene::{Point, WidgetId};
 use schnellui::App;
 
-use crate::{HeadlessHost, HostKey, PointerButton, THEMES};
+use crate::{ClipboardAction, HeadlessHost, HostKey, PointerButton, THEMES};
 
 /// One input event. Pointer targets are resolved when the op runs, against
 /// whatever is on screen then, so a sequence stays meaningful after layout
@@ -40,6 +40,17 @@ pub enum Op {
     Frame,
     /// Fade to a theme over this many milliseconds.
     ThemeFade(usize, u32),
+    /// Copy, cut or paste, as the clipboard shortcuts do.
+    Clipboard(ClipboardAction),
+}
+
+fn clipboard() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        Just(ClipboardAction::Copy),
+        Just(ClipboardAction::Cut),
+        Just(ClipboardAction::Paste),
+    ]
+    .prop_map(Op::Clipboard)
 }
 
 fn key() -> impl Strategy<Value = HostKey> {
@@ -80,6 +91,7 @@ pub fn op() -> impl Strategy<Value = Op> {
         1 => (0.2f32..1.3, 0.2f32..1.3).prop_map(|(w, h)| Op::Resize(w, h)),
         1 => Just(Op::Blur),
         1 => (0..THEMES.len()).prop_map(Op::Theme),
+        1 => clipboard(),
     ]
 }
 
@@ -112,6 +124,7 @@ pub fn pace_op() -> impl Strategy<Value = Op> {
         1 => Just(Op::Leave),
         6 => (key(), proptest::bool::weighted(0.2)).prop_map(|(k, shift)| Op::Key(k, shift)),
         1 => Just(Op::Blur),
+        1 => clipboard(),
     ]
 }
 
@@ -191,6 +204,7 @@ pub fn apply(host: &mut HeadlessHost, op: &Op, mounted: (u32, u32), plain: bool)
             (mounted.1 as f32 * fh).round().max(crate::curve::MIN.1),
         ),
         Op::Blur => host.blur(),
+        Op::Clipboard(action) => host.clipboard(*action),
         Op::Theme(i) => {
             let theme = THEMES[i % THEMES.len()];
             host.set_theme(if plain {

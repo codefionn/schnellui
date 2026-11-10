@@ -8,7 +8,7 @@
 //! matches the paint it sits on, a decoration sized for paint that has since
 //! moved, or a tooltip or floating layer that left the window.
 
-pub use crate::windowed::headless::{HeadlessHost, HostKey, PointerButton};
+pub use crate::windowed::headless::{ClipboardAction, HeadlessHost, HostKey, PointerButton};
 
 use schnellui::widgets::{ComponentInteractions, InteractionStates, InteractionStyle, Theme};
 use schnellui::App;

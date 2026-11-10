@@ -14,8 +14,9 @@ use schnellui::scene::{Size, WidgetId};
 use schnellui::signal::create_signal;
 use schnellui::widgets::{
     Button, Checkbox, Column, ContextMenu, ContextMenuItem, Dialog, Dropdown, DropdownOption,
-    GroupedTabList, Link, List, ListItem, Pad, Radio, Row, Scroll, Slider, Stack, Switch, Tab,
-    TabBar, TabGroup, TabNode, Table, TableRow, Text, TextArea, TextInput, Theme, View, WrapMode,
+    GroupedTabList, Link, List, ListItem, Pad, Radio, RichDoc, RichSpan, RichText, Row, Scroll,
+    Slider, Stack, Switch, Tab, TabBar, TabGroup, TabNode, Table, TableRow, Text, TextArea,
+    TextInput, Theme, View, WrapMode,
 };
 use schnellui::{App, Remount, ThemeMode, WindowUpdate};
 
@@ -80,6 +81,7 @@ pub fn all() -> Vec<Component> {
         DIALOGS,
         GROUPED_TABS,
         TODO,
+        RICH_TEXT,
     ]
 }
 
@@ -1022,4 +1024,56 @@ pub const TODO: Component = Component {
     mount: todo,
     canonical: Some(todo_canonical),
     check: todo_check,
+};
+
+// --- rich text ---------------------------------------------------------------
+
+fn rich_text(mount: &Mount) -> HeadlessHost {
+    host(
+        || {
+            let doc = RichDoc::new()
+                .heading(2, ["Release notes"])
+                .paragraph([
+                    RichSpan::plain("This build has "),
+                    RichSpan::bold("bold"),
+                    RichSpan::plain(" and "),
+                    RichSpan::italic("italic"),
+                    RichSpan::plain(" words, inline "),
+                    RichSpan::code("code"),
+                    RichSpan::plain(" and a "),
+                    RichSpan::link("link"),
+                    RichSpan::plain(" in a paragraph long enough to wrap in a narrow window."),
+                ])
+                .bullet([RichSpan::plain("first point")])
+                .bullet([RichSpan::plain(
+                    "second point, which also runs long enough to wrap",
+                )])
+                .quote([RichSpan::plain("A quoted line.")])
+                .code_block(
+                    "rust",
+                    [
+                        vec![RichSpan::code("fn main() {")],
+                        vec![RichSpan::code("    println!(\"hi\");")],
+                        vec![RichSpan::code("}")],
+                    ],
+                );
+            Column::new()
+                .fill()
+                .child(
+                    Scroll::new()
+                        .fill()
+                        .child(Pad::all(12.0).child(RichText::new(doc))),
+                )
+                .child(Pad::all(8.0).child(Button::new("Done")))
+        },
+        mount,
+    )
+}
+
+pub const RICH_TEXT: Component = Component {
+    name: "rich_text",
+    size: (420, 300),
+    mount: rich_text,
+    canonical: None,
+    check: fine,
 };

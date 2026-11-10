@@ -50,7 +50,7 @@ use std::sync::{Mutex, MutexGuard};
 use proptest::test_runner::Config;
 use schnellui::widgets::{ComponentInteractions, InteractionStates, InteractionStyle, Theme};
 
-pub use schnellui::testing::fuzz::{HeadlessHost, HostKey, PointerButton};
+pub use schnellui::testing::fuzz::{ClipboardAction, HeadlessHost, HostKey, PointerButton};
 
 static SERIAL: Mutex<()> = Mutex::new(());
 

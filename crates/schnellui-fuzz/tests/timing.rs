@@ -69,4 +69,5 @@ timing_properties!(
     dialogs,
     grouped_tabs,
     todo,
+    rich_text,
 );
