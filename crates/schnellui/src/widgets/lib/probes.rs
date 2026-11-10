@@ -199,7 +199,30 @@ pub(crate) fn placement_faults(runtime: &Runtime, scene: &Scene, view: Rect) -> 
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
-        if !inside(rect) {
+        // A layer scoped to content inside a scroll view moves with that
+        // content, so it only has to stay within what scrolling reaches.
+        let scrolled_content = std::iter::successors(scene.node(id).and_then(|n| n.parent), |p| {
+            scene.node(*p).and_then(|n| n.parent)
+        })
+        .find(|p| scene.node(*p).is_some_and(|n| n.kind == WidgetKind::Scroll))
+        .and_then(|scroll| scene.node(scroll)?.children.first().copied())
+        .and_then(|content| scene.layout(content).map(|l| l.rect));
+        let within = |outer: Rect| {
+            rect.x >= outer.x - 0.5
+                && rect.right() <= outer.right() + 0.5
+                && rect.y >= outer.y - 0.5
+                && rect.bottom() <= outer.bottom() + 0.5
+        };
+        let parent = scene
+            .node(id)
+            .and_then(|n| n.parent)
+            .and_then(|p| scene.layout(p))
+            .map(|l| l.rect);
+        let placed = match (scrolled_content, parent) {
+            (Some(content), Some(parent)) if within(parent) => within(content),
+            _ => inside(rect),
+        };
+        if !placed {
             return Some(format!(
                 "overlay {id:?} {:?} {:?} at {rect:?} leaves window {view:?}",
                 node.kind,
