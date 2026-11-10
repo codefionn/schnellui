@@ -409,3 +409,63 @@ fn a_remount_keeps_the_restored_scroll_offset() {
     replacement.frame();
     assert_eq!(offset(&replacement, scroll_of(&replacement)), at);
 }
+
+/// The outermost edge of the keyboard ring on `id`, as a rect.
+fn ring_rect(app: &App, id: WidgetId) -> Option<Rect> {
+    app.scene()
+        .paint(id)?
+        .primitives
+        .iter()
+        .rev()
+        .find_map(|p| match *p {
+            schnellui::scene::Primitive::StrokeRect { rect, width, .. }
+                if width == schnellui::widgets::FOCUS_RING_W =>
+            {
+                Some(rect)
+            }
+            _ => None,
+        })
+}
+
+/// The ring may poke out of the content itself, where the first and last
+/// control sit at its ends and there is nothing further to scroll to; every
+/// other ring has to lie inside the window.
+fn assert_ring_shown(app: &App, sv: WidgetId, i: usize, what: &str) {
+    let viewport = app.scene().layout(sv).unwrap().rect;
+    let ring = ring_rect(app, button(app, i)).expect("ring");
+    let top = viewport.y + offset(app, sv);
+    if offset(app, sv) > 0.0 {
+        assert!(
+            ring.y >= top - 0.01,
+            "{what} {i}: ring top {} < {top}",
+            ring.y
+        );
+    }
+    if i < 19 {
+        let bottom = top + viewport.height;
+        assert!(
+            ring.bottom() <= bottom + 0.01,
+            "{what} {i}: ring bottom {} past {bottom}",
+            ring.bottom()
+        );
+    }
+}
+
+#[test]
+fn tab_to_a_control_at_the_viewport_edge_shows_its_whole_ring() {
+    let mut app = App::mount_with_size(
+        Scroll::new().size(300.0, 120.0).child(buttons(20)),
+        400,
+        300,
+    );
+    app.frame();
+    let sv = scroll_of(&app);
+    for i in 0..20 {
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        assert_ring_shown(&app, sv, i, "button");
+    }
+    for i in (0..19).rev() {
+        assert!(app.dispatch_key(UiKey::Tab { shift: true }));
+        assert_ring_shown(&app, sv, i, "back");
+    }
+}

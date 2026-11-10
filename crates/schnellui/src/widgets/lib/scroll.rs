@@ -796,31 +796,51 @@ pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: R
     moved
 }
 
-/// [`reveal_rect`] for the control `id`: its laid-out box, or for the focused
-/// text area the row its caret is on, so typing and arrows keep the caret in
-/// view rather than the whole (possibly very tall) area.
+/// What a reveal of the control `id` aims at: its laid-out box with the
+/// keyboard focus ring around it, or for the focused text area the caret row
+/// plus the area's padding, so typing and arrows keep the caret in view rather
+/// than the whole (possibly very tall) area. `None` while it has no layout.
+pub fn reveal_target(
+    runtime: &Runtime,
+    scene: &Scene,
+    shaper: &mut TextShaper,
+    id: WidgetId,
+) -> Option<Rect> {
+    let rect = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty())?;
+    let focused = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
+    if !focused {
+        return Some(rect);
+    }
+    if scene
+        .node(id)
+        .is_some_and(|n| n.kind == WidgetKind::TextArea)
+    {
+        return Some(
+            crate::widgets::text_area::caret_rect(runtime, shaper, id, rect).unwrap_or(rect),
+        );
+    }
+    let reach = focus_ring_reach(scene, id);
+    Some(Rect::new(
+        rect.x - reach,
+        rect.y - reach,
+        rect.width + 2.0 * reach,
+        rect.height + 2.0 * reach,
+    ))
+}
+
+/// [`reveal_rect`] for the [`reveal_target`] of the control `id`.
 pub fn reveal_widget(
     runtime: &Runtime,
     scene: &mut Scene,
     shaper: &mut TextShaper,
     id: WidgetId,
 ) -> bool {
-    let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
-        return false;
-    };
-    let focused = scene
-        .a11y(id)
-        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
-    let rect = if focused
-        && scene
-            .node(id)
-            .is_some_and(|n| n.kind == WidgetKind::TextArea)
-    {
-        crate::widgets::text_area::caret_rect(runtime, shaper, id, rect).unwrap_or(rect)
-    } else {
-        rect
-    };
-    reveal_rect(runtime, scene, id, rect)
+    match reveal_target(runtime, scene, shaper, id) {
+        Some(rect) => reveal_rect(runtime, scene, id, rect),
+        None => false,
+    }
 }
 
 /// Asks for `id` to be revealed once layout has settled: a layout that is still

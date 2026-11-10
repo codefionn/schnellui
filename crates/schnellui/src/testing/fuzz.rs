@@ -78,21 +78,14 @@ pub fn scrollbars(app: &App) -> Vec<ScrollbarTarget> {
 }
 
 /// The layout-space rect a keyboard reveal aims at for the control `id`: the
-/// caret row of a text area, else the control's own box. `None` while the
-/// control has no layout, or an area has no row table yet.
+/// caret row of a text area, else the control's own box with its focus ring.
+/// `None` while the control has no layout, or an area has no row table yet.
 pub fn reveal_target(
     app: &mut App,
     id: schnellui::scene::WidgetId,
 ) -> Option<schnellui::scene::Rect> {
-    let rect = app.scene().layout(id)?.rect;
-    if rect.is_empty() {
-        return None;
-    }
-    if app.scene().node(id)?.kind == schnellui::scene::WidgetKind::TextArea {
-        let widgets = app.widgets.clone();
-        return crate::widgets::caret_rect(&widgets, &mut app.text, id, rect);
-    }
-    Some(rect)
+    let widgets = app.widgets.clone();
+    crate::widgets::reveal_target(&widgets, app.scene(), &mut app.text, id)
 }
 
 /// All of the checks above, first failure first.

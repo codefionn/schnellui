@@ -499,6 +499,27 @@ pub(crate) fn restore_decorations(runtime: &Runtime, scene: &mut Scene, lifted: 
     }
 }
 
+/// Whether the focus ring of a control of this kind stands outside its box.
+fn ring_outsets(component: Option<InteractionComponent>, kind: Option<WidgetKind>) -> bool {
+    matches!(
+        component,
+        Some(InteractionComponent::Button | InteractionComponent::Toggle)
+    ) || kind == Some(WidgetKind::Link)
+}
+
+/// How far the keyboard focus ring of `id` reaches past the control's box:
+/// the gap plus the stroke for a free-standing control, `0` for one whose ring
+/// sits on or inside its edge. A reveal adds this, so the ring is not cut off
+/// at the edge of the viewport it scrolled into.
+pub fn focus_ring_reach(scene: &Scene, id: WidgetId) -> f32 {
+    let kind = scene.node(id).map(|node| node.kind);
+    if ring_outsets(interaction_component(scene, id), kind) {
+        FOCUS_RING_W + FOCUS_RING_GAP
+    } else {
+        0.0
+    }
+}
+
 fn interaction_component(scene: &Scene, id: WidgetId) -> Option<InteractionComponent> {
     match scene.node(id)?.kind {
         WidgetKind::Button => Some(InteractionComponent::Button),
@@ -943,11 +964,7 @@ fn apply_interaction_style(
         // its edge. Rows, tabs and options sit flush against their
         // neighbours, which would paint over an outset ring, so theirs stays
         // inside. A field's ring replaces its border, so it is not doubled.
-        let outset = border_width == FOCUS_RING_W
-            && (matches!(
-                component,
-                Some(InteractionComponent::Button | InteractionComponent::Toggle)
-            ) || kind == Some(WidgetKind::Link));
+        let outset = border_width == FOCUS_RING_W && ring_outsets(component, kind);
         let inset = if outset {
             -(FOCUS_RING_W + FOCUS_RING_GAP)
         } else if kind == Some(WidgetKind::Scroll) && border_width == FOCUS_RING_W {
