@@ -502,9 +502,17 @@ where
         }
         changed |= state.set_viewport(viewport);
         changed |= state.invalidate_width(width);
-        for (key, id) in &self.mounted {
+        // In list order: each height change re-anchors the offset on the row it
+        // left at the top, so the order the rows are measured in shows in where
+        // the viewport ends up. A hash map's own order would differ from one
+        // mount to the next.
+        let (first, last) = state.mounted_range.unwrap_or((0, 0));
+        for index in first..last.min(state.keys.len()) {
+            let Some(id) = state.keys.get(index).and_then(|key| self.mounted.get(key)) else {
+                continue;
+            };
             if let Some(box_) = scene.layout(*id) {
-                changed |= state.set_height(key, box_.rect.height);
+                changed |= state.set_height_at(index, box_.rect.height);
             }
         }
         if !changed {
@@ -756,10 +764,15 @@ where
         true
     }
 
+    #[cfg(test)]
     fn set_height(&mut self, key: &K, height: f32) -> bool {
-        let Some(&index) = self.positions.get(key) else {
-            return false;
-        };
+        match self.positions.get(key) {
+            Some(&index) => self.set_height_at(index, height),
+            None => false,
+        }
+    }
+
+    fn set_height_at(&mut self, index: usize, height: f32) -> bool {
         let height = sane_height(height);
         self.capture_anchor();
         if self.heights.set(index, height) {

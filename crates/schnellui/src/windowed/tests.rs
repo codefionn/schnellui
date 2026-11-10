@@ -895,6 +895,57 @@ mod wheel_under_a_resting_pointer {
     }
 }
 
+/// What a virtual list does is a function of its input, not of the seed of
+/// the hash map that holds its mounted rows.
+mod virtual_list_determinism {
+    use super::super::headless::{HeadlessHost, HostKey};
+    use crate::a11y::Role;
+    use crate::widgets::{Button, Column, Pad, Row, VirtualList, VirtualListController};
+    use crate::{theme, App, ThemeMode};
+
+    /// Mounts a list of rows that measure taller than the estimate, changes
+    /// the theme so they remount and measure again, and goes to the end.
+    fn end_offset() -> f32 {
+        let controller = VirtualListController::new(0_u32..60, 30.0);
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::DARK),
+            move || {
+                Column::new()
+                    .child(Pad::all(8.0).child(Row::new().child(Button::new("Append"))))
+                    .child(
+                        VirtualList::new(controller.clone(), |key: &u32| {
+                            Button::new(format!("Row {key}"))
+                        })
+                        .label("Rows")
+                        .size(300.0, 150.0),
+                    )
+            },
+            340,
+            240,
+            1.0,
+        );
+        app.apply_reduced_motion(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        host.set_theme(theme::CANDY);
+        host.key(&HostKey::End, false, false);
+        let scroll = host
+            .app()
+            .find_widget(Role::ScrollView, Some("Rows"))
+            .unwrap();
+        host.app().scene().scroll_offset(scroll).y
+    }
+
+    #[test]
+    fn the_same_input_ends_at_the_same_offset_every_time() {
+        let ends: Vec<f32> = (0..120).map(|_| end_offset()).collect();
+        assert!(
+            ends.iter().all(|end| (end - ends[0]).abs() < 0.01),
+            "the same input ended at different offsets: {ends:?}"
+        );
+    }
+}
+
 /// Rows a wheel mounts under a pointer at rest are hovered when they appear,
 /// not when the pointer next moves.
 mod hover_after_a_relayout {
