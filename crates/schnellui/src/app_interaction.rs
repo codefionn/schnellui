@@ -247,13 +247,7 @@ impl App {
             }
             if matches!(key, UiKey::Enter | UiKey::Space { .. }) {
                 if let Some(row) = self.focused_context_menu_row() {
-                    let Some(activation) = self.activate_context_menu_item(row) else {
-                        return false;
-                    };
-                    if activation.action == widgets::ContextMenuAction::SelectAll {
-                        let _ = self.select_all_text_for(activation.source);
-                    }
-                    return true;
+                    return self.activate_context_menu_item(row).is_some();
                 }
             }
             return self.dismiss_context_menu();
@@ -875,8 +869,10 @@ impl App {
         schnellui::widgets::context_menu_is_open(&self.widgets)
     }
 
-    /// Activates an open context-menu row. Custom callbacks fire here; native
-    /// hosts receive built-in clipboard commands in the returned activation.
+    /// Activates an open context-menu row. Custom callbacks fire here and
+    /// Select All is applied. Cut, Copy and Paste wait in
+    /// [`App::take_pending_clipboard`] for the host that owns the clipboard,
+    /// whichever input (pointer, key or accessibility action) picked the row.
     pub fn activate_context_menu_item(
         &mut self,
         id: scene::WidgetId,
@@ -887,7 +883,22 @@ impl App {
         if let Some(back) = back {
             let _ = self.focus(Some(back));
         }
+        match activation.action {
+            widgets::ContextMenuAction::SelectAll => {
+                let _ = self.select_all_text_for(activation.source);
+            }
+            widgets::ContextMenuAction::Cut
+            | widgets::ContextMenuAction::Copy
+            | widgets::ContextMenuAction::Paste => self.pending_clipboard = Some(activation),
+            widgets::ContextMenuAction::Custom => {}
+        }
         Some(activation)
+    }
+
+    /// The clipboard command a context-menu row asked for, if any. A host
+    /// calls this after every dispatch and performs it on its clipboard.
+    pub fn take_pending_clipboard(&mut self) -> Option<widgets::ContextMenuActivation> {
+        self.pending_clipboard.take()
     }
 
     /// Places the caret (press) or extends the selection (`extend`: drag /

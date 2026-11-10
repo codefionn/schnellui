@@ -547,6 +547,10 @@ pub struct App {
     /// Thread-safe native wake handle. It is inert for headless applications and
     /// connected to the winit proxy when a window starts.
     redraw_signal: RedrawSignal,
+    /// A Cut, Copy or Paste picked from a context menu. The clipboard belongs
+    /// to the host, so every host drains this after it dispatches input
+    /// ([`App::take_pending_clipboard`]).
+    pending_clipboard: Option<widgets::ContextMenuActivation>,
     /// Optional native window-title source for dynamic application metadata
     /// such as an OSC 0/2 terminal title.
     window_title_provider: Option<Box<dyn FnMut() -> String + 'static>>,

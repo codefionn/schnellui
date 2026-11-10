@@ -133,7 +133,8 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     }
                     AccessKitWindowEvent::ActionRequested(request) => {
                         self.remount_trigger = "accesskit_action";
-                        if self.app.dispatch_action(&request) {
+                        let acted = self.app.dispatch_action(&request);
+                        if self.drain_pending_clipboard() | acted {
                             self.poll_remount();
                             if let Some(window) = &self.window {
                                 window.request_redraw();

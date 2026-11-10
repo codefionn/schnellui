@@ -180,25 +180,32 @@ impl WindowedApp {
     }
 
     pub(super) fn activate_context_menu_item(&mut self, id: SceneWidgetId) -> bool {
-        let Some(activation) = self.app.activate_context_menu_item(id) else {
+        let activated = self.app.activate_context_menu_item(id).is_some();
+        self.drain_pending_clipboard();
+        activated
+    }
+
+    /// Performs the Cut, Copy or Paste a context-menu row left on the app.
+    /// Every dispatch that can activate a row ends here, so the pointer, key
+    /// and accessibility paths share one copy of the logic.
+    pub(super) fn drain_pending_clipboard(&mut self) -> bool {
+        use schnellui::widgets::ContextMenuAction;
+        let Some(request) = self.app.take_pending_clipboard() else {
             return false;
         };
-        match activation.action {
-            schnellui::widgets::ContextMenuAction::Cut => {
-                let _ = self.copy_or_cut_from(activation.source, true);
-            }
-            schnellui::widgets::ContextMenuAction::Copy => {
-                let _ = self.copy_or_cut_from(activation.source, false);
-            }
-            schnellui::widgets::ContextMenuAction::Paste => {
-                let _ = self.paste_into(activation.source);
-            }
-            schnellui::widgets::ContextMenuAction::SelectAll => {
-                let _ = self.app.select_all_text_for(activation.source);
-            }
-            schnellui::widgets::ContextMenuAction::Custom => {}
+        match request.action {
+            ContextMenuAction::Cut => self.copy_or_cut_from(request.source, true),
+            ContextMenuAction::Copy => self.copy_or_cut_from(request.source, false),
+            ContextMenuAction::Paste => self.paste_into(request.source),
+            ContextMenuAction::SelectAll | ContextMenuAction::Custom => false,
         }
-        true
+    }
+
+    /// Dispatches a key to the app, then performs any clipboard command a
+    /// context-menu row asked for.
+    pub(super) fn dispatch_ui_key(&mut self, key: UiKey<'_>) -> bool {
+        let changed = self.app.dispatch_key(key);
+        self.drain_pending_clipboard() | changed
     }
 
     /// A key pressed while a menu is open: the arrows, Home and End walk its
@@ -960,6 +967,7 @@ impl WindowedApp {
             target_node: schnellui::a11y::to_access_id(target),
             data,
         });
+        let changed = self.drain_pending_clipboard() | changed;
         self.settle_debug_command();
         DebugReply::json(
             200,
@@ -989,43 +997,43 @@ impl WindowedApp {
             }
         }
         let changed = match name.as_str() {
-            "tab" => self.app.dispatch_key(UiKey::Tab {
+            "tab" => self.dispatch_ui_key(UiKey::Tab {
                 shift: request.shift,
             }),
-            "enter" => self.app.dispatch_key(UiKey::Enter),
-            "space" => self.app.dispatch_key(UiKey::Space {
+            "enter" => self.dispatch_ui_key(UiKey::Enter),
+            "space" => self.dispatch_ui_key(UiKey::Space {
                 shift: request.shift,
             }),
-            "backspace" => self.app.dispatch_key(UiKey::Backspace),
-            "delete" => self.app.dispatch_key(UiKey::Delete),
-            "left" => self.app.dispatch_key(UiKey::Left {
-                shift: request.shift,
-                ctrl: request.ctrl,
-            }),
-            "right" => self.app.dispatch_key(UiKey::Right {
+            "backspace" => self.dispatch_ui_key(UiKey::Backspace),
+            "delete" => self.dispatch_ui_key(UiKey::Delete),
+            "left" => self.dispatch_ui_key(UiKey::Left {
                 shift: request.shift,
                 ctrl: request.ctrl,
             }),
-            "up" => self.app.dispatch_key(UiKey::Up {
+            "right" => self.dispatch_ui_key(UiKey::Right {
+                shift: request.shift,
+                ctrl: request.ctrl,
+            }),
+            "up" => self.dispatch_ui_key(UiKey::Up {
                 shift: request.shift,
             }),
-            "down" => self.app.dispatch_key(UiKey::Down {
+            "down" => self.dispatch_ui_key(UiKey::Down {
                 shift: request.shift,
             }),
-            "home" => self.app.dispatch_key(UiKey::Home {
+            "home" => self.dispatch_ui_key(UiKey::Home {
                 shift: request.shift,
             }),
-            "end" => self.app.dispatch_key(UiKey::End {
+            "end" => self.dispatch_ui_key(UiKey::End {
                 shift: request.shift,
             }),
-            "page_up" => self.app.dispatch_key(UiKey::PageUp),
-            "page_down" => self.app.dispatch_key(UiKey::PageDown),
-            "escape" => self.app.dispatch_key(UiKey::Escape),
+            "page_up" => self.dispatch_ui_key(UiKey::PageUp),
+            "page_down" => self.dispatch_ui_key(UiKey::PageDown),
+            "escape" => self.dispatch_ui_key(UiKey::Escape),
             "browser_back" => self.app.dispatch_navigation(crate::Navigation::Back),
             "browser_forward" => self.app.dispatch_navigation(crate::Navigation::Forward),
-            "select_all" => self.app.dispatch_key(UiKey::SelectAll),
-            "undo" => self.app.dispatch_key(UiKey::Undo),
-            "redo" => self.app.dispatch_key(UiKey::Redo),
+            "select_all" => self.dispatch_ui_key(UiKey::SelectAll),
+            "undo" => self.dispatch_ui_key(UiKey::Undo),
+            "redo" => self.dispatch_ui_key(UiKey::Redo),
             "text" => {
                 let Some(text) = request.text.as_deref() else {
                     return DebugReply::error(400, "text key requires text");
@@ -1044,7 +1052,7 @@ impl WindowedApp {
                     {
                         true
                     }
-                    _ => self.app.dispatch_key(UiKey::Char(text)),
+                    _ => self.dispatch_ui_key(UiKey::Char(text)),
                 }
             }
             // An input method's committed text, as the window's IME event
@@ -1246,7 +1254,7 @@ impl WindowedApp {
             Key::Character(c) if command && c.eq_ignore_ascii_case("y") => UiKey::Redo,
             _ => {
                 if let Some(key) = physical_key {
-                    return self.app.dispatch_key(key);
+                    return self.dispatch_ui_key(key);
                 }
                 // Character insertion rides `KeyEvent::text` (the layout- and
                 // shift-resolved text). Command chords and control characters
@@ -1256,13 +1264,13 @@ impl WindowedApp {
                 }
                 return match &event.text {
                     Some(t) if !t.is_empty() && !t.chars().any(|ch| ch.is_control()) => {
-                        self.app.dispatch_key(UiKey::Char(t))
+                        self.dispatch_ui_key(UiKey::Char(t))
                     }
                     _ => false,
                 };
             }
         };
-        self.app.dispatch_key(key)
+        self.dispatch_ui_key(key)
     }
 }
 

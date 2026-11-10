@@ -137,6 +137,7 @@ impl App {
             escape_exits: false,
             redraw_interval: None,
             redraw_signal: RedrawSignal::default(),
+            pending_clipboard: None,
             window_title_provider: None,
             interaction_trace: None,
         };

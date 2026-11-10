@@ -977,3 +977,101 @@ fn multi_click_counting_follows_the_app_clock() {
         TextPointerAction::SelectWord
     );
 }
+
+mod context_menu_clipboard {
+    use super::*;
+    use crate::debug_server::DebugKey;
+    use accesskit::{Action, ActionRequest, TreeId};
+
+    fn field_host() -> (super::super::WindowedApp, crate::scene::WidgetId) {
+        let mut app = App::mount(crate::widgets::TextInput::new("Buy oat milk"));
+        app.frame();
+        let input = app.find_widget(Role::TextInput, None).unwrap();
+        app.focus(Some(input));
+        let mut host = windowed_host(app, None);
+        host.handle_debug_key(key("select_all"));
+        (host, input)
+    }
+
+    fn key(name: &str) -> DebugKey {
+        DebugKey {
+            key: name.into(),
+            shift: false,
+            ctrl: false,
+            text: None,
+        }
+    }
+
+    fn value(host: &super::super::WindowedApp, id: crate::scene::WidgetId) -> String {
+        host.app.scene().a11y(id).unwrap().value.clone().unwrap()
+    }
+
+    /// What the window's AccessKit handler does: dispatch, then drain.
+    fn act(host: &mut super::super::WindowedApp, action: Action, id: crate::scene::WidgetId) {
+        let request = ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: crate::a11y::to_access_id(id),
+            data: None,
+        };
+        assert!(host.app.dispatch_action(&request));
+        host.drain_pending_clipboard();
+        host.app.frame();
+    }
+
+    fn pick(host: &mut super::super::WindowedApp, name: &str) {
+        let item = host.app.find_widget(Role::MenuItem, Some(name)).unwrap();
+        act(host, Action::Click, item);
+    }
+
+    #[test]
+    fn accesskit_copy_then_paste() {
+        let (mut host, input) = field_host();
+        act(&mut host, Action::ShowContextMenu, input);
+        pick(&mut host, "Copy");
+        assert_eq!(host.clipboard.read_text().as_deref(), Ok("Buy oat milk"));
+        host.handle_debug_key(key("end"));
+        act(&mut host, Action::ShowContextMenu, input);
+        pick(&mut host, "Paste");
+        assert_eq!(value(&host, input), "Buy oat milkBuy oat milk");
+    }
+
+    #[test]
+    fn accesskit_cut() {
+        let (mut host, input) = field_host();
+        act(&mut host, Action::ShowContextMenu, input);
+        pick(&mut host, "Cut");
+        assert_eq!(value(&host, input), "");
+        assert_eq!(host.clipboard.read_text().as_deref(), Ok("Buy oat milk"));
+    }
+
+    #[test]
+    fn debug_enter_on_focused_row_copies_and_pastes() {
+        let (mut host, input) = field_host();
+        act(&mut host, Action::ShowContextMenu, input);
+        // Rows: Cut, Copy, Paste, Select All. Home lands on the first.
+        host.handle_debug_key(key("home"));
+        host.handle_debug_key(key("down"));
+        host.handle_debug_key(key("enter"));
+        assert_eq!(host.clipboard.read_text().as_deref(), Ok("Buy oat milk"));
+        host.handle_debug_key(key("end"));
+        act(&mut host, Action::ShowContextMenu, input);
+        host.handle_debug_key(key("home"));
+        host.handle_debug_key(key("down"));
+        host.handle_debug_key(key("down"));
+        host.handle_debug_key(key("enter"));
+        assert_eq!(value(&host, input), "Buy oat milkBuy oat milk");
+    }
+
+    #[test]
+    fn pointer_path_still_pastes() {
+        let (mut host, input) = field_host();
+        act(&mut host, Action::ShowContextMenu, input);
+        pick(&mut host, "Copy");
+        host.handle_debug_key(key("end"));
+        act(&mut host, Action::ShowContextMenu, input);
+        let item = host.app.find_widget(Role::MenuItem, Some("Paste")).unwrap();
+        assert!(host.activate_context_menu_item(item));
+        assert_eq!(value(&host, input), "Buy oat milkBuy oat milk");
+    }
+}

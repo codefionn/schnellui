@@ -341,15 +341,7 @@ impl App {
             Action::Click
                 if schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id) =>
             {
-                let activation = self.activate_context_menu_item(id);
-                if let Some(activation) = activation {
-                    if activation.action == widgets::ContextMenuAction::SelectAll {
-                        let _ = self.select_all_text_for(activation.source);
-                    }
-                    true
-                } else {
-                    false
-                }
+                self.activate_context_menu_item(id).is_some()
             }
             // Activating a text field focuses it for typing, as a pointer
             // click on it does.
