@@ -119,3 +119,8 @@ fn user_locale() -> Option<Locale> {
         .ok()
         .and_then(Locale::parse)
 }
+
+/// No desktop portal here, so nothing registers.
+pub(crate) fn register_app_id(_id: &str) -> Result<bool, String> {
+    Ok(false)
+}

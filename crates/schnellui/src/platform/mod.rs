@@ -10,11 +10,13 @@
 //! stateful native clipboard and opens it only on first use. [`pick_folder`]
 //! shows the native folder chooser off the UI thread.
 
+mod app_id;
 mod clipboard;
 mod folder_picker;
 mod os;
 mod preferences;
 
+pub use app_id::{app_id, is_valid_app_id, portal_app_id, set_app_id, AppIdError};
 pub use clipboard::{ClipboardError, ClipboardImage, SystemClipboard};
 pub use folder_picker::pick_folder;
 pub use preferences::{

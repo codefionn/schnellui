@@ -56,3 +56,8 @@ pub(crate) fn watch(mut callback: impl FnMut(PreferenceChange) -> bool + Send + 
     });
     true
 }
+
+/// No desktop portal here, so nothing registers.
+pub(crate) fn register_app_id(_id: &str) -> Result<bool, String> {
+    Ok(false)
+}

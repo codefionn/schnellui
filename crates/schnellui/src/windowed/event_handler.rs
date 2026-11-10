@@ -12,6 +12,15 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             // it visible first silently prevents reliable platform registration.
             .with_visible(false)
             .with_inner_size(self.init_phys);
+        // The Wayland app id and X11 class, so the desktop matches the window to the
+        // app's .desktop file and portal permissions.
+        #[cfg(target_os = "linux")]
+        let attrs = match crate::platform::app_id() {
+            Some(id) => {
+                winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, id, id)
+            }
+            None => attrs,
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {

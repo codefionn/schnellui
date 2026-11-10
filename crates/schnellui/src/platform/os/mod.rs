@@ -8,10 +8,10 @@ mod unsupported;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::{detect, watch};
+pub(super) use linux::{detect, register_app_id, watch};
 #[cfg(target_os = "macos")]
-pub(super) use macos::{detect, watch};
+pub(super) use macos::{detect, register_app_id, watch};
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(super) use unsupported::{detect, watch};
+pub(super) use unsupported::{detect, register_app_id, watch};
 #[cfg(target_os = "windows")]
-pub(super) use windows::{detect, watch};
+pub(super) use windows::{detect, register_app_id, watch};

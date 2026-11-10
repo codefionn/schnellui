@@ -4,6 +4,17 @@ use ashpd::desktop::settings::{
 };
 use futures_util::StreamExt;
 
+/// Registers `id` with the portal's host registry and says whether it did. Inside a
+/// sandbox the portal knows the sandbox's own id already, so nothing registers.
+pub(crate) fn register_app_id(id: &str) -> Result<bool, String> {
+    if ashpd::is_sandboxed() {
+        return Ok(false);
+    }
+    let id = ashpd::AppID::try_from(id).map_err(|e| e.to_string())?;
+    async_io::block_on(ashpd::register_host_app(id)).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 pub(crate) fn detect(preferences: &mut PlatformPreferences) {
     let detected = async_io::block_on(async {
         let settings = Settings::new().await.ok()?;
