@@ -877,16 +877,20 @@ impl AreaState {
                     }
                 },
             ),
-            // Line-scoped Home/End — the multi-line semantics (SOUL §8.1).
+            // Home/End stop at the visual row of a wrapped line, the way Up
+            // and Down step by visual row; otherwise they cover the line.
             EditKey::Home { select } => map_selections(
                 &mut self.caret,
                 &mut self.anchor,
                 &mut self.secondary,
                 |selection| {
-                    let target = self.value[..selection.caret]
-                        .rfind('\n')
-                        .map(|p| p + 1)
-                        .unwrap_or(0);
+                    let target = visual_row_edge(&self.cache, &self.value, selection.caret, false)
+                        .unwrap_or_else(|| {
+                            self.value[..selection.caret]
+                                .rfind('\n')
+                                .map(|p| p + 1)
+                                .unwrap_or(0)
+                        });
                     TextSelection {
                         caret: target,
                         anchor: if *select { selection.anchor } else { target },
@@ -898,10 +902,13 @@ impl AreaState {
                 &mut self.anchor,
                 &mut self.secondary,
                 |selection| {
-                    let target = self.value[selection.caret..]
-                        .find('\n')
-                        .map(|p| selection.caret + p)
-                        .unwrap_or(self.value.len());
+                    let target = visual_row_edge(&self.cache, &self.value, selection.caret, true)
+                        .unwrap_or_else(|| {
+                            self.value[selection.caret..]
+                                .find('\n')
+                                .map(|p| selection.caret + p)
+                                .unwrap_or(self.value.len())
+                        });
                     TextSelection {
                         caret: target,
                         anchor: if *select { selection.anchor } else { target },
@@ -1133,6 +1140,36 @@ fn wrapped_row(
     let g0 = (line.glyph_start as usize).min(shaped.glyphs.len());
     let g1 = (g0 + line.glyph_count as usize).min(shaped.glyphs.len());
     (start, end, &shaped.glyphs[g0..g1])
+}
+
+/// The start (`end == false`) or end of the visual row holding `caret` in a
+/// wrapped line, or `None` when the line is not wrapped or its shape is stale.
+/// A row that a later row continues ends before its last glyph, the rule the
+/// pointer mapping uses, so the caret is drawn on that row.
+fn visual_row_edge(cache: &AreaCache, value: &str, caret: usize, end: bool) -> Option<usize> {
+    if !cache.shape_key.is_some_and(|k| k.wrap != WrapMode::NoWrap) || !cache.usable() {
+        return None;
+    }
+    let line = cache.line_of(caret);
+    let info = cache.lines.get(line)?;
+    let shaped = info
+        .shape
+        .as_deref()
+        .filter(|_| info.epoch == cache.epoch)?;
+    if shaped.lines.len() < 2 {
+        return None;
+    }
+    let ls = cache.starts[line];
+    let len = cache.line_end(line, value.len()) - ls;
+    let (sub, _) = caret_x_in_wrapped(shaped, caret - ls, len, 1.0);
+    if sub >= shaped.lines.len() {
+        return None;
+    }
+    Some(if end {
+        ls + wrapped_row_hit(shaped, sub, len, f32::INFINITY).0
+    } else {
+        ls + wrapped_row(shaped, sub, len).0
+    })
 }
 
 /// The caret byte and the byte under physical offset `x` (from the line's
@@ -2237,6 +2274,56 @@ mod tests {
         // first visual row of the first line parks at 0
         w.up();
         assert_eq!(w.caret(), 0);
+    }
+
+    /// Sequence (rich_text editor): a paragraph wraps onto several rows; put
+    /// the caret in the middle of the second row and press Shift+Home. The
+    /// selection reached back to the start of the paragraph, two rows up,
+    /// while Up and Down already moved by visual row. Home and End now stop
+    /// at the edges of the row the caret is on.
+    #[test]
+    fn home_and_end_stop_at_the_visual_row_of_a_wrapped_paragraph() {
+        let value = format!("{PARA}\nab");
+        let mut w = Wrapped::new(&value, WrapMode::Anywhere);
+        let rows = w.row_starts(0);
+        assert!(rows.len() >= 3, "wraps onto three rows or more: {rows:?}");
+        let mid = rows[1] + 1;
+
+        w.set_caret(mid);
+        w.press(EditKey::Home { select: true });
+        assert_eq!(caret_anchor(&w.runtime, w.id), (rows[1], mid), "Shift+Home");
+
+        w.set_caret(mid);
+        w.press(EditKey::End { select: false });
+        let end = w.caret();
+        assert!(
+            end > mid && end <= rows[2],
+            "End stays on row 1: {end} in {mid}..={}",
+            rows[2]
+        );
+        // The painted caret and a further Home agree that End stayed on the row.
+        w.press(EditKey::Home { select: false });
+        assert_eq!(w.caret(), rows[1]);
+
+        // The last row of the paragraph ends at the paragraph's end.
+        w.set_caret(*rows.last().unwrap() + 1);
+        w.press(EditKey::End { select: false });
+        assert_eq!(w.caret(), PARA.len());
+        // The first row starts at the paragraph's start.
+        w.set_caret(2);
+        w.press(EditKey::Home { select: false });
+        assert_eq!(w.caret(), 0);
+    }
+
+    #[test]
+    fn nowrap_home_and_end_still_cover_the_whole_line() {
+        let value = format!("{PARA}\nab");
+        let mut w = Wrapped::new(&value, WrapMode::NoWrap);
+        w.set_caret(15);
+        w.press(EditKey::Home { select: false });
+        assert_eq!(w.caret(), 0);
+        w.press(EditKey::End { select: false });
+        assert_eq!(w.caret(), PARA.len());
     }
 
     #[test]
