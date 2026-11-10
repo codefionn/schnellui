@@ -147,6 +147,13 @@ fn decoration_geometry(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option
         }
     }
 
+    // A viewport's decoration belongs to the viewport: its own paint is
+    // composited after its content and does not scroll, where paint put on
+    // the last thing the content draws would scroll away, or sit clipped
+    // under the content, and a viewport with no paint in it would have none.
+    if scene.node(id).map(|node| node.kind) == Some(WidgetKind::Scroll) {
+        return scene.layout(id).map(|layout| (layout.rect, id));
+    }
     let mut bounds = None;
     let mut owner = None;
     visit(runtime, scene, id, &mut bounds, &mut owner);

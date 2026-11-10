@@ -104,20 +104,24 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             },
         ]
     });
+    // The chrome is the viewport's ordinary paint. A ring or other decoration
+    // stroked after it is not ours to clear or compare.
+    let end = scene
+        .paint(id)
+        .map_or(0, |paint| ordinary_primitive_end(runtime, id, paint));
     let changed = match (scene.paint(id), desired.as_ref()) {
         (None, None) => false,
-        (Some(paint), None) => !paint.primitives.is_empty(),
-        (Some(paint), Some(primitives)) => paint.primitives.as_slice() != primitives,
+        (Some(_), None) => end > 0,
+        (Some(paint), Some(primitives)) => paint.primitives[..end] != *primitives,
         (None, Some(_)) => true,
     };
     if !changed {
         return true;
     }
     let paint = scene.paint_mut(id);
-    paint.primitives.clear();
-    if let Some(primitives) = desired {
-        paint.primitives.extend(primitives);
-    }
+    paint
+        .primitives
+        .splice(..end, desired.into_iter().flatten());
     scene.mark_dirty(id, DirtyFlags::PAINT);
     true
 }

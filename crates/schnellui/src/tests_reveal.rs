@@ -469,3 +469,52 @@ fn tab_to_a_control_at_the_viewport_edge_shows_its_whole_ring() {
         assert_ring_shown(&app, sv, i, "back");
     }
 }
+
+fn rows_viewport(scrollbar: bool) -> Scroll {
+    let mut col = Column::new().gap(2.0);
+    for i in 0..40 {
+        col = col.child(schnellui::widgets::Text::new(format!("Row {i}")));
+    }
+    Scroll::new()
+        .label("Rows")
+        .scrollbar(scrollbar)
+        .size(200.0, 100.0)
+        .child(col)
+}
+
+/// A viewport with nothing focusable inside is a Tab stop. Scrolling it, by
+/// the keys it now answers to, repainted its scrollbar chrome over the ring.
+#[test]
+fn a_focused_scroll_view_keeps_its_ring_while_the_keyboard_scrolls_it() {
+    for scrollbar in [false, true] {
+        let mut app = App::mount_with_size(rows_viewport(scrollbar), 400, 300);
+        app.frame();
+        let sv = scroll_of(&app);
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+        assert_eq!(app.focused_widget(), Some(sv));
+        let viewport = app.scene().layout(sv).unwrap().rect;
+        let ring = |app: &App| ring_rect(app, sv);
+        let at_rest = ring(&app).unwrap_or_else(|| panic!("no ring (scrollbar {scrollbar})"));
+        assert!(app.focus_ring_shown());
+        for _ in 0..3 {
+            assert!(app.dispatch_key(UiKey::Down { shift: false }));
+            app.frame();
+            assert!(offset(&app, sv) > 0.0);
+            assert!(app.focus_ring_shown(), "scrollbar {scrollbar}");
+            // Fixed to the viewport frame, inside it, whatever the offset.
+            assert_eq!(ring(&app), Some(at_rest), "scrollbar {scrollbar}");
+            assert!(at_rest.x >= viewport.x && at_rest.right() <= viewport.right());
+            assert!(at_rest.y >= viewport.y && at_rest.bottom() <= viewport.bottom());
+        }
+        // The ring and AccessKit agree.
+        let access = app.scene().a11y(sv).unwrap();
+        assert!(schnellui::a11y::StateFlags(access.state)
+            .contains(schnellui::a11y::StateFlags::FOCUSED));
+        // Blurring takes the ring, and the scrollbar chrome stays.
+        assert!(app.dispatch_key(UiKey::Tab { shift: false }) || app.focus(None));
+        assert!(ring(&app).is_none(), "scrollbar {scrollbar}");
+        if scrollbar {
+            assert_eq!(app.scene().paint(sv).unwrap().primitives.len(), 2);
+        }
+    }
+}
