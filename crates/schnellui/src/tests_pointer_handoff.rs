@@ -198,3 +198,101 @@ fn a_focus_landing_elsewhere_drops_the_starting_point() {
         "walks from the top again, not from the old place"
     );
 }
+
+/// Buttons in a column, one per name.
+fn buttons(names: &[&str]) -> Column {
+    names.iter().fold(Column::new(), |column, name| {
+        column.child(Button::new(name.to_string()))
+    })
+}
+
+/// The grouped_tabs sequence: archiving Planning removes its Archive button
+/// and moves Planning, with its children, into the Archive section far below.
+const BEFORE_ARCHIVE: &[&str] = &[
+    "Overview",
+    "Planning",
+    "Archive Planning",
+    "Delete Planning",
+    "Roadmap",
+    "Research",
+    "Build",
+    "Archive Build",
+    "Archive Notes",
+    "Archive",
+    "Undo",
+];
+const AFTER_ARCHIVE: &[&str] = &[
+    "Overview",
+    "Build",
+    "Archive Build",
+    "Archive Notes",
+    "Archive",
+    "Planning",
+    "Restore Planning",
+    "Roadmap",
+    "Research",
+    "Undo",
+];
+
+fn remount_focused(before: &[&str], after: &[&str], focused: &str, keyboard: bool) -> App {
+    let mut previous = App::mount_with_size(buttons(before), 400, 300);
+    previous.frame();
+    let target = button(&previous, focused);
+    if keyboard {
+        assert!(previous.focus(Some(target)));
+    } else {
+        assert!(previous.pointer_focus(Some(target)));
+    }
+    let mut next = App::mount_with_size(buttons(after), 400, 300);
+    next.inherit_remount_state(&previous);
+    next.frame();
+    next
+}
+
+#[test]
+fn archiving_a_group_hands_keyboard_focus_to_the_row_that_took_its_place() {
+    let next = remount_focused(BEFORE_ARCHIVE, AFTER_ARCHIVE, "Archive Planning", true);
+    // Not Roadmap, which moved with Planning into the Archive section.
+    assert_eq!(focused_name(&next).as_deref(), Some("Build"));
+    assert!(next.focus_ring_shown());
+}
+
+#[test]
+fn archiving_a_group_leaves_tab_and_shift_tab_around_the_gap() {
+    for (backwards, expect) in [(false, "Build"), (true, "Overview")] {
+        let mut next = remount_focused(BEFORE_ARCHIVE, AFTER_ARCHIVE, "Archive Planning", false);
+        assert_eq!(next.focused_widget(), None);
+        assert!(next.dispatch_key(UiKey::Tab { shift: backwards }));
+        assert_eq!(focused_name(&next).as_deref(), Some(expect));
+    }
+}
+
+#[test]
+fn a_leaf_that_stays_put_still_hands_off_to_its_nearest_neighbour() {
+    // Deleting Notes moves nothing: the old rule and the new one agree.
+    let before = ["Overview", "Archive Build", "Delete Notes", "Undo"];
+    let after = ["Overview", "Archive Build", "Undo"];
+    let mut next = remount_focused(&before, &after, "Delete Notes", false);
+    assert!(next.dispatch_key(UiKey::Tab { shift: false }));
+    assert_eq!(focused_name(&next).as_deref(), Some("Undo"));
+    let next = remount_focused(&before, &after, "Delete Notes", true);
+    assert_eq!(focused_name(&next).as_deref(), Some("Undo"));
+}
+
+#[test]
+fn a_reorder_that_moves_the_neighbours_picks_one_that_stayed_together() {
+    // D and E jump ahead of A and B; the gap F sat in is between B and D.
+    let before = ["A", "B", "F", "D", "E"];
+    let after = ["D", "E", "A", "B"];
+    let next = remount_focused(&before, &after, "F", true);
+    assert_eq!(focused_name(&next).as_deref(), Some("D"));
+}
+
+#[test]
+fn restoring_a_group_hands_off_past_the_children_that_moved_with_it() {
+    // The reverse trip: Restore Planning goes, Planning and its children
+    // move back up above Build.
+    let mut next = remount_focused(AFTER_ARCHIVE, BEFORE_ARCHIVE, "Restore Planning", false);
+    assert!(next.dispatch_key(UiKey::Tab { shift: false }));
+    assert_eq!(focused_name(&next).as_deref(), Some("Undo"));
+}

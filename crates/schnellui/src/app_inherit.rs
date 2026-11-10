@@ -12,11 +12,64 @@ pub(crate) fn takes_focus(scene: &Scene, id: WidgetId) -> bool {
     })
 }
 
+/// For each control of `order` (the old tab order), whether it kept its place
+/// relative to the other survivors in the new tab order. A survivor has a
+/// counterpart in `replacement`'s tab order; the stayers are the longest run of
+/// survivors whose counterparts appear in the same order as before. What is
+/// left moved: a row archived into another section takes its children with it.
+fn kept_place(
+    order: &[WidgetId],
+    counterparts: &remount::CounterpartMap,
+    replacement: &Scene,
+) -> Vec<bool> {
+    schnellui::a11y::with_tab_order(replacement, |new_order| {
+        let new_index: HashMap<WidgetId, usize> = new_order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+        // The survivors as (old position, new position), in old order.
+        let survivors: Vec<(usize, usize)> = order
+            .iter()
+            .enumerate()
+            .filter_map(|(old, id)| Some((old, *new_index.get(&counterparts.get(*id)?)?)))
+            .collect();
+        // Longest increasing subsequence of the new positions, by patience
+        // sorting: `tails[k]` ends the best run of length k + 1.
+        let mut tails: Vec<usize> = Vec::new();
+        let mut parent = vec![usize::MAX; survivors.len()];
+        for (i, (_, new)) in survivors.iter().enumerate() {
+            let k = tails.partition_point(|t| survivors[*t].1 < *new);
+            if k > 0 {
+                parent[i] = tails[k - 1];
+            }
+            if k == tails.len() {
+                tails.push(i);
+            } else {
+                tails[k] = i;
+            }
+        }
+        let mut kept = vec![false; order.len()];
+        let mut at = tails.last().copied();
+        while let Some(i) = at {
+            kept[survivors[i].0] = true;
+            at = Some(parent[i]).filter(|p| *p != usize::MAX);
+        }
+        kept
+    })
+}
+
 /// The counterpart in `replacement` of the control nearest to `focused` in
 /// `previous`'s tab order, trying later controls before earlier ones. Only runs
 /// when the focused control has no counterpart, so it costs a remount nothing
 /// in the common case. A counterpart that cannot take focus is skipped. The
 /// flag is true when the neighbour came after `focused` in the old order.
+///
+/// Controls that moved are passed over: when `focused` was archived away its
+/// children went with it to another part of the page, and the nearest of them
+/// in the old order is far from the gap in the new one. The first neighbour
+/// that kept its place wins (see [`kept_place`]). With none left, the nearest
+/// survivor does, moved or not.
 ///
 /// When the dialog or window that held `focused` is gone too, its neighbours in
 /// the tab order are the controls of other windows. Focus would land on another
@@ -33,17 +86,33 @@ fn surviving_neighbour(previous: &App, next: &App, focused: WidgetId) -> Option<
             order.iter().copied().chain(home),
         );
         let home_is_gone = home.is_some_and(|panel| counterparts.get(panel).is_none());
-        order[position + 1..]
-            .iter()
-            .map(|id| (id, true))
-            .chain(order[..position].iter().rev().map(|id| (id, false)))
-            .filter_map(|(id, after)| Some((counterparts.get(*id)?, after)))
-            .filter(|(id, _)| {
-                !home_is_gone
-                    || schnellui::widgets::enclosing_dialog_panel(&next.widgets, replacement, *id)
+        let kept = kept_place(order, &counterparts, replacement);
+        let walk = |only_kept: bool| {
+            order[position + 1..]
+                .iter()
+                .enumerate()
+                .map(|(i, id)| (position + 1 + i, id, true))
+                .chain(
+                    order[..position]
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .map(|(i, id)| (i, id, false)),
+                )
+                .filter(|(i, _, _)| !only_kept || kept[*i])
+                .filter_map(|(_, id, after)| Some((counterparts.get(*id)?, after)))
+                .filter(|(id, _)| {
+                    !home_is_gone
+                        || schnellui::widgets::enclosing_dialog_panel(
+                            &next.widgets,
+                            replacement,
+                            *id,
+                        )
                         .is_none()
-            })
-            .find(|(id, _)| takes_focus(replacement, *id))
+                })
+                .find(|(id, _)| takes_focus(replacement, *id))
+        };
+        walk(true).or_else(|| walk(false))
     })
 }
 
