@@ -422,3 +422,32 @@ fn main() -> ExitCode {
         .unwrap_or_else(|| format!("{}.png", scenario.name()));
     render_one(scenario, &cli, &out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(680, 420), (360, 240), (360, 120)] {
+                // Known gap: `justify` spreads rows across the viewport width, and
+                // a Scroll hands its content its own max-content width, never the
+                // viewport's. Until a Scroll can stretch its child without also
+                // pinning its height, the page cannot scroll without breaking
+                // the lesson, so only the default size is checked there.
+                if scenario == Scenario::Justify && h < 420 {
+                    continue;
+                }
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
+}

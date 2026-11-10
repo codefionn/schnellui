@@ -1626,6 +1626,39 @@ mod tests {
         Cli::parse_from(["playground", "--headless-windowed"])
     }
 
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: the page scroll must bring it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        use schnellui::testing::fuzz::tab_stops_reachable;
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(640, 700), (640, 240), (640, 120)] {
+                let runtime = PlaygroundRuntime::default();
+                let cli = Cli::parse_from([
+                    "playground",
+                    "--headless-windowed",
+                    "--width",
+                    &w.to_string(),
+                    "--height",
+                    &h.to_string(),
+                ]);
+                let mut app = scenario_app(
+                    &runtime,
+                    MountState {
+                        scenario,
+                        theme: ThemeChoice::Light,
+                        theme_open: false,
+                    },
+                    &cli,
+                );
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{scenario:?} at {w}x{h}: {e}"));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
+
     fn mount(runtime: &PlaygroundRuntime, scenario: Scenario) -> App {
         let mut app = scenario_app(
             runtime,

@@ -362,3 +362,24 @@ fn main() -> ExitCode {
 fn serde_manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
     format!("{{\"scenario\":\"{name}\",\"path\":\"{path}\",\"width\":{width},\"height\":{height}}}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Every Tab stop of every scenario can be shown, at the default size and
+    /// in a narrow, short window: something must scroll it in.
+    #[test]
+    fn every_tab_stop_reaches_the_window() {
+        let mut stops = 0;
+        for scenario in Scenario::iter() {
+            for (w, h) in [(520, 220), (360, 240), (360, 120)] {
+                let mut app = scenario_app(scenario, w, h, 1.0);
+                stops += tab_stops_reachable(&mut app)
+                    .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
+            }
+        }
+        assert!(stops > 0, "no scenario has a Tab stop");
+    }
+}

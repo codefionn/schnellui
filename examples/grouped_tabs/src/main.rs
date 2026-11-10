@@ -939,7 +939,7 @@ mod tests {
     fn every_tab_stop_reaches_the_window() {
         let mut stops = 0;
         for scenario in Scenario::iter() {
-            for (w, h) in [(760, 600), (760, 240), (760, 120)] {
+            for (w, h) in [(760, 600), (760, 240), (760, 120), (360, 240)] {
                 let (mut app, _state) = scenario_app(scenario, w, h, 1.0);
                 stops += tab_stops_reachable(&mut app)
                     .unwrap_or_else(|e| panic!("{} at {w}x{h}: {e}", scenario.name()));
