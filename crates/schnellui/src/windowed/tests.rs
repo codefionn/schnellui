@@ -405,15 +405,13 @@ fn windowed_host(
 /// path: press, release, then the remount poll `window_event` runs after each.
 mod dropdown_pointer {
     use std::cell::Cell;
-    use std::collections::BTreeMap;
     use std::rc::Rc;
 
-    use winit::dpi::{PhysicalPosition, PhysicalSize};
+    use winit::dpi::PhysicalPosition;
     use winit::event::{ElementState, MouseButton};
-    use winit::keyboard::ModifiersState;
 
     use super::super::event_handler::EventTail;
-    use super::super::{HostClipboard, WindowedApp};
+    use super::super::WindowedApp;
     use crate::a11y::{Role, StateFlags};
     use crate::scene::{ComponentRef, Size};
     use crate::widgets::{Button, Column, Dialog, Dropdown, DropdownOption, Stack, View};
