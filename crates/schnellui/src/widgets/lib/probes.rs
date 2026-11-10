@@ -149,6 +149,32 @@ pub(crate) fn decoration_faults(runtime: &Runtime, scene: &Scene) -> Option<Stri
     })
 }
 
+/// Where the pointer rests, the hover decoration belongs on the control under
+/// it (none while the keyboard holds hover). Content that scrolled, appeared
+/// or moved under a still pointer leaves the wash on whatever it was
+/// on before, unless the host brings hover up to date.
+pub(crate) fn hover_disagrees(
+    runtime: &Runtime,
+    scene: &Scene,
+    pointer: Point,
+    keyboard_holds: bool,
+) -> Option<String> {
+    let hit = hit_test(runtime, scene, pointer);
+    let expected = if keyboard_holds {
+        None
+    } else {
+        hover_target_at(runtime, scene, hit)
+    };
+    let shown = runtime.with(|rt| rt.borrow().hover.as_ref().map(|hover| hover.target));
+    (expected != shown).then(|| {
+        format!(
+            "pointer at {pointer:?} is over {hit:?}: hover belongs on {expected:?} ({:?}) but is on {shown:?} ({:?})",
+            expected.and_then(|id| scene.node(id)).map(|n| n.kind),
+            shown.and_then(|id| scene.node(id)).map(|n| n.kind),
+        )
+    })
+}
+
 /// Visible tooltips, and floating layers such as dialogs, dropdown popups
 /// and context menus, must sit inside the window (`view`) when they fit in it.
 pub(crate) fn placement_faults(runtime: &Runtime, scene: &Scene, view: Rect) -> Option<String> {

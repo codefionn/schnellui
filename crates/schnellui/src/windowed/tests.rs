@@ -819,6 +819,82 @@ mod platform_theme_change {
     }
 }
 
+/// A wheel scrolls content under a pointer that stays where it is, so a
+/// different control is under it afterwards. Hover follows the pointer, as it
+/// does in a browser, without waiting for the pointer to move.
+mod wheel_under_a_resting_pointer {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    use super::windowed_host;
+    use crate::a11y::Role;
+    use crate::scene::Point;
+    use crate::widgets::probes::hover_disagrees;
+    use crate::widgets::{List, ListItem, Scroll};
+    use crate::{theme, App, ThemeMode};
+
+    fn rows() -> super::super::WindowedApp {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                let mut list = List::new();
+                for i in 0..20 {
+                    list = list.child(ListItem::new(format!("Row {i}")));
+                }
+                Scroll::new().size(240.0, 100.0).child(list)
+            },
+            300,
+            200,
+            1.0,
+        );
+        app.frame();
+        windowed_host(app, None)
+    }
+
+    fn pointer_on_row(host: &mut super::super::WindowedApp, name: &str) -> Point {
+        let row = host.app.find_widget(Role::ListItem, Some(name)).unwrap();
+        let r = host.app.scene().layout(row).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.on_redraw_requested();
+        Point {
+            x: r.x + r.width / 2.0,
+            y: r.y + r.height / 2.0,
+        }
+    }
+
+    fn disagreement(host: &super::super::WindowedApp, pointer: Point) -> Option<String> {
+        hover_disagrees(&host.app.widgets, host.app.scene(), pointer, false)
+    }
+
+    #[test]
+    fn hover_moves_to_the_row_the_wheel_brought_under_it() {
+        let mut host = rows();
+        let pointer = pointer_on_row(&mut host, "Row 1");
+        assert_eq!(disagreement(&host, pointer), None, "hover starts on row 1");
+
+        host.on_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+            0.0, -48.0,
+        )));
+        assert_eq!(disagreement(&host, pointer), None, "right after the wheel");
+        host.on_redraw_requested();
+        assert_eq!(disagreement(&host, pointer), None, "after the frame");
+    }
+
+    #[test]
+    fn a_wheel_that_moves_nothing_leaves_hover_alone() {
+        let mut host = rows();
+        let pointer = pointer_on_row(&mut host, "Row 1");
+        // Already at the top: scrolling up changes nothing.
+        host.on_mouse_wheel(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+            0.0, 48.0,
+        )));
+        assert_eq!(disagreement(&host, pointer), None);
+    }
+}
+
 /// Input that arrives faster than frames are drawn: several pointer events
 /// land between two redraws.
 mod input_between_frames {

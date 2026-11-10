@@ -1523,7 +1523,11 @@ pub fn cursor_at_with(
     CursorIcon::Default
 }
 
-fn hover_target_at(runtime: &Runtime, scene: &Scene, hit: Option<WidgetId>) -> Option<WidgetId> {
+pub(crate) fn hover_target_at(
+    runtime: &Runtime,
+    scene: &Scene,
+    hit: Option<WidgetId>,
+) -> Option<WidgetId> {
     let mut current = hit;
     while let Some(id) = current {
         let semantics = scene.a11y(id);

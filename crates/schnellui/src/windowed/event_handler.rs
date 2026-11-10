@@ -886,7 +886,7 @@ impl WindowedApp {
         EventTail::Normal
     }
 
-    fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) -> EventTail {
+    pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) -> EventTail {
         let mut tail = EventTail::Normal;
         let scale = self.app.scale();
         let p = self.cursor_logical();
@@ -943,6 +943,10 @@ impl WindowedApp {
             // builds only the newest window instead of synchronously
             // chasing every intermediate one.
             tail = EventTail::UpdateDeferred;
+            // The content moved under a pointer that did not: hover goes to
+            // whatever is under it now, as a browser does after a scroll.
+            let rest = self.resting_pointer();
+            let _ = self.app.update_pointer_proximity(rest);
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
