@@ -1673,6 +1673,34 @@ mod tests {
         app
     }
 
+    /// Tab walks the page the way it reads: the page tab strip (one roving
+    /// stop) and the Theme dropdown above the body come before any control of
+    /// the body.
+    #[test]
+    fn first_tab_stops_are_the_page_tabs_and_theme() {
+        let runtime = PlaygroundRuntime::default();
+        for scenario in Scenario::iter() {
+            let mut app = mount(&runtime, scenario);
+            let mut stops = Vec::new();
+            for _ in 0..2 {
+                assert!(app.focus_step(false), "{scenario:?}: Tab moved nothing");
+                let id = app.focused_widget().expect("a Tab stop is focused");
+                let a = app.scene().a11y(id).unwrap();
+                stops.push((a.role, a.name.clone().unwrap_or_default()));
+            }
+            assert_eq!(
+                stops[0],
+                (Role::Tab as u16, scenario.title().to_string()),
+                "{scenario:?}: first Tab stop is the current page tab"
+            );
+            assert_eq!(
+                stops[1],
+                (Role::ComboBox as u16, "Theme".to_string()),
+                "{scenario:?}: second Tab stop is Theme"
+            );
+        }
+    }
+
     fn set_value(app: &mut App, role: Role, name: &str, value: &str) {
         let id = app.find_widget(role, Some(name)).expect("widget to set");
         app.dispatch_action(&ActionRequest {
