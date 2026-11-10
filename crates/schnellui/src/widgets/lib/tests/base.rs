@@ -1567,3 +1567,64 @@ fn text_in_a_plain_column_is_shaped_once_per_frame() {
         }
     }
 }
+
+/// Layout moves a control's paint with the control. A control whose ink does
+/// not start at its box corner (a slider's rail is inset by half the thumb,
+/// its thumb is centred in the box) must still land where its own emitter
+/// would have drawn it in that box, or the first scrub jumps it sideways.
+#[test]
+fn layout_moves_inset_control_paint_by_the_box_not_by_the_ink() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let views: Vec<(&str, Box<dyn View>)> = vec![
+        ("slider", Box::new(Slider::new(40.0, 0.0, 100.0))),
+        ("slider at min", Box::new(Slider::new(0.0, 0.0, 100.0))),
+        ("switch on", Box::new(Switch::new(true))),
+        ("switch off", Box::new(Switch::new(false))),
+        ("checkbox", Box::new(Checkbox::new(true))),
+        ("radio", Box::new(Radio::new(true))),
+        ("progress", Box::new(ProgressBar::new(0.4, 0.0, 1.0))),
+        ("spinner", Box::new(LoadingSpinner::new())),
+        ("button", Box::new(Button::new("Go"))),
+        ("badge", Box::new(Badge::new("3"))),
+        ("link", Box::new(Link::new("More"))),
+        ("text input", Box::new(TextInput::new("abc"))),
+        ("icon", Box::new(Icon::new("search"))),
+        ("tab", Box::new(Tab::new("General").selected(true))),
+    ];
+    for (label, view) in views {
+        let (mut scene, _l, _t, _a, id) = build_one(runtime, view);
+        let emitted = scene.paint(id).unwrap().primitives.clone();
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect: Rect::new(10.0, 20.0, 120.0, 20.0),
+                content: Rect::ZERO,
+            },
+        );
+        reposition_paint(runtime, &mut scene);
+        let mut expected = emitted.clone();
+        for prim in &mut expected {
+            match prim {
+                Primitive::SolidRect { rect, .. }
+                | Primitive::StrokeRect { rect, .. }
+                | Primitive::GlyphQuad { rect, .. }
+                | Primitive::ImageQuad { rect, .. } => {
+                    rect.x += 10.0;
+                    rect.y += 20.0;
+                }
+                Primitive::Line { from, to, .. } => {
+                    from.x += 10.0;
+                    from.y += 20.0;
+                    to.x += 10.0;
+                    to.y += 20.0;
+                }
+            }
+        }
+        assert_eq!(
+            scene.paint(id).unwrap().primitives,
+            expected,
+            "{label}: paint emitted at the origin, laid out at (10, 20)"
+        );
+    }
+}

@@ -853,6 +853,12 @@ fn emit_slider_paint(
     };
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    // The rail is inset by half the thumb and the thumb is centred in the box,
+    // so the ink's corner is not the box's. Anchor layout moves on the box.
+    pd.origin = Some(Point {
+        x: rect.x,
+        y: rect.y,
+    });
     pd.primitives.push(Primitive::SolidRect {
         rect: rail,
         color: track_color,

@@ -499,7 +499,11 @@ fn reduced_motion_freezes_spinners_until_motion_is_allowed_again() {
 
     assert!(app.apply_reduced_motion(false));
     assert!(app.animations_enabled());
-    app.frame();
+    // The first frame after a pause restarts the spinner clock without
+    // advancing it; the next one, a quarter second on, moves the highlight.
+    let resumed = app.clock_now();
+    app.frame_at(resumed);
+    app.frame_at(resumed + std::time::Duration::from_millis(250));
     assert_ne!(app.scene().paint(spinner).unwrap().primitives[1], before);
 }
 

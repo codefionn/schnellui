@@ -126,9 +126,9 @@ fn emit_progress_paint(
     });
 }
 
-/// Emits one deterministic frame of the indeterminate loading spinner. A transparent
-/// bounds quad keeps the radial strokes anchored to the exact layout box while the
-/// highlighted segment rotates. The fragment is cleared-and-refilled in place, so a
+/// Emits one deterministic frame of the indeterminate loading spinner. The paint
+/// records the box origin, so layout anchors it on the box even though the top
+/// spoke's stroke cap reaches just above it. The fragment is cleared-and-refilled in place, so a
 /// steady animation frame reuses its original allocation (SOUL §4.4).
 pub(crate) fn emit_spinner_paint(
     runtime: &crate::widgets::Runtime,
@@ -153,6 +153,10 @@ pub(crate) fn emit_spinner_paint(
     let accent = theme_for(runtime, id).indicator_color();
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
+    pd.origin = Some(Point {
+        x: rect.x,
+        y: rect.y,
+    });
     pd.primitives.push(Primitive::SolidRect {
         rect,
         color: schnellui::scene::Color::TRANSPARENT,
