@@ -144,7 +144,8 @@ impl App {
         self.interaction_trace = previous.interaction_trace.take();
     }
 
-    /// Carries user-adjusted dialog geometry across a structural remount.
+    /// Carries user-adjusted dialog geometry across a structural remount,
+    /// and a move or resize still in progress.
     ///
     /// Widget ids are mount-local, so surviving dialogs are paired in tree order
     /// by semantic role and accessible name. Only the interactive geometry fields
@@ -221,6 +222,12 @@ impl App {
                 continue;
             };
             let geometry = previous_geometry.remove(index);
+            schnellui::widgets::transfer_dialog_pointer(
+                &self.widgets,
+                panel,
+                &previous.widgets,
+                geometry.panel,
+            );
             if !schnellui::widgets::transfer_dialog_geometry_adjustment(
                 &self.widgets,
                 panel,

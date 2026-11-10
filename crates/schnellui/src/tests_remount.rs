@@ -940,3 +940,60 @@ fn an_open_context_menu_survives_a_rebuild_that_keeps_its_source() {
     replacement.activate_context_menu_item(shout);
     assert_eq!(said.get(), 1, "the carried menu's row still acts");
 }
+
+/// Press a dialog's title, drag it a little, switch the theme (instant, or
+/// a fade frame rebuilding the tree), and keep dragging. The dialog follows
+/// the pointer all the way, as it does when no rebuild lands mid-drag.
+#[test]
+fn a_dialog_drag_keeps_going_across_a_theme_rebuild() {
+    use schnellui::scene::Point;
+    use schnellui::widgets::{Dialog, Stack, Text};
+
+    let view = || {
+        Stack::new().fill().child(
+            Dialog::new("Issue board")
+                .modeless()
+                .non_fixed()
+                .movable()
+                .resizable()
+                .at(30.0, 60.0)
+                .size(300.0, 200.0)
+                .child(Text::new("Issue")),
+        )
+    };
+    let mut app =
+        App::mount_themed_with_size_scaled(ThemeMode::Fixed(theme::LIGHT), view, 800, 600, 1.0);
+    app.frame();
+    let rect = |app: &App| {
+        let panel = app.find_widget(Role::Dialog, Some("Issue board")).unwrap();
+        app.scene().layout(panel).unwrap().rect
+    };
+    let initial = rect(&app);
+    let title = Point {
+        x: initial.x + 20.0,
+        y: initial.y + 18.0,
+    };
+    assert!(app.begin_dialog_pointer(title));
+    assert!(app.update_dialog_pointer(Point {
+        x: title.x + 10.0,
+        y: title.y + 10.0,
+    }));
+    app.frame();
+    assert!(app.set_theme(theme::DARK));
+    app.frame();
+    assert!(
+        app.update_dialog_pointer(Point {
+            x: title.x + 70.0,
+            y: title.y + 45.0,
+        }),
+        "the drag still holds the dialog after the rebuild"
+    );
+    assert!(app.end_dialog_pointer());
+    app.frame();
+    let moved = rect(&app);
+    assert_eq!(
+        (moved.x - initial.x, moved.y - initial.y),
+        (70.0, 45.0),
+        "the dialog followed the pointer"
+    );
+}

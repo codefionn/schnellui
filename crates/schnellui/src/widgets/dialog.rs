@@ -1121,6 +1121,29 @@ pub fn transfer_dialog_geometry_adjustment(
     adjusted
 }
 
+/// Hands a move or resize in progress on `previous` to its counterpart in a
+/// rebuilt tree, so a drag that a theme change or remount lands under keeps
+/// holding the dialog until the button is released.
+pub(crate) fn transfer_dialog_pointer(
+    replacement_runtime: &crate::widgets::Runtime,
+    replacement: WidgetId,
+    previous_runtime: &crate::widgets::Runtime,
+    previous: WidgetId,
+) {
+    let Some(capture) = previous_runtime
+        .with(|runtime| runtime.borrow().dialog_pointer)
+        .filter(|capture| capture.panel == previous)
+    else {
+        return;
+    };
+    replacement_runtime.with(|runtime| {
+        runtime.borrow_mut().dialog_pointer = Some(DialogPointerCapture {
+            panel: replacement,
+            ..capture
+        });
+    });
+}
+
 /// Releases any active dialog pointer capture.
 pub fn end_dialog_pointer(runtime: &crate::widgets::Runtime) -> bool {
     runtime.with(|runtime| runtime.borrow_mut().dialog_pointer.take().is_some())
