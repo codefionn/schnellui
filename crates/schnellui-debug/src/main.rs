@@ -150,6 +150,10 @@ enum Command {
         #[arg(long, value_enum)]
         phase: Option<ShortcutPhase>,
     },
+    /// List the app's global menu bar tree and whether the system shows one.
+    GlobalMenu,
+    /// Choose a global menu action by id, as the system menu would. A disabled item is refused.
+    GlobalMenuItem { id: String },
     /// Ask the application to close cleanly.
     Quit,
 }
@@ -415,6 +419,13 @@ fn run_connected(
                 })
                 .to_string(),
             ),
+            Output::Stdout,
+        ),
+        Command::GlobalMenu => ("GET", "/v1/global-menu", None, Output::Stdout),
+        Command::GlobalMenuItem { id } => (
+            "POST",
+            "/v1/global-menu/trigger",
+            Some(json!({ "id": id }).to_string()),
             Output::Stdout,
         ),
         Command::Quit => ("POST", "/v1/quit", Some("{}".into()), Output::Stdout),
@@ -1504,6 +1515,11 @@ mod tests {
                 phase: Some(ShortcutPhase::Press),
                 ..
             }
+        ));
+        assert!(matches!(parse("global-menu").command, Command::GlobalMenu));
+        assert!(matches!(
+            parse("global-menu-item file.open").command,
+            Command::GlobalMenuItem { id } if id == "file.open"
         ));
         assert!(ScriptInvocation::try_parse_from(["press", "10"]).is_err());
     }

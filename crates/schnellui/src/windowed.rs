@@ -29,8 +29,8 @@ use super::{
     Shortcut, UiKey,
 };
 use crate::debug_server::{
-    DebugAction, DebugButton, DebugCommand, DebugDrag, DebugGlobalShortcut, DebugKey, DebugPoint,
-    DebugPress, DebugReply, DebugRequest, DebugServer, DebugTarget,
+    DebugAction, DebugButton, DebugCommand, DebugDrag, DebugGlobalMenuItem, DebugGlobalShortcut,
+    DebugKey, DebugPoint, DebugPress, DebugReply, DebugRequest, DebugServer, DebugTarget,
 };
 use crate::interaction_debug::InteractionRecorder;
 use crate::{Remount, SubtreeReplacement, WindowUpdate};
@@ -41,6 +41,8 @@ enum PlatformEvent {
     ReducedMotionChanged(bool),
     /// A global shortcut backend reported from its own thread.
     GlobalShortcut(crate::platform::GlobalShortcutEvent),
+    /// The system menu bar reported a chosen item.
+    GlobalMenu(crate::platform::GlobalMenuEvent),
     RedrawRequested,
     Debug(DebugRequest),
 }

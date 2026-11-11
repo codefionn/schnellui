@@ -192,6 +192,15 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     }
                 }
             }
+            PlatformEvent::GlobalMenu(event) => {
+                self.remount_trigger = "global_menu";
+                if self.apply_global_menu_event(event) {
+                    self.poll_remount();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
             PlatformEvent::RedrawRequested => {
                 // Do not wait for a compositor paint to settle controller work.
                 // Winit can defer `WindowEvent::RedrawRequested` for an occluded
@@ -222,6 +231,7 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             return;
         }
         self.sync_global_shortcuts();
+        self.sync_global_menu();
         // Focus moved by any path this turn (keys, pointer, AccessKit, a
         // remount) decides whether the input method is on.
         self.sync_ime();
@@ -303,6 +313,24 @@ impl WindowedApp {
         self.app.sync_global_shortcut_session(|set| {
             crate::platform::GlobalShortcuts::register(set, move |event| {
                 let _ = proxy.send_event(PlatformEvent::GlobalShortcut(event));
+            })
+        });
+    }
+
+    /// Shows, replaces or takes down the system menu bar when the app's menu
+    /// changed. A comparison of two integers when it did not. Hosts without an
+    /// event loop proxy (headless) never touch the platform, and where the
+    /// system has no global menu the model is simply kept.
+    pub(super) fn sync_global_menu(&mut self) {
+        if !self.app.global_menu_stale() {
+            return;
+        }
+        let Some(proxy) = self.event_loop_proxy.clone() else {
+            return;
+        };
+        self.app.sync_global_menu_session(|menu| {
+            crate::platform::GlobalMenu::show(menu, move |event| {
+                let _ = proxy.send_event(PlatformEvent::GlobalMenu(event));
             })
         });
     }

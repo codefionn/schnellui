@@ -107,6 +107,7 @@ impl App {
             test_registry: HashMap::new(),
             shortcut_registry: HashMap::new(),
             global_shortcuts: Default::default(),
+            global_menu: Default::default(),
             navigation_handler: None,
             focused_key_bindings: Vec::new(),
             focused_input_bindings: Vec::new(),

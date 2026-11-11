@@ -62,6 +62,8 @@ cargo run -p schnellui-debug -- type 'typed into the focused input'
 cargo run -p schnellui-debug -- key text --text x --ctrl   # Ctrl+X: cuts, as a keyboard would
 cargo run -p schnellui-debug -- global-shortcuts            # registered, bound by the system, last error
 cargo run -p schnellui-debug -- global-shortcut toggle      # press and release the global shortcut `toggle`
+cargo run -p schnellui-debug -- global-menu                 # the global menu tree and whether the system shows one
+cargo run -p schnellui-debug -- global-menu-item file.open  # choose the menu action `file.open`
 cargo run -p schnellui-debug -- screenshot /tmp/live.png
 cargo run -p schnellui-debug -- quit
 ```
@@ -104,6 +106,13 @@ The endpoints are `GET /v1/status`, `GET /v1/tree`, `GET /v1/snapshot`,
 system reported and any error. `POST /v1/global-shortcut/trigger` with
 `{"id": "...", "phase": "press"|"release"|"tap"}` fires one as the system would
 (`tap`, the default, is a press then a release); it answers 404 for an unknown id.
+`GET /v1/global-menu` lists the app's global menu tree (menus, actions with id,
+label, enabled, checked and key equivalent, separators, submenus, standard items)
+and `supported`, whether the system has a global menu at all. `POST
+/v1/global-menu/trigger` with `{"id": "..."}` chooses an action as the system
+menu would. It answers 404 for an unknown id and 409 for a disabled item or one
+with no handler. Where `supported` is false the menu is only a model, and this
+route is how a test reaches it.
 A `text` key with `ctrl` is a chord, not typing: Ctrl+C, X, V, A, Z and Y
 copy, cut, paste, select all, undo and redo through the same code as a
 keyboard, and application shortcuts see it first.

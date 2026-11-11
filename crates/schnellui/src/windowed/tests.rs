@@ -2383,3 +2383,92 @@ mod global_shortcuts {
         assert!(host.app.global_shortcuts().is_empty());
     }
 }
+
+mod global_menu {
+    use super::windowed_host;
+    use crate::debug_server::{DebugCommand, DebugGlobalMenuItem};
+    use crate::platform::{GlobalMenuEvent, Menu, MenuAction, MenuBar, StandardItem};
+    use crate::App;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn host_with_menu() -> (super::super::WindowedApp, Rc<RefCell<Vec<&'static str>>>) {
+        let mut app = App::new(64, 64);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        app.set_global_menu(
+            MenuBar::new()
+                .menu(Menu::new("App").item(StandardItem::Quit))
+                .menu(
+                    Menu::new("File")
+                        .item(MenuAction::new("open", "Open"))
+                        .item(MenuAction::new("off", "Off").enabled(false))
+                        .item(Menu::new("Recent").item(MenuAction::new("recent", "Recent file"))),
+                ),
+        )
+        .unwrap();
+        for id in ["open", "off", "recent"] {
+            let seen = seen.clone();
+            app.on_global_menu_item(id, move || seen.borrow_mut().push(id));
+        }
+        (windowed_host(app, None), seen)
+    }
+
+    fn json(reply: crate::debug_server::DebugReply) -> serde_json::Value {
+        serde_json::from_slice(&reply.body).unwrap()
+    }
+
+    fn trigger(host: &mut super::super::WindowedApp, id: &str) -> u16 {
+        host.handle_debug_command(
+            None,
+            DebugCommand::GlobalMenuTrigger(DebugGlobalMenuItem { id: id.into() }),
+        )
+        .status
+    }
+
+    #[test]
+    fn the_debug_listing_shows_the_tree_and_support() {
+        let (mut host, _) = host_with_menu();
+        let listed = json(host.handle_debug_command(None, DebugCommand::GlobalMenu));
+        assert_eq!(listed["supported"], App::global_menu_supported());
+        assert_eq!(listed["menus"][0]["title"], "App");
+        assert_eq!(listed["menus"][0]["items"][0]["item"], "Quit");
+        let file = &listed["menus"][1]["items"];
+        assert_eq!(file[0]["id"], "open");
+        assert_eq!(file[1]["enabled"], false);
+        assert_eq!(file[2]["type"], "submenu");
+        assert_eq!(file[2]["items"][0]["id"], "recent");
+    }
+
+    #[test]
+    fn the_debug_trigger_runs_enabled_items_and_refuses_the_rest() {
+        let (mut host, seen) = host_with_menu();
+        assert_eq!(trigger(&mut host, "open"), 200);
+        assert_eq!(trigger(&mut host, "recent"), 200);
+        assert_eq!(trigger(&mut host, "off"), 409);
+        assert_eq!(trigger(&mut host, "nope"), 404);
+        assert_eq!(*seen.borrow(), vec!["open", "recent"]);
+    }
+
+    #[test]
+    fn a_backend_event_runs_the_handler_and_host_edit_paths() {
+        let (mut host, seen) = host_with_menu();
+        assert!(host.apply_global_menu_event(GlobalMenuEvent::Action("open".into())));
+        assert!(!host.apply_global_menu_event(GlobalMenuEvent::Action("off".into())));
+        assert!(!host.apply_global_menu_event(GlobalMenuEvent::Action("nope".into())));
+        // Nothing is focused, so the edit items do nothing, but they reach the
+        // host rather than being dropped.
+        for item in [StandardItem::Cut, StandardItem::Copy, StandardItem::Paste] {
+            assert!(!host.apply_global_menu_event(GlobalMenuEvent::Standard(item)));
+        }
+        assert_eq!(*seen.borrow(), vec!["open"]);
+    }
+
+    #[test]
+    fn a_host_without_an_event_loop_never_calls_the_backend() {
+        let (mut host, _) = host_with_menu();
+        assert!(host.app.global_menu_stale());
+        host.sync_global_menu();
+        // Still stale: no session was started, nothing was asked of the system.
+        assert!(host.app.global_menu_stale());
+    }
+}

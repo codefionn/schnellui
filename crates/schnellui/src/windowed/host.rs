@@ -1221,6 +1221,95 @@ impl WindowedApp {
         )
     }
 
+    /// Runs what the system menu reported: an action's handler, or the host's
+    /// own clipboard, undo or select-all path for an edit item (a schnellui
+    /// window has no `NSTextView`, so the native selectors would find nothing).
+    /// Returns whether anything ran, so the caller knows to redraw.
+    pub(super) fn apply_global_menu_event(
+        &mut self,
+        event: crate::platform::GlobalMenuEvent,
+    ) -> bool {
+        use crate::platform::{GlobalMenuEvent, StandardItem};
+        match event {
+            GlobalMenuEvent::Action(id) => self.app.dispatch_global_menu_item(&id),
+            GlobalMenuEvent::Standard(item) => match item {
+                StandardItem::Cut => self.copy_or_cut(true),
+                StandardItem::Copy => self.copy_or_cut(false),
+                StandardItem::Paste => self.paste(),
+                StandardItem::SelectAll => self.dispatch_ui_key(UiKey::SelectAll),
+                StandardItem::Undo => self.dispatch_ui_key(UiKey::Undo),
+                StandardItem::Redo => self.dispatch_ui_key(UiKey::Redo),
+                // The system carries these out itself and never reports them.
+                _ => false,
+            },
+        }
+    }
+
+    /// The menu tree the app set, and whether the system shows it.
+    fn debug_global_menu(&self) -> Value {
+        fn menu_json(menu: &crate::platform::Menu) -> Value {
+            use crate::platform::MenuItem;
+            let items: Vec<Value> = menu
+                .items()
+                .iter()
+                .map(|item| match item {
+                    MenuItem::Separator => json!({ "type": "separator" }),
+                    MenuItem::Standard(standard) => {
+                        json!({ "type": "standard", "item": format!("{standard:?}") })
+                    }
+                    MenuItem::Submenu(sub) => {
+                        let mut value = menu_json(sub);
+                        value["type"] = json!("submenu");
+                        value
+                    }
+                    MenuItem::Action(action) => json!({
+                        "type": "action",
+                        "id": action.id(),
+                        "label": action.label(),
+                        "enabled": action.is_enabled(),
+                        "checked": action.checked_state(),
+                        "key_equivalent": action.key_equivalent().map(|k| json!({
+                            "key": format!("{:?}", k.logical_key()),
+                            "command": k.uses_command(),
+                            "shift": k.uses_shift(),
+                            "alt": k.uses_alt(),
+                        })),
+                    }),
+                })
+                .collect();
+            json!({ "title": menu.title(), "items": items })
+        }
+        let menus: Vec<Value> = self
+            .app
+            .global_menu()
+            .menus()
+            .iter()
+            .map(menu_json)
+            .collect();
+        json!({
+            "supported": crate::platform::GlobalMenu::supported(),
+            "menus": menus,
+        })
+    }
+
+    fn handle_debug_global_menu_item(&mut self, request: &DebugGlobalMenuItem) -> DebugReply {
+        if self.app.global_menu().find_action(&request.id).is_none() {
+            return DebugReply::error(404, format!("no global menu item {:?}", request.id));
+        }
+        if !self.app.dispatch_global_menu_item(&request.id) {
+            return DebugReply::error(
+                409,
+                format!(
+                    "global menu item {:?} is disabled or has no handler",
+                    request.id
+                ),
+            );
+        }
+        self.poll_remount();
+        self.settle_debug_command();
+        DebugReply::json(200, json!({ "fired": true, "status": self.debug_status() }))
+    }
+
     /// What the app registered, what the system bound, and why not if it failed.
     fn debug_global_shortcuts(&self) -> Value {
         let registered: Vec<Value> = self
@@ -1371,6 +1460,10 @@ impl WindowedApp {
             DebugCommand::GlobalShortcuts => DebugReply::json(200, self.debug_global_shortcuts()),
             DebugCommand::GlobalShortcutTrigger(request) => {
                 self.handle_debug_global_shortcut(&request)
+            }
+            DebugCommand::GlobalMenu => DebugReply::json(200, self.debug_global_menu()),
+            DebugCommand::GlobalMenuTrigger(request) => {
+                self.handle_debug_global_menu_item(&request)
             }
             DebugCommand::Quit => {
                 if let Some(event_loop) = event_loop {
@@ -1809,6 +1902,13 @@ pub(crate) fn run_headless(
             Some(PlatformEvent::GlobalShortcut(event)) => {
                 handler.remount_trigger = "global_shortcut";
                 if handler.app.apply_global_shortcut_event(event) {
+                    handler.on_redraw_requested();
+                    handler.sync_cursor();
+                }
+            }
+            Some(PlatformEvent::GlobalMenu(event)) => {
+                handler.remount_trigger = "global_menu";
+                if handler.apply_global_menu_event(event) {
                     handler.on_redraw_requested();
                     handler.sync_cursor();
                 }

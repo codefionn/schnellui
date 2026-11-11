@@ -581,6 +581,9 @@ pub struct App {
     /// System-wide shortcuts, their handlers and the platform session the
     /// native window host keeps for them.
     global_shortcuts: app_global_shortcuts::GlobalShortcutRegistry,
+    /// The system menu bar the app asked for, its handlers and the platform
+    /// menu the native window host keeps for it.
+    global_menu: app_global_menu::GlobalMenuRegistry,
     /// What the mouse's back and forward buttons do where no raw surface
     /// takes them.
     navigation_handler: Option<NavigationHandler>,
@@ -758,6 +761,7 @@ fn owning_combo_trigger(scene: &Scene, option: WidgetId) -> Option<WidgetId> {
     None
 }
 
+mod app_global_menu;
 mod app_global_shortcuts;
 mod app_inherit;
 mod app_input;

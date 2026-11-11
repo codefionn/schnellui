@@ -408,6 +408,7 @@ impl App {
         self.test_registry = std::mem::take(&mut previous.test_registry);
         self.shortcut_registry = std::mem::take(&mut previous.shortcut_registry);
         self.inherit_global_shortcuts(previous);
+        self.inherit_global_menu(previous);
         self.navigation_handler = previous.navigation_handler.take();
         self.focused_key_bindings = std::mem::take(&mut previous.focused_key_bindings);
         self.focused_input_bindings = std::mem::take(&mut previous.focused_input_bindings);

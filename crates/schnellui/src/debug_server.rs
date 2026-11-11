@@ -108,6 +108,12 @@ pub(crate) struct DebugGlobalShortcut {
     pub(crate) phase: Option<String>,
 }
 
+/// Chooses a global menu action by id, as the system menu would.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugGlobalMenuItem {
+    pub(crate) id: String,
+}
+
 #[derive(Debug)]
 pub(crate) enum DebugCommand {
     Tree,
@@ -124,6 +130,8 @@ pub(crate) enum DebugCommand {
     Key(DebugKey),
     GlobalShortcuts,
     GlobalShortcutTrigger(DebugGlobalShortcut),
+    GlobalMenu,
+    GlobalMenuTrigger(DebugGlobalMenuItem),
     Quit,
 }
 
@@ -591,6 +599,10 @@ fn route_request(request: HttpRequest) -> Result<Option<DebugCommand>, DebugRepl
         ("POST", "/v1/global-shortcut/trigger") => {
             DebugCommand::GlobalShortcutTrigger(parse_json(&request.body)?)
         }
+        ("GET", "/v1/global-menu") => DebugCommand::GlobalMenu,
+        ("POST", "/v1/global-menu/trigger") => {
+            DebugCommand::GlobalMenuTrigger(parse_json(&request.body)?)
+        }
         ("POST", "/v1/quit") => DebugCommand::Quit,
         _ => return Err(DebugReply::error(404, "unknown debug endpoint")),
     };
@@ -661,6 +673,30 @@ mod tests {
         };
         assert_eq!(request.id, "toggle");
         assert_eq!(request.phase.as_deref(), Some("press"));
+    }
+
+    #[test]
+    fn routes_global_menu_requests() {
+        let list = HttpRequest {
+            method: "GET".into(),
+            path: "/v1/global-menu".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        assert!(matches!(
+            route_request(list).unwrap().unwrap(),
+            DebugCommand::GlobalMenu
+        ));
+        let trigger = HttpRequest {
+            method: "POST".into(),
+            path: "/v1/global-menu/trigger".into(),
+            headers: Vec::new(),
+            body: br#"{"id":"file.open"}"#.to_vec(),
+        };
+        let Some(DebugCommand::GlobalMenuTrigger(request)) = route_request(trigger).unwrap() else {
+            panic!("wrong command");
+        };
+        assert_eq!(request.id, "file.open");
     }
 
     #[test]

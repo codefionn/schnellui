@@ -2771,6 +2771,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
+name = "global_menu"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "schnellui",
+ "strum",
+]
+
+[[package]]
 name = "global_shortcuts"
 version = "0.1.0"
 dependencies = [
@@ -6357,6 +6366,7 @@ dependencies = [
  "futures-util",
  "image",
  "js-sys",
+ "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "once_cell",
