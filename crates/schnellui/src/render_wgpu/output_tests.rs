@@ -840,6 +840,102 @@ fn clip_edge_on_a_pixel_centre_is_stable_under_float_noise() {
     }
 }
 
+/// The clip test runs on the fragment's frag coord, not an interpolated varying: the
+/// rasterizer snaps vertices to a sub-pixel grid, so a quad moved by an ulp (a live
+/// app slid its paint by deltas, a fresh mount placed it once) used to flip the row
+/// whose centre sits on the clip edge. Scale 1.5 with a 281 px clip puts row 421's
+/// centre at exactly 281.0.
+#[test]
+fn clip_edge_row_does_not_depend_on_an_ulp_of_quad_position() {
+    let mut r = match Renderer::try_new(64, 422, Backend::Auto) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipping GPU render test: {e}");
+            return;
+        }
+    };
+    r.set_scale(1.5);
+    r.set_clear_color(Color::rgba(0, 0, 0, 255));
+    let atlas = GlyphAtlas::new(64, 64);
+    let mut rows = Vec::new();
+    let mut y = 276.6443_f32;
+    for _ in 0..64 {
+        let mut scene = Scene::new();
+        let scroll = scene.insert(WidgetKind::Scroll, None);
+        scene.set_root(scroll);
+        scene.set_layout(
+            scroll,
+            LayoutBox {
+                rect: Rect::new(0.0, 0.0, 42.0, 281.0),
+                content: Rect::ZERO,
+            },
+        );
+        let child = scene.insert(WidgetKind::Chart, Some(scroll));
+        scene
+            .paint_mut(child)
+            .primitives
+            .push(Primitive::SolidRect {
+                rect: Rect::new(2.0, y, 30.0, 8.666667),
+                color: Color::rgba(255, 0, 0, 255),
+                corner_radius: 0.0,
+            });
+        scene.mark_dirty(child, DirtyFlags::PAINT);
+        let rgba = r.render_rgba8(&scene, &atlas);
+        rows.push(px(&rgba, 64, 10, 421));
+        y = f32::from_bits(y.to_bits() + 1);
+    }
+    for row in &rows {
+        assert_eq!(*row, [255, 0, 0, 255], "row on the clip edge painted");
+    }
+}
+
+/// A glyph quad whose origin sits on a half pixel puts every pixel centre exactly on
+/// a texel boundary. Which texel the sampler took there used to depend on where the
+/// glyph sat in the atlas (the interpolated uv rounds differently per offset), so a
+/// live app and a fresh mount, which pack glyphs in different orders, drew the same
+/// text with different anti-aliasing. The pixels must not depend on the atlas slot.
+#[test]
+fn glyph_on_a_half_pixel_draws_the_same_from_any_atlas_slot() {
+    let mut r = match Renderer::try_new(64, 640, Backend::Auto) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipping GPU render test: {e}");
+            return;
+        }
+    };
+    r.set_clear_color(Color::rgba(0, 0, 0, 255));
+    let coverage: Vec<u8> = (0..252u32).map(|i| (20 + i % 200) as u8).collect();
+    let slots = (0..600u32).map(|i| ((i * 211 + i * i * 7) % 1000, (i * 389 + i * i * 13) % 1000));
+    let mut first: Option<Vec<u8>> = None;
+    for (i, (ax, ay)) in slots.enumerate() {
+        let mut atlas = GlyphAtlas::new(1024, 1024);
+        let slot = schnellui::text::AtlasRect {
+            x: ax,
+            y: ay,
+            width: 14,
+            height: 18,
+        };
+        atlas.write_coverage(slot, &coverage);
+        let mut scene = Scene::new();
+        let root = scene.insert(WidgetKind::Chart, None);
+        scene.set_root(root);
+        scene.paint_mut(root).primitives.push(Primitive::GlyphQuad {
+            rect: Rect::new(10.0, 539.5, 14.0, 18.0),
+            atlas_uv: Rect::new(ax as f32, ay as f32, 14.0, 18.0),
+            color: Color::rgba(255, 255, 255, 255),
+        });
+        scene.mark_dirty(root, DirtyFlags::PAINT);
+        let shot = r.render_rgba8(&scene, &atlas);
+        match &first {
+            None => first = Some(shot),
+            Some(first) => assert!(
+                shot == *first,
+                "atlas slot {i} ({ax}, {ay}) drew the glyph differently from slot 0"
+            ),
+        }
+    }
+}
+
 #[test]
 fn scroll_culls_offscreen_rich_text_before_gathering_its_glyphs() {
     let mut renderer = match Renderer::try_new(64, 64, Backend::Auto) {

@@ -58,7 +58,10 @@ struct QuadOut {
 // often sits exactly on a pixel centre, and which side of it a fragment lands on
 // is float noise: a live app and a fresh mount sum the same layout in a different
 // order and differ by an ulp, so one drew the row and the other did not. The slack
-// (far below a pixel) makes the centre-on-the-edge case always draw.
+// (far below a pixel) makes the centre-on-the-edge case always draw. Callers pass
+// the fragment's frag coord over the scale, not an interpolated varying: the
+// rasterizer snaps vertices to a sub-pixel grid, which moves an interpolated
+// position by thousandths of a pixel when a vertex moves by an ulp.
 const CLIP_SLACK: f32 = 0.001;
 fn clip_discard(logical: vec2<f32>, clip: vec4<f32>) -> bool {
     return logical.x < clip.x - CLIP_SLACK || logical.y < clip.y - CLIP_SLACK
@@ -101,7 +104,7 @@ fn vs_quad(@builtin(vertex_index) vid: u32,
 
 @fragment
 fn fs_quad(in: QuadOut) -> @location(0) vec4<f32> {
-    if (clip_discard(in.logical, in.clip)) {
+    if (clip_discard(in.pos.xy / u.params.x, in.clip)) {
         discard;
     }
     let r = min(in.radius, min(in.half_size.x, in.half_size.y));
@@ -124,6 +127,10 @@ struct GlyphOut {
     @location(1) uv: vec2<f32>,
     @location(2) clip: vec4<f32>,
     @location(3) logical: vec2<f32>,
+    // The quad's logical rect and atlas texel rect, flat per instance, so the
+    // glyph fragment picks its texel from position alone (see fs_glyph).
+    @location(4) @interpolate(flat) rect: vec4<f32>,
+    @location(5) @interpolate(flat) texrect: vec4<f32>,
 };
 
 @vertex
@@ -145,15 +152,27 @@ fn vs_glyph(@builtin(vertex_index) vid: u32,
     out.uv = texel / u.atlas_size;
     out.clip = clip;
     out.logical = logical;
+    out.rect = rect;
+    out.texrect = atlas_uv;
     return out;
 }
 
 @fragment
 fn fs_glyph(in: GlyphOut) -> @location(0) vec4<f32> {
-    if (clip_discard(in.logical, in.clip)) {
+    if (clip_discard(in.pos.xy / u.params.x, in.clip)) {
         discard;
     }
-    let cov = textureSample(atlas_tex, atlas_samp, in.uv).r;
+    // Pick the texel from the pixel's offset into the quad, not from the
+    // interpolated uv. A quad on a half pixel puts every pixel centre exactly on a
+    // texel boundary, and the interpolated uv rounds differently for each atlas
+    // slot, so the same glyph drew with other anti-aliasing after a remount packed
+    // the atlas in another order. The pixel centre (frag coord) is exact, and the
+    // nudge resolves a boundary the same way when layout noise moves the quad by
+    // an ulp. It is far above that noise and far below a texel.
+    let s = u.params.x;
+    let local = (in.pos.xy - in.rect.xy * s) / (in.rect.zw * s) * in.texrect.zw;
+    let t = clamp(floor(local + vec2<f32>(0.00390625)), vec2<f32>(0.0), in.texrect.zw - vec2<f32>(1.0));
+    let cov = textureLoad(atlas_tex, vec2<i32>(in.texrect.xy + t), 0).r;
     let lin = srgb_to_linear(in.color.rgb);
     return vec4<f32>(lin, in.color.a * cov);
 }
@@ -180,12 +199,14 @@ fn vs_image(@builtin(vertex_index) vid: u32,
     out.uv = texel / vec2<f32>(u.params.y, u.params.z);
     out.clip = clip;
     out.logical = logical;
+    out.rect = rect;
+    out.texrect = atlas_uv;
     return out;
 }
 
 @fragment
 fn fs_image(in: GlyphOut) -> @location(0) vec4<f32> {
-    if (clip_discard(in.logical, in.clip)) {
+    if (clip_discard(in.pos.xy / u.params.x, in.clip)) {
         discard;
     }
     let texel = textureSample(atlas_tex, atlas_samp, in.uv);
