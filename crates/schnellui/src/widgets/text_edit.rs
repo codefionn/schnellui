@@ -1187,6 +1187,82 @@ mod tests {
         );
     }
 
+    /// An input in a horizontally scrolled Scroll is hit where it is drawn:
+    /// the pointer is in window coordinates, the layout rect in content space.
+    #[test]
+    fn a_click_in_a_scrolled_input_lands_under_the_pointer() {
+        let runtime = &crate::widgets::Runtime::new();
+        crate::widgets::reset(runtime);
+        let mut scene = Scene::new();
+        let mut layout = LayoutEngine::new();
+        let mut text = TextShaper::new();
+        let mut atlas = GlyphAtlas::new(512, 512);
+        let sv = {
+            let mut ctx = BuildCtx {
+                context: crate::widgets::Context::new(),
+                runtime: runtime.clone(),
+                scene: &mut scene,
+                layout: &mut layout,
+                text: &mut text,
+                atlas: &mut atlas,
+                scale: 1.0,
+            };
+            (Box::new(
+                crate::widgets::Scroll::new()
+                    .size(100.0, 60.0)
+                    .child(TextInput::new("abcdefgh")),
+            ) as Box<dyn View>)
+                .build(&mut ctx, None)
+        };
+        scene.set_root(sv);
+        let id = runtime.with(|rt| rt.borrow().edits.keys().next().unwrap());
+        let view = Rect::new(0.0, 0.0, 100.0, 60.0);
+        scene.set_layout(
+            sv,
+            LayoutBox {
+                rect: view,
+                content: view,
+            },
+        );
+        let rect = Rect::new(200.0, 10.0, 200.0, 28.0);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        // scrolled so the input's left edge is drawn at x = 5
+        scene.set_scroll_offset(sv, Point { x: 195.0, y: 0.0 });
+        dispatch_text_pointer(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            Point {
+                x: 5.0 + PAD_H,
+                y: 20.0,
+            },
+            false,
+        );
+        assert_eq!(caret_anchor(runtime, id), (0, 0));
+        dispatch_text_pointer(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            Point { x: 95.0, y: 20.0 },
+            false,
+        );
+        assert_ne!(
+            caret_anchor(runtime, id),
+            (0, 0),
+            "a click further right moves the caret"
+        );
+    }
+
     #[test]
     fn pointer_places_caret_and_drag_selects() {
         let runtime_handle = crate::widgets::Runtime::new();

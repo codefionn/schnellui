@@ -325,14 +325,7 @@ impl App {
                 _ => false,
             },
             Action::ShowContextMenu => {
-                let position = self
-                    .scene
-                    .layout(id)
-                    .map(|layout| Point {
-                        x: layout.rect.x,
-                        y: layout.rect.y + layout.rect.height,
-                    })
-                    .unwrap_or_default();
+                let position = self.context_menu_anchor(id);
                 self.open_context_menu(id, position, true)
             }
             Action::Click
@@ -340,14 +333,7 @@ impl App {
             {
                 let source = schnellui::widgets::context_menu_trigger_source(&self.widgets, id)
                     .expect("checked above");
-                let position = self
-                    .scene
-                    .layout(source)
-                    .map(|layout| Point {
-                        x: layout.rect.x,
-                        y: layout.rect.y + layout.rect.height,
-                    })
-                    .unwrap_or_default();
+                let position = self.context_menu_anchor(source);
                 self.open_context_menu(source, position, true)
             }
             Action::Click

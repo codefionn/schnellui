@@ -757,6 +757,40 @@ mod tests {
         }
     }
 
+    /// The editor reserves 23 rows for five lines of text. Focusing it and
+    /// typing at the end of the text must not scroll the page down to the blank
+    /// rows below: the first lines stay in view, and a click on a drawn line puts
+    /// the caret on it.
+    #[test]
+    fn the_editor_opens_unscrolled_and_a_click_hits_the_line_drawn_under_it() {
+        use schnellui::scene::Point;
+        let mut app = scenario_app(Scenario::Editor, 640, 560, 1.0);
+        app.frame();
+        let id = app
+            .find_widget(Role::MultilineTextInput, None)
+            .expect("the text area");
+        let scroll = app.scene().node(id).and_then(|n| n.parent).unwrap();
+        assert_eq!(app.scene().scroll_offset(scroll).y, 0.0, "opens unscrolled");
+        // scroll the page, then click the line drawn under the pointer
+        app.scene_mut()
+            .set_scroll_offset(scroll, Point { x: 0.0, y: 60.0 });
+        app.frame();
+        let rect = app.scene().layout(id).expect("laid out").rect;
+        let drawn = Point {
+            x: rect.x + 60.0,
+            y: rect.y + 12.0 + 4.5 * 22.0 - 60.0,
+        };
+        assert_eq!(app.hit_test(drawn), Some(id));
+        assert!(app.dispatch_text_pointer(id, drawn, false));
+        app.dispatch_edit_key(EditKey::Insert("Q"));
+        let tree = a11y::dump_tree(app.scene());
+        let value = find_by_role_name(&tree, "multiline_text_input", None)
+            .and_then(|n| n.value.clone())
+            .expect("the editor's value");
+        let line = value.lines().nth(4).unwrap_or_default();
+        assert!(line.contains('Q') && line.contains("edited"), "{value:?}");
+    }
+
     /// The editor and the markup source keep their top border on the viewport
     /// while the text scrolls: the frame is the field's, not part of the text.
     #[test]

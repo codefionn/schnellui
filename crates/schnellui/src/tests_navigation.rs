@@ -1831,3 +1831,49 @@ fn a_tab_tooltip_below_the_tab_stays_above_the_content_after_it() {
         "the panel after the tab bar covers the tooltip"
     );
 }
+
+/// The menu a keyboard or AccessKit request opens hangs from where the field is
+/// drawn, not from its layout box: inside a scrolled view they differ.
+#[test]
+fn a_context_menu_opened_by_action_hangs_from_the_drawn_field() {
+    use schnellui::a11y::accesskit_reexport::{Action, ActionRequest, TreeId};
+    use schnellui::a11y::to_access_id;
+    use schnellui::widgets::{Column, Scroll, Text, TextInput};
+
+    let mut content = Column::new();
+    for row in 0..30 {
+        content = content.child(Text::new(format!("Row {row}")));
+    }
+    let mut app = App::mount_with_size(
+        Scroll::new()
+            .size(300.0, 200.0)
+            .child(content.child(TextInput::new("draft").label("Note"))),
+        400,
+        800,
+    );
+    app.frame();
+    let input = app.find_widget(Role::TextInput, Some("Note")).unwrap();
+    let scroll = app.find_widget(Role::ScrollView, None).unwrap();
+    assert!(schnellui::widgets::dispatch_scroll(
+        &app.widgets,
+        &mut app.scene,
+        scroll,
+        10_000.0,
+    ));
+    app.frame();
+    let r = app.scene().layout(input).unwrap().rect;
+    let drawn_bottom = r.bottom() + app.scene().composited_offset(input).y;
+    assert!(drawn_bottom < r.bottom() - 50.0, "the field is scrolled");
+    assert!(app.dispatch_action(&ActionRequest {
+        action: Action::ShowContextMenu,
+        target_tree: TreeId::ROOT,
+        target_node: to_access_id(input),
+        data: None,
+    }));
+    let menu = app.find_widget(Role::Menu, Some("Text editing")).unwrap();
+    let menu_rect = app.scene().layout(menu).unwrap().rect;
+    assert!(
+        (menu_rect.y - drawn_bottom).abs() < 6.0,
+        "menu at {menu_rect:?}, field drawn down to {drawn_bottom}"
+    );
+}

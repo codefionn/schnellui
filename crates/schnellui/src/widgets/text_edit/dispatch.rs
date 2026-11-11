@@ -498,6 +498,13 @@ pub fn dispatch_text_pointer_action(
     let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
         return false;
     };
+    // `p` is in window space; the layout rect is in content space.
+    let rect = Rect::new(
+        rect.x + scene.composited_offset(id).x,
+        rect.y,
+        rect.width,
+        rect.height,
+    );
     let shown_value = display_value(&value, password);
     let shaped = shaper.shape(&shown_value, phys_size_px(size_px, scale), None);
     // pointer → inline offset in the scrolled value (logical → physical),

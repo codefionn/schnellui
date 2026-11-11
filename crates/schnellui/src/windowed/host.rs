@@ -240,15 +240,7 @@ impl WindowedApp {
         }) else {
             return false;
         };
-        let position = self
-            .app
-            .scene()
-            .layout(source)
-            .map(|layout| Point {
-                x: layout.rect.x,
-                y: layout.rect.y + layout.rect.height,
-            })
-            .unwrap_or_default();
+        let position = self.app.context_menu_anchor(source);
         let can_paste = self.clipboard.read_text().is_ok();
         self.app.open_context_menu(source, position, can_paste)
     }

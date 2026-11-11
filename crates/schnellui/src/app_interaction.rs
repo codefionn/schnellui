@@ -865,6 +865,20 @@ impl App {
         )
     }
 
+    /// Where a menu a keyboard or AccessKit request opens hangs from: the
+    /// bottom-left of `source` as drawn, in window coordinates. Its layout box
+    /// is in content space, which a scrolled view moves.
+    pub(crate) fn context_menu_anchor(&self, source: scene::WidgetId) -> scene::Point {
+        let offset = self.scene.composited_offset(source);
+        self.scene
+            .layout(source)
+            .map(|layout| scene::Point {
+                x: layout.rect.x + offset.x,
+                y: layout.rect.y + layout.rect.height + offset.y,
+            })
+            .unwrap_or_default()
+    }
+
     /// Backward-compatible spelling for opening an editable context menu.
     pub fn open_text_context_menu(
         &mut self,
@@ -1044,14 +1058,7 @@ impl App {
             // Trigger button wants to open its source's menu. Mirror the
             // keyboard ShowContextMenu path: anchor at the source's bottom-left
             // and enable paste for editable sources when the clipboard has text.
-            let position = self
-                .scene
-                .layout(source)
-                .map(|layout| scene::Point {
-                    x: layout.rect.x,
-                    y: layout.rect.y + layout.rect.height,
-                })
-                .unwrap_or(scene::Point { x: 0.0, y: 0.0 });
+            let position = self.context_menu_anchor(source);
             // For trigger-sourced opens we always probe clipboard once (editable
             // Paste gating mirrors the generic Action::ShowContextMenu handler).
             let can_paste = true;

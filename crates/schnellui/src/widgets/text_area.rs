@@ -1500,8 +1500,8 @@ pub(crate) fn dispatch_area_key(
 /// The box of the row the primary caret of the area `id` is on, in the area's
 /// layout `rect` (the rows sit at fixed offsets inside it, so only the caret's
 /// row needs finding). The first row reaches up to the top of the area and the
-/// last down to its bottom, so padding comes into view with them. `None` while
-/// the row table is stale or the area has no state.
+/// last down over its bottom padding, so padding comes into view with them.
+/// `None` while the row table is stale or the area has no state.
 pub(crate) fn caret_rect(
     runtime: &crate::widgets::Runtime,
     shaper: &mut TextShaper,
@@ -1535,8 +1535,10 @@ pub(crate) fn caret_rect(
         };
         let top = rect.y + AREA_PAD + row as f32 * line_h;
         let from = if row == 0 { rect.y } else { top };
+        // The last row reaches down over the bottom padding, not over the blank
+        // rows an area that reserves room (`rows(n)`) keeps below its text.
         let to = if row + 1 >= rows {
-            rect.bottom()
+            (top + line_h + AREA_PAD).min(rect.bottom())
         } else {
             top + line_h
         };
@@ -1561,6 +1563,15 @@ pub(crate) fn dispatch_area_pointer(
     let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
         return false;
     };
+    // `p` is in window space; the layout rect is in content space, so move it
+    // to where an enclosing Scroll (or a transform) draws the area.
+    let offset = scene.composited_offset(id);
+    let rect = Rect::new(
+        rect.x + offset.x,
+        rect.y + offset.y,
+        rect.width,
+        rect.height,
+    );
     let change = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         let st = rt.areas.get_mut(id)?;
@@ -2514,6 +2525,165 @@ mod tests {
             EditKey::DocStart { select: false }
         ));
         assert_eq!(scene.scroll_offset(sv).y, 0.0, "Ctrl+Home scrolls back up");
+    }
+
+    /// A 40-line area in a 200px Scroll scrolled by `scrolled`, laid out at
+    /// y = 30 inside it. Returns the row height too.
+    fn scrolled_area(
+        runtime: &crate::widgets::Runtime,
+        scrolled: f32,
+    ) -> (Scene, TextShaper, GlyphAtlas, WidgetId, f32) {
+        let lines = 40;
+        let (mut scene, _l, mut text, mut atlas, sv) = build_area(
+            runtime,
+            crate::widgets::Scroll::new()
+                .size(300.0, 200.0)
+                .child(TextArea::new(numbered_source(lines))),
+        );
+        let id = runtime.with(|rt| rt.borrow().areas.keys().next().unwrap());
+        let view = Rect::new(0.0, 0.0, 300.0, 200.0);
+        scene.set_layout(
+            sv,
+            LayoutBox {
+                rect: view,
+                content: view,
+            },
+        );
+        emit_text_area_paint(runtime, &mut scene, &mut text, &mut atlas, id);
+        let line_h = runtime.with(|rt| rt.borrow().areas.get(id).unwrap().cache.line_h.unwrap().1);
+        let rect = Rect::new(0.0, 30.0, 300.0, lines as f32 * line_h + 2.0 * AREA_PAD);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        scene.set_scroll_offset(
+            sv,
+            Point {
+                x: 0.0,
+                y: scrolled,
+            },
+        );
+        (scene, text, atlas, id, line_h)
+    }
+
+    /// The pointer is in window coordinates, so a text area inside a scrolled
+    /// Scroll is hit where it is drawn, not where its layout box is.
+    #[test]
+    fn a_click_in_a_scrolled_area_lands_on_the_line_under_the_pointer() {
+        let runtime = &crate::widgets::Runtime::new();
+        let (mut scene, mut text, mut atlas, id, line_h) = scrolled_area(runtime, 100.0);
+        let starts = runtime.with(|rt| rt.borrow().areas.get(id).unwrap().cache.starts.clone());
+        for line in [5usize, 9] {
+            // drawn at layout y - scroll
+            let y = 30.0 + AREA_PAD + (line as f32 + 0.5) * line_h - 100.0;
+            dispatch_text_pointer(
+                runtime,
+                &mut scene,
+                &mut text,
+                &mut atlas,
+                id,
+                Point {
+                    x: AREA_PAD + 1.0,
+                    y,
+                },
+                false,
+            );
+            assert_eq!(caret_anchor(runtime, id), (starts[line], starts[line]));
+        }
+    }
+
+    #[test]
+    fn a_drag_and_word_select_in_a_scrolled_area_follow_the_drawn_lines() {
+        let runtime = &crate::widgets::Runtime::new();
+        let (mut scene, mut text, mut atlas, id, line_h) = scrolled_area(runtime, 100.0);
+        let starts = runtime.with(|rt| rt.borrow().areas.get(id).unwrap().cache.starts.clone());
+        let y = |line: usize| 30.0 + AREA_PAD + (line as f32 + 0.5) * line_h - 100.0;
+        let at = |line: usize| Point {
+            x: AREA_PAD + 1.0,
+            y: y(line),
+        };
+        dispatch_text_pointer(runtime, &mut scene, &mut text, &mut atlas, id, at(6), false);
+        dispatch_text_pointer(runtime, &mut scene, &mut text, &mut atlas, id, at(8), true);
+        assert_eq!(caret_anchor(runtime, id), (starts[8], starts[6]));
+        // double click selects the word "line" on the drawn line, not 100px up
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            Point {
+                x: AREA_PAD + 4.0,
+                y: y(7),
+            },
+            TextPointerAction::SelectWord,
+        );
+        assert_eq!(caret_anchor(runtime, id), (starts[7] + 4, starts[7]));
+        // triple click selects that line
+        dispatch_text_pointer_action(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            at(7),
+            TextPointerAction::SelectLine,
+        );
+        let (caret, anchor) = caret_anchor(runtime, id);
+        assert_eq!(anchor, starts[7]);
+        assert!(caret >= starts[8] - 1 && caret <= starts[8], "{caret}");
+    }
+
+    /// An area that reserves more rows than its text fills (`rows(23)`) has
+    /// blank room below the last line. Revealing a caret on that line brings its
+    /// padding into view, not the blank rows: the editor opened scrolled to the
+    /// bottom of its empty space with the first lines hidden.
+    #[test]
+    fn a_caret_on_the_last_line_of_a_roomy_area_does_not_reveal_the_blank_rows() {
+        let runtime = &crate::widgets::Runtime::new();
+        let (mut scene, _l, mut text, mut atlas, sv) = build_area(
+            runtime,
+            crate::widgets::Scroll::new()
+                .size(300.0, 200.0)
+                .child(TextArea::new("one\ntwo\nthree")),
+        );
+        let id = runtime.with(|rt| rt.borrow().areas.keys().next().unwrap());
+        let view = Rect::new(0.0, 0.0, 300.0, 200.0);
+        scene.set_layout(
+            sv,
+            LayoutBox {
+                rect: view,
+                content: view,
+            },
+        );
+        emit_text_area_paint(runtime, &mut scene, &mut text, &mut atlas, id);
+        let rect = Rect::new(0.0, 0.0, 300.0, 600.0);
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: rect,
+            },
+        );
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        dispatch_edit_key(
+            runtime,
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            id,
+            EditKey::DocEnd { select: false },
+        );
+        assert_eq!(
+            scene.scroll_offset(sv).y,
+            0.0,
+            "the last line is in view; the blank rows below it are not revealed"
+        );
+        let caret = caret_rect(runtime, &mut text, id, rect).unwrap();
+        assert!(caret.bottom() < 100.0, "{caret:?}");
     }
 
     #[test]
