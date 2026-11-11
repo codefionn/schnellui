@@ -3,6 +3,18 @@ use schnellui::scene::{LayoutBox, Point, Rect, Scene, Size, WidgetId, WidgetKind
 use slotmap::SecondaryMap;
 use taffy::style_helpers::{length, percent};
 
+/// Overflow below this many logical pixels is layout rounding, not content. It
+/// matches the threshold that decides whether a viewport can scroll.
+const SUB_PIXEL_OVERFLOW: f32 = 0.5;
+
+/// Whether a scrollbar viewport currently reserves its gutter, and the size it
+/// had when that was last decided.
+#[derive(Clone, Copy, Default)]
+struct Gutter {
+    on: bool,
+    size: [f32; 2],
+}
+
 /// Geometry of one node as last written to the scene's layout column.
 #[derive(Clone, Copy, PartialEq)]
 struct Placed {
@@ -63,6 +75,14 @@ pub struct LayoutEngine {
     /// Grow-only query-resolution scratch. Responsive resize work may grow it once;
     /// subsequent relayouts clear-and-refill without allocating.
     responsive_scratch: Vec<(WidgetId, bool)>,
+    /// Scroll viewports that draw a scrollbar, with the gutter state of each.
+    gutters: SecondaryMap<WidgetId, Gutter>,
+    /// The ids in `gutters`. Dead ids are dropped lazily, so a pass costs the
+    /// number of scrollbar viewports and not the size of the document.
+    gutter_ids: Vec<WidgetId>,
+    /// Grow-only scratch for one gutter decision: each viewport under the pass
+    /// root and whether it was already re-measured at full width.
+    gutter_scratch: Vec<(WidgetId, bool)>,
 }
 
 impl Default for LayoutEngine {
@@ -100,6 +120,9 @@ impl LayoutEngine {
             sync_order: Vec::new(),
             kids: Vec::new(),
             responsive_scratch: Vec::new(),
+            gutters: SecondaryMap::new(),
+            gutter_ids: Vec::new(),
+            gutter_scratch: Vec::new(),
         }
     }
 
@@ -157,6 +180,14 @@ impl LayoutEngine {
     /// the node is already synced its cache is invalidated so the next
     /// [`Self::compute`] relayouts it and its ancestors.
     pub fn set_container(&mut self, id: WidgetId, style: ContainerStyle) {
+        if style.scrollbar_gutter && style.container == Container::Scroll {
+            if !self.gutters.contains_key(id) {
+                self.gutters.insert(id, Gutter::default());
+                self.gutter_ids.push(id);
+            }
+        } else {
+            self.gutters.remove(id);
+        }
         self.styles.insert(id, style);
         self.invalidate(id);
     }
@@ -221,6 +252,7 @@ impl LayoutEngine {
                 let _ = self.taffy.remove(node);
             }
             self.styles.remove(id);
+            self.gutters.remove(id);
             self.flexes.remove(id);
             self.measures.remove(id);
             self.fills.remove(id);
@@ -390,6 +422,9 @@ impl LayoutEngine {
                 .copied()
                 .unwrap_or_else(|| ContainerStyle::new(default_container(kind)));
             apply_container(&mut s, &style);
+            if self.gutters.get(id).is_some_and(|g| g.on) {
+                s.scrollbar_width = SCROLLBAR_GUTTER;
+            }
         }
         // else: a content leaf keeps auto size — its MeasureFn supplies the
         // intrinsic size during compute. A *width-filling* leaf (wrapping text,
@@ -492,14 +527,14 @@ impl LayoutEngine {
         if scene.root() == Some(root) || scene.node(root).and_then(|n| n.parent).is_none() {
             self.viewport = Some(Rect::new(0.0, 0.0, available.width, available.height));
         }
-        self.run_taffy(root_t, avail, &mut measurer);
+        self.run_with_gutters(scene, root, root_t, avail, &mut measurer);
         self.write_boxes(scene, root);
 
         // Parent/container queries need the parent's computed content box. Resolve
         // them after the first pass, then immediately recompute once if a rule
         // changed so callers never observe a one-frame layout flash.
         if self.resolve_container_queries(scene) {
-            self.run_taffy(root_t, avail, &mut measurer);
+            self.run_with_gutters(scene, root, root_t, avail, &mut measurer);
             self.write_boxes(scene, root);
         }
         // Drop only the invalidations this pass consumed. A subtree relayout leaves
@@ -518,6 +553,113 @@ impl LayoutEngine {
                 }
                 true
             });
+        }
+    }
+
+    /// Runs Taffy, then settles which scrollbar viewports under `root` reserve their
+    /// gutter. Overflow is judged at full width: a viewport whose content changed is
+    /// laid out without its gutter first, and takes the gutter only if the content
+    /// then overflows. Content that overflows at full width is at least as tall
+    /// narrower, so a viewport that takes the gutter keeps it and the decision
+    /// cannot oscillate. A viewport that kept the gutter and was not invalidated is
+    /// left alone unless its own size changed, and then it is re-measured the same way.
+    fn run_with_gutters(
+        &mut self,
+        scene: &Scene,
+        root: WidgetId,
+        root_t: taffy::NodeId,
+        avail: taffy::Size<taffy::AvailableSpace>,
+        measurer: &mut Option<DynMeasure>,
+    ) {
+        if self.gutter_ids.is_empty() {
+            self.run_taffy(root_t, avail, measurer);
+            return;
+        }
+        let gutters = &self.gutters;
+        self.gutter_ids.retain(|id| gutters.contains_key(*id));
+        let mut active = std::mem::take(&mut self.gutter_scratch);
+        active.clear();
+        for index in 0..self.gutter_ids.len() {
+            let id = self.gutter_ids[index];
+            let Some(&t) = self.map.get(id) else { continue };
+            if !is_within(scene, id, root) {
+                continue;
+            }
+            let mut remeasured = false;
+            if self.gutters[id].on && self.taffy.dirty(t).unwrap_or(true) {
+                self.set_gutter(scene, id, false);
+                remeasured = true;
+            }
+            active.push((id, remeasured));
+        }
+        self.run_taffy(root_t, avail, measurer);
+        // Each round flips at most the viewports whose answer changed. Three rounds
+        // cover a viewport nested in another one; a fourth never ran in practice.
+        for _ in 0..4 {
+            let mut changed = false;
+            for entry in active.iter_mut() {
+                let id = entry.0;
+                let Some(&t) = self.map.get(id) else { continue };
+                let Some(gutter) = self.gutters.get(id).copied() else {
+                    continue;
+                };
+                let Ok(own) = self.taffy.layout(t) else {
+                    continue;
+                };
+                let size = [own.size.width, own.size.height];
+                let overflows = self.overflows(t, size[1]);
+                match (gutter.on, overflows) {
+                    (false, true) => {
+                        self.set_gutter(scene, id, true);
+                        changed = true;
+                    }
+                    (true, false) => {
+                        self.set_gutter(scene, id, false);
+                        changed = true;
+                    }
+                    (true, true) if !entry.1 && size != gutter.size => {
+                        self.set_gutter(scene, id, false);
+                        entry.1 = true;
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !changed {
+                break;
+            }
+            self.run_taffy(root_t, avail, measurer);
+        }
+        for &(id, _) in &active {
+            let Some(&t) = self.map.get(id) else { continue };
+            if let (Ok(own), Some(gutter)) = (self.taffy.layout(t), self.gutters.get_mut(id)) {
+                gutter.size = [own.size.width, own.size.height];
+            }
+        }
+        self.gutter_scratch = active;
+    }
+
+    /// Whether the children of a viewport reach below its bottom edge, by the same
+    /// measure the scroll offset clamps to.
+    fn overflows(&self, viewport: taffy::NodeId, height: f32) -> bool {
+        use taffy::TraversePartialTree;
+        let mut bottom = 0.0_f32;
+        for child in self.taffy.child_ids(viewport) {
+            if let Ok(layout) = self.taffy.layout(child) {
+                bottom = bottom.max(layout.location.y + layout.size.height);
+            }
+        }
+        bottom - height >= SUB_PIXEL_OVERFLOW
+    }
+
+    fn set_gutter(&mut self, scene: &Scene, id: WidgetId, on: bool) {
+        if let Some(gutter) = self.gutters.get_mut(id) {
+            gutter.on = on;
+        }
+        if let Some(&t) = self.map.get(id) {
+            let style = self.build_style(scene, id);
+            let _ = self.taffy.set_style(t, style);
+            self.touched.push(id);
         }
     }
 
@@ -782,6 +924,18 @@ fn resolve_available(known: Option<f32>, space: taffy::AvailableSpace) -> f32 {
         taffy::AvailableSpace::MinContent => 0.0,
         taffy::AvailableSpace::MaxContent => f32::INFINITY,
     })
+}
+
+/// Whether `id` is `root` or lies below it.
+fn is_within(scene: &Scene, id: WidgetId, root: WidgetId) -> bool {
+    let mut cur = Some(id);
+    while let Some(c) = cur {
+        if c == root {
+            return true;
+        }
+        cur = scene.node(c).and_then(|n| n.parent);
+    }
+    false
 }
 
 /// The default [`Container`] for a bare container [`WidgetKind`] with no registered

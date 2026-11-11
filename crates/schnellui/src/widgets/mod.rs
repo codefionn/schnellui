@@ -431,6 +431,8 @@ const CHECKBOX_SIZE: f32 = 18.0;
 /// Native vertical scrollbar geometry, in logical pixels.
 const SCROLLBAR_WIDTH: f32 = 10.0;
 const SCROLLBAR_INSET: f32 = 2.0;
+// Layout reserves exactly the strip the bar paints in.
+const _: () = assert!(SCROLLBAR_WIDTH + SCROLLBAR_INSET == crate::layout::SCROLLBAR_GUTTER);
 const SCROLLBAR_MIN_THUMB: f32 = 20.0;
 /// Pointer-edge scrolling uses a deliberately small, stable activation strip.
 const EDGE_AUTO_SCROLL_ZONE: f32 = 24.0;

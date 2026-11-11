@@ -851,6 +851,23 @@ mod tests {
         assert!(faults.is_empty(), "{faults:#?}");
     }
 
+    /// At 360x240 the panel overflows and its scrollbar shows. The bar sits in a
+    /// strip of its own: no key or display text reaches under it.
+    #[test]
+    fn the_scrollbar_covers_no_key_at_360x240() {
+        for scenario in Scenario::iter() {
+            let mut app = scenario_app(scenario, 360, 240, 1.0);
+            app.frame();
+            assert!(
+                !schnellui::testing::fuzz::scrollbars(&app).is_empty(),
+                "{}: the panel should overflow here",
+                scenario.name()
+            );
+            let covered = schnellui::testing::fuzz::scrollbar_overlaps(&app);
+            assert!(covered.is_empty(), "{}: {covered:#?}", scenario.name());
+        }
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]

@@ -1062,3 +1062,127 @@ fn fit_width_gives_a_wrapping_row_the_viewport_width() {
     assert!(wrapped_row_width(false) > 200.0);
     assert!((wrapped_row_width(true) - 200.0).abs() < 0.5);
 }
+
+/// A page-sized viewport whose single column stretches to the viewport's width
+/// and holds `n` rows. Returns the viewport, the column and the layout.
+fn gutter_page(
+    runtime: &crate::widgets::Runtime,
+    n: usize,
+    avail: Size,
+    scrollbar: bool,
+) -> (Scene, LayoutEngine, WidgetId, WidgetId) {
+    let mut col = Column::new().align(Align::Stretch);
+    for _ in 0..n {
+        col = col.child(Column::new().size(40.0, 20.0));
+    }
+    let (scene, layout, _t, _a, scroll) = build_and_layout(
+        runtime,
+        Scroll::new()
+            .fill()
+            .fit_width()
+            .scrollbar(scrollbar)
+            .child(col),
+        avail,
+    );
+    let column = scene.node(scroll).unwrap().children[0];
+    (scene, layout, scroll, column)
+}
+
+fn gutter_avail(height: f32) -> Size {
+    Size {
+        width: 300.0,
+        height,
+    }
+}
+
+#[test]
+fn overflowing_content_ends_left_of_the_scrollbar() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (scene, _layout, scroll, column) = gutter_page(runtime, 40, gutter_avail(200.0), true);
+    let metrics = scroll_metrics(&scene, scroll).unwrap();
+    assert!(metrics.max_offset > 0.0, "the rows overflow");
+    let (track, _) = scrollbar_rects(metrics).unwrap();
+    let child = scene.layout(column).unwrap().rect;
+    assert!(
+        child.right() <= track.x,
+        "content right {} runs under the bar at {}",
+        child.right(),
+        track.x
+    );
+    assert_eq!(child.width, 300.0 - 12.0);
+}
+
+#[test]
+fn content_that_fits_keeps_the_full_width() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (scene, _layout, scroll, column) = gutter_page(runtime, 3, gutter_avail(200.0), true);
+    assert_eq!(scroll_metrics(&scene, scroll).unwrap().max_offset, 0.0);
+    assert_eq!(scene.layout(column).unwrap().rect.width, 300.0);
+}
+
+#[test]
+fn a_viewport_without_a_scrollbar_reserves_nothing() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (scene, _layout, scroll, column) = gutter_page(runtime, 40, gutter_avail(200.0), false);
+    assert!(scroll_metrics(&scene, scroll).unwrap().max_offset > 0.0);
+    assert_eq!(scene.layout(column).unwrap().rect.width, 300.0);
+}
+
+/// Resizing so the content goes from fitting to overflowing and back moves the
+/// child's width with it, and the bar tracks the narrower or wider viewport.
+#[test]
+fn the_gutter_follows_a_resize_between_fitting_and_overflowing() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, scroll, column) =
+        gutter_page(runtime, 12, gutter_avail(600.0), true);
+    let width = |scene: &Scene| scene.layout(column).unwrap().rect.width;
+    assert_eq!(width(&scene), 300.0, "fits at 600 tall");
+    for _ in 0..2 {
+        layout.compute(&mut scene, scroll, gutter_avail(120.0));
+        assert!(scroll_metrics(&scene, scroll).unwrap().max_offset > 0.0);
+        assert_eq!(width(&scene), 288.0, "overflows at 120 tall");
+        let (track, _) = scrollbar_rects(scroll_metrics(&scene, scroll).unwrap()).unwrap();
+        assert!(scene.layout(column).unwrap().rect.right() <= track.x);
+
+        layout.compute(&mut scene, scroll, gutter_avail(600.0));
+        assert_eq!(scroll_metrics(&scene, scroll).unwrap().max_offset, 0.0);
+        assert_eq!(width(&scene), 300.0, "fits again at 600 tall");
+    }
+}
+
+/// A wrapping row gets taller when the gutter narrows it: eight 74px boxes make
+/// two lines (40px) at 300 and three lines (60px) at 288. A viewport 50px tall
+/// fits the row at full width, so it must keep all 300 and take no gutter, though
+/// the narrower layout would overflow. A viewport that overflows at full width
+/// takes the gutter and keeps it.
+#[test]
+fn the_gutter_is_decided_at_full_width() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    for height in (30..=80).step_by(5) {
+        reset(runtime);
+        let mut row = Row::new().wrap();
+        for _ in 0..8 {
+            row = row.child(Column::new().size(74.0, 20.0));
+        }
+        let (scene, _layout, _t, _a, scroll) = build_and_layout(
+            runtime,
+            Scroll::new()
+                .fill()
+                .fit_width()
+                .scrollbar(true)
+                .child(Column::new().align(Align::Stretch).child(row)),
+            gutter_avail(height as f32),
+        );
+        let column = scene.node(scroll).unwrap().children[0];
+        let metrics = scroll_metrics(&scene, scroll).unwrap();
+        let width = scene.layout(column).unwrap().rect.width;
+        let want = if height < 40 { 288.0 } else { 300.0 };
+        assert_eq!(width, want, "height {height}");
+        assert_eq!(metrics.max_offset > 0.0, height < 40);
+    }
+}

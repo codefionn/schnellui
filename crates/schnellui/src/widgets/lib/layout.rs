@@ -326,8 +326,9 @@ impl View for Referenced {
 /// built without `.scrollbar(true)` scrolls by wheel and keys but shows no sign that
 /// it has more content, so users miss everything below the fold. Apps have shipped
 /// lists like that several times. Turn the bar on for every viewport whose content
-/// can overflow, and end its rows `SCROLLBAR_WIDTH + SCROLLBAR_INSET` (12 px) before
-/// the right edge, because the bar paints over the content.
+/// can overflow. While the content overflows, layout reserves the bar's strip
+/// (`SCROLLBAR_WIDTH + SCROLLBAR_INSET`, 12 px) at the right edge and lays the content
+/// out in the rest, so the bar never covers it. Content that fits keeps the full width.
 pub struct Scroll {
     pub(crate) child: Option<AnyView>,
     pub(crate) style: ContainerStyle,
@@ -491,7 +492,11 @@ impl View for Scroll {
             offset_value.push('0');
             a.value = Some(offset_value);
         }
-        ctx.layout.set_container(id, this.style);
+        let mut style = this.style;
+        // The bar gets its own strip while the content overflows (SOUL §8.1: layout
+        // owns geometry), so content never runs under it.
+        style.scrollbar_gutter = this.scrollbar;
+        ctx.layout.set_container(id, style);
         ctx.runtime.with(|runtime| {
             let debounced =
                 this.on_scroll_debounced

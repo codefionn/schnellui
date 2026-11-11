@@ -299,7 +299,15 @@ pub struct ContainerStyle {
     /// definite `width` / `height` asks for (Taffy `max_size: 100%`). A
     /// per-child `max_width` / `max_height` replaces this cap on its axis.
     pub fit_parent: bool,
+    /// A [`Container::Scroll`] that draws a native scrollbar. While its content
+    /// overflows the viewport, layout reserves [`SCROLLBAR_GUTTER`] at the right
+    /// edge so the bar sits beside the content instead of over it. Content that
+    /// fits keeps the full width. Ignored on every other container.
+    pub scrollbar_gutter: bool,
 }
+
+/// Width a scrollbar takes at a viewport's right edge: the bar plus its inset.
+pub const SCROLLBAR_GUTTER: f32 = 12.0;
 
 impl ContainerStyle {
     /// A default-styled container of the given kind.
@@ -320,6 +328,7 @@ impl ContainerStyle {
             anchor_above: None,
             keep_in_view: true,
             fit_parent: false,
+            scrollbar_gutter: false,
         }
     }
 }

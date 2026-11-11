@@ -446,3 +446,79 @@ fn scrolling_a_hovered_viewport_keeps_its_hover_wash() {
         }
     }
 }
+
+/// A resize that takes a scrollbar viewport from fitting to overflowing and back
+/// narrows and widens its rows, and the hover and focus decorations on a row go
+/// with it instead of staying at the width it had.
+#[test]
+fn a_resize_across_the_scrollbar_gutter_moves_decorations_with_the_content() {
+    use schnellui::widgets::{Align, Button, Column, Scroll};
+    let mut col = Column::new().align(Align::Stretch);
+    for i in 0..10 {
+        col = col.child(Button::new(format!("Row {i}")));
+    }
+    let mut app = App::mount_with_theme_size_scaled(
+        layered_theme(),
+        Scroll::new().fill().fit_width().scrollbar(true).child(col),
+        300,
+        900,
+        1.0,
+    );
+    app.apply_reduced_motion(true);
+    app.frame();
+    let row = app.find_widget(Role::Button, Some("Row 2")).unwrap();
+    app.focus(Some(row));
+    app.update_pointer_proximity(centre(&app, row));
+    app.frame();
+    let width = |app: &App| app.scene().layout(row).unwrap().rect.width;
+    assert_eq!(width(&app), 300.0);
+    for _ in 0..2 {
+        for (height, want) in [(150.0, 288.0), (900.0, 300.0)] {
+            app.resize(300.0, height);
+            app.frame();
+            assert_eq!(width(&app), want, "at {height} tall");
+            assert_eq!(
+                schnellui::widgets::probes::decoration_faults(&app.widgets, &app.scene),
+                None,
+                "at {height} tall"
+            );
+            let scene = app.scene();
+            let ring = scene
+                .paint(row)
+                .map(|paint| {
+                    paint
+                        .primitives
+                        .iter()
+                        .filter_map(|p| match p {
+                            Primitive::SolidRect { rect, .. } => Some(rect.right()),
+                            _ => None,
+                        })
+                        .fold(0.0_f32, f32::max)
+                })
+                .unwrap_or(0.0);
+            assert!(
+                ring <= want + 0.5,
+                "paint on the row reaches {ring}, past its {want} wide box at {height} tall"
+            );
+        }
+    }
+}
+
+/// Content scrolled wholly below the fold is not cut at a side, however wide it
+/// is: only what some of the window shows can be clipped sideways.
+#[cfg(feature = "fuzzing")]
+#[test]
+fn sideways_clips_ignores_content_below_the_fold() {
+    use schnellui::widgets::{Column, Scroll, Text, WrapMode};
+    let mut col = Column::new();
+    for _ in 0..30 {
+        col = col.child(Text::new("row"));
+    }
+    col =
+        col.child(Text::new("a line far wider than the window ".repeat(8)).wrap(WrapMode::NoWrap));
+    let mut app = App::mount_with_size(Scroll::new().fill().child(col), 200, 100);
+    assert_eq!(
+        schnellui::testing::fuzz::sideways_clips(&mut app),
+        Vec::<String>::new()
+    );
+}

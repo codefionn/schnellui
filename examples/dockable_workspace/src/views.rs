@@ -237,12 +237,16 @@ pub(crate) fn widget_body(tab: &WorkspaceTab, width: f32, height: f32, compact: 
     let gap = if compact { 8.0 } else { 14.0 };
     let narrow = width < 320.0;
     let (title, status) = widget_heading(tab.widget);
+    // The heading wraps at the pane's width: a narrow pane would otherwise run it
+    // past the content and under the scrollbar.
     let header = Column::new()
+        .width(width)
         .gap(2.0)
         .child(
             Text::new(title)
                 .size(if compact { 16.0 } else { 19.0 })
-                .bold(),
+                .bold()
+                .wrap(WrapMode::Word),
         )
         .child(caption(status, 12.0));
     let header_height = if compact { 40.0 } else { 46.0 };

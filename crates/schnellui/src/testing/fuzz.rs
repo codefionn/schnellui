@@ -85,6 +85,74 @@ pub fn scrollbars(app: &App) -> Vec<ScrollbarTarget> {
     out
 }
 
+/// Every visible text, image, chart or control that a scrollbar covers: its
+/// box, or for text its glyphs, reaches into the bar's track while some of it
+/// shows in the viewport. Layout keeps a gutter for the bar, so this lists
+/// only content the gutter cannot save, such as a child wider than its viewport.
+pub fn scrollbar_overlaps(app: &App) -> Vec<String> {
+    use schnellui::scene::WidgetKind;
+    let scene = app.scene();
+    let mut found = Vec::new();
+    for bar in scrollbars(app) {
+        let mut stack = vec![bar.viewport];
+        while let Some(id) = stack.pop() {
+            let Some(node) = scene.node(id) else { continue };
+            stack.extend(node.children.iter().copied());
+            if id == bar.viewport || !scene.is_visible(id) {
+                continue;
+            }
+            let text = matches!(node.kind, WidgetKind::Text | WidgetKind::RichText);
+            let picture = matches!(node.kind, WidgetKind::Image | WidgetKind::Chart);
+            let control = scene.a11y(id).is_some_and(|a| {
+                use schnellui::a11y::Role;
+                matches!(
+                    Role::from_u16(a.role),
+                    Role::Button
+                        | Role::Tab
+                        | Role::ProgressIndicator
+                        | Role::Table
+                        | Role::CheckBox
+                        | Role::TextInput
+                        | Role::Slider
+                        | Role::Switch
+                )
+            });
+            let Some(layout) = scene.layout(id) else {
+                continue;
+            };
+            if !(text || picture || control) || layout.rect.is_empty() {
+                continue;
+            }
+            let (offset, clip) = scene.composite_context(id);
+            let (top, bottom) = (layout.rect.y + offset.y, layout.rect.bottom() + offset.y);
+            if bottom <= clip.y.max(bar.track.y) || top >= clip.bottom().min(bar.track.bottom()) {
+                continue;
+            }
+            let mut right = layout.rect.right();
+            if text {
+                if let Some(paint) = scene.paint(id) {
+                    for primitive in &paint.primitives {
+                        if let schnellui::scene::Primitive::GlyphQuad { rect, .. } = primitive {
+                            right = right.max(rect.right());
+                        }
+                    }
+                }
+            }
+            if right > bar.track.x + 0.01 && layout.rect.x < bar.track.right() {
+                let name = scene
+                    .a11y(id)
+                    .map(|a| format!("{:?} {:?}", a.role, a.name))
+                    .unwrap_or_default();
+                found.push(format!(
+                    "{:?} {name} ends at x {right:.2}, past the scrollbar track starting at {:.2}",
+                    node.kind, bar.track.x
+                ));
+            }
+        }
+    }
+    found
+}
+
 /// The layout-space rect a keyboard reveal aims at for the control `id`: the
 /// caret row of a text area, else the control's own box with its focus ring.
 /// `None` while the control has no layout, or an area has no row table yet.
@@ -155,7 +223,8 @@ pub fn tab_stops_reachable(app: &mut App) -> Result<usize, String> {
 /// ignored: a page scrolls down.
 ///
 /// A Scroll viewport scrolls only down, so any content its viewport clips at a
-/// side is unreachable, and so is anything past the window edge.
+/// side is unreachable, and so is anything past the window edge. Content scrolled
+/// wholly out of view is skipped: it is not cut, it is below the fold.
 pub fn sideways_clips(app: &mut App) -> Vec<String> {
     use schnellui::scene::WidgetKind;
     let mut found = Vec::new();
@@ -193,6 +262,11 @@ pub fn sideways_clips(app: &mut App) -> Vec<String> {
             continue;
         }
         let (offset, clip) = scene.composite_context(id);
+        // Scrolled wholly out of view, so a side cannot cut it.
+        let (top, bottom) = (layout.rect.y + offset.y, layout.rect.bottom() + offset.y);
+        if clip.height <= 0.0 || bottom <= clip.y || top >= clip.bottom() {
+            continue;
+        }
         let left = layout.rect.x + offset.x;
         let mut right = left + layout.rect.width;
         if text {

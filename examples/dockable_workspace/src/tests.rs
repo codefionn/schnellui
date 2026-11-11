@@ -28,6 +28,45 @@ mod tests {
         assert!(faults.is_empty(), "{faults:#?}");
     }
 
+    /// At 480x600 the Pulse pane scrolls and shows a bar. Its title and the
+    /// "Energy this week" label end left of the bar instead of under it.
+    #[test]
+    fn the_scrollbar_covers_nothing_in_the_pulse_pane_at_480x600() {
+        use crate::runtime::{scenario_app, Scenario};
+        use schnellui::testing::fuzz::{scrollbar_overlaps, scrollbars};
+        let runtime = WorkspaceRuntime::default();
+        let mut app = scenario_app(&runtime, Scenario::Starter, 480, 600, 1.0).expect("scenario");
+        app.frame();
+        assert!(!scrollbars(&app).is_empty(), "a pane should scroll here");
+        let covered = scrollbar_overlaps(&app);
+        assert!(covered.is_empty(), "{covered:#?}");
+        let scene = app.scene();
+        let label = scene
+            .preorder()
+            .into_iter()
+            .find(|&id| scene.a11y(id).and_then(|a| a.name.as_deref()) == Some("Energy this week"))
+            .expect("the Pulse card's label");
+        let bar = scrollbars(&app)
+            .into_iter()
+            .find(|bar| {
+                let mut at = scene.node(label).and_then(|n| n.parent);
+                while let Some(id) = at {
+                    if id == bar.viewport {
+                        return true;
+                    }
+                    at = scene.node(id).and_then(|n| n.parent);
+                }
+                false
+            })
+            .expect("the label sits in a pane with a scrollbar");
+        assert!(
+            scene.layout(label).unwrap().rect.right() <= bar.track.x,
+            "label ends at {}, bar starts at {}",
+            scene.layout(label).unwrap().rect.right(),
+            bar.track.x
+        );
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]

@@ -39,7 +39,8 @@ use schnellui::layout::{Align, Container, ContainerStyle};
 use schnellui::scene::{Color, Primitive, Rect, WidgetKind};
 use schnellui::signal::create_signal;
 use schnellui::widgets::{
-    Button, Column, DynamicImageFrame, Image, TerminalGrid, TerminalGridModel, Text, View, WrapMode,
+    Button, Column, DynamicImageFrame, Image, Scroll, TerminalGrid, TerminalGridModel, Text, View,
+    WrapMode,
 };
 use schnellui::{App, TestValue};
 
@@ -430,7 +431,7 @@ fn many_clean_terminal_grids_allocate_nothing() {
 
 #[test]
 fn many_clean_text_areas_allocate_nothing() {
-    use schnellui::widgets::{Scroll, TextArea};
+    use schnellui::widgets::TextArea;
     let mut inner = Column::new();
     for _ in 0..6 {
         inner = inner.child(TextArea::new("alpha\nbeta\ngamma"));
@@ -513,6 +514,106 @@ fn wrap_change_stays_within_budget() {
         "wrap-change allocated {} times (budget {WRAP_CHANGE_BUDGET}) — SOUL §4.1",
         info.count_total
     );
+}
+
+/// An overflowing scrollbar viewport whose content changes size is laid out twice,
+/// once at full width to decide the gutter and once narrower. Taffy allocates in
+/// each pass (SOUL §4.1, the relayout cost), so a layout-dirty change costs up to
+/// twice a viewport with no scrollbar, and nothing else: the gutter bookkeeping
+/// runs on retained scratch. Content that is not width-aware, as here, adds no
+/// shaping at the second width.
+///
+/// **Measured: 29 allocs without a scrollbar, 51 with one.**
+#[test]
+fn gutter_relayout_costs_at_most_two_plain_layouts() {
+    fn scroll_app(scrollbar: bool) -> App {
+        let alt = "A slightly different paragraph of words wrapping across several lines here";
+        let toggle = create_signal(false);
+        let mut col = stretch_column(
+            Text::dynamic(move || {
+                if toggle.get() {
+                    alt.to_string()
+                } else {
+                    PARAGRAPH.to_string()
+                }
+            })
+            .wrap(WrapMode::NoWrap),
+        );
+        for _ in 0..30 {
+            col = col.child(Text::new("filler row"));
+        }
+        let view = Scroll::new()
+            .fill()
+            .fit_width()
+            .scrollbar(scrollbar)
+            .child(col);
+        let mut app = App::mount_with_size(view, 180, 200);
+        app.register_signal("t", move |v| {
+            if let TestValue::Bool(b) = v {
+                toggle.set(b);
+            }
+        });
+        app.frame();
+        app.set_signal("t", true);
+        app.frame();
+        app.set_signal("t", false);
+        app.frame();
+        app
+    }
+    let measure = |scrollbar: bool| {
+        let mut app = scroll_app(scrollbar);
+        let info = allocation_counter::measure(|| {
+            app.set_signal("t", std::hint::black_box(true));
+            app.frame();
+        });
+        eprintln!(
+            "scrollbar {scrollbar}: {} allocs / {} bytes",
+            info.count_total, info.bytes_total
+        );
+        info.count_total
+    };
+    let plain = measure(false);
+    let gutter = measure(true);
+    assert!(
+        gutter <= 2 * plain,
+        "the gutter layout allocated {gutter} times against {plain} for a plain scroll"
+    );
+}
+
+/// With the gutter taken, a frame with nothing dirty and a wheel tick allocate
+/// nothing: the gutter is decided only when layout runs.
+#[test]
+fn a_scrollbar_viewport_with_a_gutter_allocates_nothing_when_clean_or_scrolled() {
+    let mut col = Column::new().align(Align::Stretch);
+    for _ in 0..40 {
+        col = col.child(Text::new("row"));
+    }
+    let mut app = App::mount_with_size(
+        Scroll::new().fill().fit_width().scrollbar(true).child(col),
+        180,
+        200,
+    );
+    app.frame();
+    let sv = app.find_widget(Role::ScrollView, None).expect("viewport");
+    let before = app
+        .scene()
+        .layout(app.scene().node(sv).unwrap().children[0]);
+    assert_eq!(before.unwrap().rect.width, 168.0, "the gutter is taken");
+    for _ in 0..3 {
+        app.dispatch_scroll(sv, 5.0);
+        app.frame();
+        app.dispatch_scroll(sv, -5.0);
+        app.frame();
+    }
+    let info = allocation_counter::measure(|| {
+        app.frame();
+    });
+    assert_eq!(info.count_total, 0, "clean frame");
+    let info = allocation_counter::measure(|| {
+        app.dispatch_scroll(sv, std::hint::black_box(5.0));
+        app.frame();
+    });
+    assert_eq!(info.count_total, 0, "scroll tick");
 }
 
 /// A host-driven terminal for the patched-path gates: `rows` lines of 80 columns.
