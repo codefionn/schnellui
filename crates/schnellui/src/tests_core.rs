@@ -633,6 +633,48 @@ fn an_enter_shortcut_runs_before_the_focused_button_but_not_in_a_text_field() {
     assert_eq!(app.scene().a11y(area).unwrap().value.as_deref(), Some("\n"));
 }
 
+/// Sequence (calculator): press Backspace. Nothing was deleted: only the
+/// typed `d` worked, since Backspace is a named key that never reached the
+/// character shortcuts. Delete is the same.
+#[test]
+fn backspace_and_delete_shortcuts_run_except_in_text_fields() {
+    use schnellui::widgets::{Button, Column, TextInput};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("7"))
+            .child(TextInput::new("ab")),
+        300,
+        200,
+    );
+    app.frame();
+    let bs = Rc::new(Cell::new(0));
+    let del = Rc::new(Cell::new(0));
+    let (b, d) = (bs.clone(), del.clone());
+    app.register_shortcut(Shortcut::new('\u{8}', false, false, false), move || {
+        b.set(b.get() + 1)
+    });
+    app.register_shortcut(Shortcut::new('\u{7f}', false, false, false), move || {
+        d.set(d.get() + 1)
+    });
+
+    assert!(app.dispatch_key(UiKey::Backspace), "nothing focused");
+    assert_eq!(bs.get(), 1);
+    let seven = app.find_widget(Role::Button, Some("7")).unwrap();
+    assert!(app.focus(Some(seven)));
+    assert!(app.dispatch_key(UiKey::Backspace), "a focused button");
+    assert!(app.dispatch_key(UiKey::Delete));
+    assert_eq!((bs.get(), del.get()), (2, 1));
+
+    let input = app.find_widget(Role::TextInput, None).unwrap();
+    assert!(app.focus(Some(input)));
+    app.dispatch_key(UiKey::Backspace);
+    app.dispatch_key(UiKey::Delete);
+    assert_eq!((bs.get(), del.get()), (2, 1), "text fields keep both keys");
+}
+
 #[test]
 fn navigation_reaches_the_registered_handler() {
     use std::cell::RefCell;

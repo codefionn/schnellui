@@ -328,24 +328,27 @@ impl App {
         }
         let focused = self.focused_widget();
         let focused_kind = focused.and_then(|f| self.scene.node(f).map(|n| n.kind));
-        // Enter is a named key, so it never reaches the typed-character
-        // shortcut stage in the hosts. An app that bound '\r' (a calculator's
-        // equals) gets it here, ahead of the focused control, the way a typed
-        // character reaches shortcuts first. Text fields and dropdowns keep
-        // Enter: it edits, submits or picks there.
-        if key == UiKey::Enter
-            && !matches!(
-                focused_kind,
-                Some(
-                    WidgetKind::TextInput
-                        | WidgetKind::TextArea
-                        | WidgetKind::Dropdown
-                        | WidgetKind::DropdownOption
-                )
-            )
-            && self.dispatch_shortcut(crate::Shortcut::new('\r', false, false, false))
-        {
-            return true;
+        // Enter, Backspace and Delete are named keys, so they never reach the
+        // typed-character shortcut stage in the hosts. An app that bound '\r'
+        // (a calculator's equals), '\u{8}' or '\u{7f}' gets them here, ahead
+        // of the focused control, the way a typed character reaches shortcuts
+        // first. Text fields keep all three, dropdowns keep Enter: they edit,
+        // submit or pick there.
+        let named_char = match key {
+            UiKey::Enter => Some('\r'),
+            UiKey::Backspace => Some('\u{8}'),
+            UiKey::Delete => Some('\u{7f}'),
+            _ => None,
+        };
+        if let Some(c) = named_char {
+            let owned = match focused_kind {
+                Some(WidgetKind::TextInput | WidgetKind::TextArea) => true,
+                Some(WidgetKind::Dropdown | WidgetKind::DropdownOption) => key == UiKey::Enter,
+                _ => false,
+            };
+            if !owned && self.dispatch_shortcut(crate::Shortcut::new(c, false, false, false)) {
+                return true;
+            }
         }
         let focused_combo = focused.filter(|id| {
             self.scene

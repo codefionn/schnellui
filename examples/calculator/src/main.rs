@@ -481,7 +481,7 @@ const KEYPAD: [[KeySpec; 4]; 5] = [
             "delete",
             "DEL",
             KeyKind::Function,
-            &['d', 'D'],
+            &['d', 'D', '\u{8}', '\u{7f}'],
             Key::Backspace,
         ),
         spec("equals", "=", KeyKind::Operator, &['=', '\r'], Key::Equals),
@@ -651,7 +651,7 @@ fn calculator_view(
                     .child(keypad)
                     .child(ThemeProvider::new(
                         MUTED_THEME,
-                        Text::new("Keyboard: digits, + − * / and = or Enter. C clears, D deletes.")
+                        Text::new("Keyboard: digits, + − * / and = or Enter. C clears, D or Backspace deletes.")
                             .size(12.0)
                             .wrap(WrapMode::Word),
                     )),
