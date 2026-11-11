@@ -589,6 +589,23 @@ fn remount_if_requested(runtime: &TodoRuntime, app: &mut App, width: u32, height
     }
 }
 
+/// The windowed remount hook: a requested remount rebuilds the board at the
+/// window's live logical size, not the size the window was launched with.
+fn remount_hook(
+    runtime: TodoRuntime,
+    scale: f32,
+) -> impl FnMut(schnellui::scene::Size) -> Option<App> {
+    move |viewport| {
+        runtime.take_remount().then(|| {
+            let (width, height) = (
+                viewport.width.round().max(1.0) as u32,
+                viewport.height.round().max(1.0) as u32,
+            );
+            mount_todo(runtime.clone(), width, height, scale)
+        })
+    }
+}
+
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> (TodoRuntime, App) {
     let runtime = TodoRuntime::seeded();
     let mut app = mount_todo(runtime.clone(), width, height, scale);
@@ -764,15 +781,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     if cli.windowed || cli.headless_windowed {
-        let (width, height, scale) = (cli.width, cli.height, cli.scale);
-        let (runtime, mut app) = scenario_app(scenario, width, height, scale);
+        let (runtime, mut app) = scenario_app(scenario, cli.width, cli.height, cli.scale);
         app.set_escape_exits(true);
-        let remount_runtime = runtime.clone();
-        return match app.run_windowed_with("todo", move || {
-            remount_runtime
-                .take_remount()
-                .then(|| mount_todo(remount_runtime.clone(), width, height, scale))
-        }) {
+        return match app.run_windowed_with_viewport("todo", remount_hook(runtime, cli.scale)) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("windowed run failed: {error}");
@@ -791,6 +802,42 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Resize the live window, then complete a task (a remount): the board is
+    /// laid out as a fresh mount at the new size lays it out, at either scale.
+    #[test]
+    fn a_remount_after_a_live_resize_keeps_the_window_size() {
+        use schnellui::scene::Size;
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in [1.0, 1.5] {
+            let (runtime, mut app) = scenario_app(Scenario::DayPlan, 880, 640, scale);
+            app.frame();
+            let mut host = HeadlessHost::new(app);
+            let mut hook = remount_hook(runtime, scale);
+            host.set_remount(move |size: Size, _| {
+                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+            });
+            host.resize(700.0, 500.0);
+            let id = host
+                .app()
+                .find_widget(Role::CheckBox, Some("Complete Book train tickets"))
+                .expect("the seeded task");
+            assert!(host.dispatch_action(&ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: to_access_id(id),
+                data: None,
+            }));
+            assert_eq!(host.remounts(), 1, "completing a task remounts");
+            let (_, mut fresh) = scenario_app(Scenario::TaskCompleted, 700, 500, scale);
+            assert_eq!(
+                layout_diff(host.app_mut(), &mut fresh),
+                None,
+                "scale {scale}"
+            );
+        }
+    }
 
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.

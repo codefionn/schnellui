@@ -9,6 +9,40 @@ mod tests {
     use schnellui::accesskit_reexport::TreeId;
     use schnellui::widgets::DockPosition;
 
+    /// Resize the live window: the workspace is rebuilt at the new size and
+    /// matches a fresh mount there, at either scale.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        use crate::runtime::{remount_hook, scenario_app, Scenario};
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in [1.0, 1.5] {
+            let runtime = WorkspaceRuntime::default();
+            let mut app = scenario_app(&runtime, Scenario::Starter, 1000, 700, scale).unwrap();
+            app.frame();
+            let mut host = HeadlessHost::new(app);
+            let mut hook = remount_hook(runtime, (1000, 700), scale);
+            host.set_remount(move |size: Size, _| {
+                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+            });
+            host.resize(720.0, 520.0);
+            assert_eq!(host.remounts(), 1);
+            let mut fresh = scenario_app(
+                &WorkspaceRuntime::default(),
+                Scenario::Starter,
+                720,
+                520,
+                scale,
+            )
+            .unwrap();
+            assert_eq!(
+                layout_diff(host.app_mut(), &mut fresh),
+                None,
+                "scale {scale}"
+            );
+        }
+    }
+
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
     #[ignore = "the board is a fixed size that cannot reflow, and a Scroll scrolls only down: open design item #12"]

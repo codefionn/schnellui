@@ -13,11 +13,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use schnellui::a11y;
-use schnellui::scene::{Color, Scene, WidgetId, WidgetKind};
+use schnellui::scene::{Color, Scene, Size, WidgetId, WidgetKind};
 use schnellui::testing::find_by_role_name;
 use schnellui::view;
 use schnellui::widgets::{
-    Align, Badge, Button, ButtonAppearance, Column, Dialog, DialogPosition, Divider, List,
+    Align, Badge, Button, ButtonAppearance, Column, Dialog, DialogPosition, Divider, Flex, List,
     ListItem, Pad, Panel, Row, Shape, Spacer, Stack, Text, Theme, View, WrapMode,
 };
 use schnellui::{App, Context, State};
@@ -265,21 +265,19 @@ struct Cli {
     headless_windowed: bool,
 }
 
-/// The shared fake publishing workspace behind every dialog.
-fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
-    let canvas_width = (width as f32 - 72.0).max(420.0);
-    let canvas_height = (height as f32 - 128.0).max(300.0);
-
-    Column::new()
-        .fill()
-        .child(
+/// The shared fake publishing workspace behind every dialog. It fills the
+/// window: the header takes the width, the canvas takes the rest, so a window
+/// resize or a remount never leaves a size from an earlier mount behind.
+fn workspace(dialog: impl View) -> impl View {
+    Column::new().fill().align(Align::Stretch).child(
+        Flex::new().grow(1.0).shrink(1.0).child(
             Pad::all(24.0).child(
                 Column::new()
-                    .align(Align::Center)
+                    .fill()
+                    .align(Align::Stretch)
                     .gap(14.0)
                     .child(
                         Row::new()
-                            .width(canvas_width)
                             .align(Align::Center)
                             .gap(10.0)
                             .child(Badge::new("FIELD NOTES / 07"))
@@ -288,12 +286,11 @@ fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
                             .child(Text::new("Friday, 16:40").size(13.0)),
                     )
                     .child(
+                        Flex::new().grow(1.0).shrink(1.0).child(
                         Stack::new()
-                            .size(canvas_width, canvas_height)
+                            .min_height(300.0)
                 .child(
                     Panel::new()
-                        .width(canvas_width)
-                        .height(canvas_height)
                         .padding(24.0)
                         .surface(EDITORIAL_THEME.surface_muted)
                         .child(
@@ -349,12 +346,14 @@ fn workspace(dialog: impl View, width: u32, height: u32) -> impl View {
                 // Fixed dialogs portal from here to the viewport root. A
                 // non-fixed dialog deliberately remains bounded by this canvas.
                 .child(dialog),
+                        ),
                     ),
             ),
-        )
+        ),
+    )
 }
 
-fn decorated_modal(width: u32, height: u32) -> impl View {
+fn decorated_modal() -> impl View {
     workspace(
         Dialog::new("Publish edition")
             .width(440.0)
@@ -372,12 +371,10 @@ fn decorated_modal(width: u32, height: u32) -> impl View {
                     .child(Button::new("Keep editing").appearance(ButtonAppearance::Outline))
                     .child(Button::new("Publish changes")),
             ),
-        width,
-        height,
     )
 }
 
-fn undecorated_modal(width: u32, height: u32) -> impl View {
+fn undecorated_modal() -> impl View {
     workspace(
         Dialog::new("Quick command")
             .undecorated()
@@ -399,68 +396,58 @@ fn undecorated_modal(width: u32, height: u32) -> impl View {
                     ),
             )
             .child(Text::new("↑ ↓ to move · Enter to run · Esc to close").size(12.0)),
-        width,
-        height,
     )
 }
 
 /// The palette's 500px width less its 18px padding on each side.
 const COMMAND_ROW_WIDTH: f32 = 464.0;
 
-fn modeless_inspector(width: u32, height: u32) -> impl View {
-    workspace(
-        view! {
-            dialog(
-                title = "Page inspector",
-                modeless,
-                non_fixed,
-                position = right,
-                width = 300.0,
-                padding = 18.0,
-                gap = 10.0
-            ) {
-                badge { "PAGE 18" }
-                text { "Trim: 148 × 210 mm" }
-                text { "Bleed: 3 mm" }
-                text { "Profile: FOGRA39" }
-                divider
-                row {
-                    flex(grow = 1.0)
-                    button { "Open preflight" }
-                }
+fn modeless_inspector() -> impl View {
+    workspace(view! {
+        dialog(
+            title = "Page inspector",
+            modeless,
+            non_fixed,
+            position = right,
+            width = 300.0,
+            padding = 18.0,
+            gap = 10.0
+        ) {
+            badge { "PAGE 18" }
+            text { "Trim: 148 × 210 mm" }
+            text { "Bleed: 3 mm" }
+            text { "Profile: FOGRA39" }
+            divider
+            row {
+                flex(grow = 1.0)
+                button { "Open preflight" }
             }
-        },
-        width,
-        height,
-    )
+        }
+    })
 }
 
-fn scoped_non_fixed(width: u32, height: u32) -> impl View {
-    workspace(
-        view! {
-            dialog(
-                title = "Canvas note",
-                non_fixed,
-                position = bottom_left,
-                width = 360.0,
-                padding = 18.0
-            ) {
-                badge { "SCOPED MODAL" }
-                text(wrap = word) {
-                    "This scrim ends at the workspace edge; the page header stays outside it."
-                }
-                row {
-                    flex(grow = 1.0)
-                    button { "Acknowledge" }
-                }
+fn scoped_non_fixed() -> impl View {
+    workspace(view! {
+        dialog(
+            title = "Canvas note",
+            non_fixed,
+            position = bottom_left,
+            width = 360.0,
+            padding = 18.0
+        ) {
+            badge { "SCOPED MODAL" }
+            text(wrap = word) {
+                "This scrim ends at the workspace edge; the page header stays outside it."
             }
-        },
-        width,
-        height,
-    )
+            row {
+                flex(grow = 1.0)
+                button { "Acknowledge" }
+            }
+        }
+    })
 }
 
-fn persistent_alert(width: u32, height: u32) -> impl View {
+fn persistent_alert() -> impl View {
     workspace(
         Dialog::new("Unsaved proof")
             .alert()
@@ -483,12 +470,10 @@ fn persistent_alert(width: u32, height: u32) -> impl View {
                     .child(Button::new("Discard export").appearance(ButtonAppearance::Outline))
                     .child(Button::new("Rebuild proof")),
             ),
-        width,
-        height,
     )
 }
 
-fn stacked_dialogs(runtime: DialogRuntime, width: u32, height: u32, modal_open: bool) -> impl View {
+fn stacked_dialogs(runtime: DialogRuntime, modal_open: bool) -> impl View {
     // The focus-grabbing modal is intentionally declared before the modeless
     // inspector. Explicit dialog stack levels keep the modal visually and
     // semantically above that later peer.
@@ -540,7 +525,7 @@ fn stacked_dialogs(runtime: DialogRuntime, width: u32, height: u32, modal_open: 
             .child(Button::new("Reopen approval").on_click(move || open_stacked_modal(&runtime))),
     );
 
-    workspace(dialogs, width, height)
+    workspace(dialogs)
 }
 
 /// A header button that opens one desktop window. It rests disabled while
@@ -714,35 +699,35 @@ fn scenario_app(
     let mut app = match scenario {
         Scenario::DecoratedModal => App::mount_with_theme_size_scaled(
             EDITORIAL_THEME,
-            decorated_modal(width, height),
+            decorated_modal(),
             width,
             height,
             scale,
         ),
         Scenario::UndecoratedModal => App::mount_with_theme_size_scaled(
             EDITORIAL_THEME,
-            undecorated_modal(width, height),
+            undecorated_modal(),
             width,
             height,
             scale,
         ),
         Scenario::ModelessInspector => App::mount_with_theme_size_scaled(
             EDITORIAL_THEME,
-            modeless_inspector(width, height),
+            modeless_inspector(),
             width,
             height,
             scale,
         ),
         Scenario::ScopedNonFixed => App::mount_with_theme_size_scaled(
             EDITORIAL_THEME,
-            scoped_non_fixed(width, height),
+            scoped_non_fixed(),
             width,
             height,
             scale,
         ),
         Scenario::PersistentAlert => App::mount_with_theme_size_scaled(
             EDITORIAL_THEME,
-            persistent_alert(width, height),
+            persistent_alert(),
             width,
             height,
             scale,
@@ -754,14 +739,7 @@ fn scenario_app(
                 .provide(runtime.clone());
             App::mount_with_context_size_scaled(
                 context,
-                |context| {
-                    stacked_dialogs(
-                        context.require::<DialogRuntime>(),
-                        width,
-                        height,
-                        modal_open,
-                    )
-                },
+                |context| stacked_dialogs(context.require::<DialogRuntime>(), modal_open),
                 width,
                 height,
                 scale,
@@ -783,6 +761,24 @@ fn scenario_app(
     };
     app.set_clear_color(EDITORIAL_THEME.page);
     app
+}
+
+/// The windowed remount hook: a parked remount rebuilds the scenario at the
+/// window's live logical size, not the size the window was launched with.
+fn remount_hook(
+    runtime: DialogRuntime,
+    scenario: Scenario,
+    scale: f32,
+) -> impl FnMut(Size) -> Option<App> {
+    move |viewport| {
+        runtime.take_remount().then(|| {
+            let (width, height) = (
+                viewport.width.round().max(1.0) as u32,
+                viewport.height.round().max(1.0) as u32,
+            );
+            scenario_app(&runtime, scenario, width, height, scale)
+        })
+    }
 }
 
 fn find_kind(scene: &Scene, root: WidgetId, kind: WidgetKind) -> Option<WidgetId> {
@@ -999,11 +995,10 @@ fn main() -> ExitCode {
         let runtime = DialogRuntime::default();
         let app = scenario_app(&runtime, scenario, width, height, scale);
         let remount_runtime = runtime.clone();
-        return match app.run_windowed_with("schnellui dialogs", move || {
-            remount_runtime
-                .take_remount()
-                .then(|| scenario_app(&remount_runtime, scenario, width, height, scale))
-        }) {
+        return match app.run_windowed_with_viewport(
+            "schnellui dialogs",
+            remount_hook(remount_runtime, scenario, scale),
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("windowed run failed: {error}");
@@ -1023,6 +1018,43 @@ mod tests {
     use super::*;
     use schnellui::a11y::accesskit_reexport::{Action, ActionRequest, TreeId};
     use schnellui::UiKey;
+
+    /// A live resize leaves every scenario laid out as a fresh mount at the
+    /// new size is: the page card and the clock stay in the window, and a
+    /// remount after the resize does not go back to the launch size.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in [1.0, 1.5] {
+            for scenario in Scenario::iter() {
+                let runtime = DialogRuntime::default();
+                let mut app = scenario_app(&runtime, scenario, 900, 620, scale);
+                app.frame();
+                let mut host = HeadlessHost::new(app);
+                let mut hook = remount_hook(runtime.clone(), scenario, scale);
+                host.set_remount(move |size: Size, _| {
+                    hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+                });
+                host.resize(640.0, 480.0);
+                // The stacked scenario has a remount of its own: close the modal.
+                let fresh_runtime = DialogRuntime::default();
+                if scenario == Scenario::StackedDialogs {
+                    close_stacked_modal(&runtime);
+                    close_stacked_modal(&fresh_runtime);
+                    host.resize(640.0, 480.0);
+                    assert_eq!(host.remounts(), 1, "{}", scenario.name());
+                }
+                let mut fresh = scenario_app(&fresh_runtime, scenario, 640, 480, scale);
+                assert_eq!(
+                    layout_diff(host.app_mut(), &mut fresh),
+                    None,
+                    "{} at scale {scale}",
+                    scenario.name()
+                );
+            }
+        }
+    }
 
     fn click(app: &mut App, name: &str) -> bool {
         let id = app

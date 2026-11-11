@@ -199,16 +199,14 @@ fn stack_view() -> impl View {
 /// kept deliberately:** the fixed width via `ContainerStyle` is what the macro's
 /// `row(width = …)` lowers to (and `row(justify = space_between)` spells the same
 /// idiom without a spacer; `flex_grow` shows the weighted generalization).
-fn spacer_view(width: u32, height: u32) -> impl View {
-    let row_w = (width as f32 - 40.0).max(160.0);
+fn spacer_view() -> impl View {
     let mut row_style = ContainerStyle::new(Container::Row);
-    // A definite width is what gives the Spacer room to grow into.
-    row_style.fixed_size = Some(Size {
-        width: row_w,
-        height: (height as f32 * 0.3).clamp(30.0, 60.0),
-    });
+    // `Align::Stretch` on the column hands the row the window's width, which is
+    // what gives the Spacer room to grow into; it follows every resize.
+    row_style.height = Some(60.0);
 
     Column::new()
+        .align(Align::Stretch)
         .gap(12.0)
         .child(
             Text::new("Spacer grows to fill free space, pushing the labels apart")
@@ -252,22 +250,18 @@ then wrapped, then finally painted.";
 /// lowers to; `Align::Stretch` then makes every block (and the paragraph inside it)
 /// fill exactly that width. The wrap builders themselves
 /// (`Text::wrap`/`align`/`ellipsis`) are ordinary widget methods.
-fn wrap_view(width: u32, height: u32) -> impl View {
+fn wrap_view() -> impl View {
     // A column deliberately NARROWER than the viewport, so `NoWrap` overflows it while
-    // `Word` breaks into several lines inside it. Responsive to `--width`, clamped so
-    // the wrap is always visibly narrow.
-    let col_w = (width as f32 - 40.0).clamp(240.0, 320.0);
-
-    // One fixed-width, height-filling canvas. The fixed WIDTH is what gives every
-    // wrapping paragraph a definite wrap width; `Align::Stretch` makes each child fill
-    // it; the definite HEIGHT lets the blocks stack top-anchored (no per-block sizing).
+    // `Word` breaks into several lines inside it: 320px, and `fit_parent` keeps it
+    // inside a window narrower than that, at whatever width the window has now.
+    //
+    // The fixed WIDTH is what gives every wrapping paragraph a definite wrap width;
+    // `Align::Stretch` makes each child fill it; the blocks stack top-anchored.
     let mut canvas = ContainerStyle::new(Container::Column);
     canvas.align = Align::Stretch;
     canvas.gap = 14.0;
-    canvas.fixed_size = Some(Size {
-        width: col_w,
-        height: (height as f32 - WINDOW_PADDING * 2.0).max(0.0),
-    });
+    canvas.width = Some(320.0);
+    canvas.fit_parent = true;
 
     // Each block = a small header label + the SAME paragraph under one wrap policy.
     // `Align::Stretch` propagates the canvas's definite width down to the paragraph.
@@ -322,15 +316,14 @@ fn wrap_view(width: u32, height: u32) -> impl View {
 /// geometry re-derives from the available width instead of being fixed. A
 /// *childless* `flex` is a weighted spacer — here two of them split a row's free
 /// space 1 : 2, so the `B`→`C` gap is exactly twice the `A`→`B` gap at every
-/// viewport width. Fully expressible in the macro grammar now: `width = <px>`
-/// gives the row its definite main axis (the knob that used to need a
-/// `ContainerStyle` builder fallback), and `flex(grow = …)` the weights.
-fn flex_grow_view(width: u32) -> impl View {
-    let row_w = (width as f32 - 40.0).max(240.0);
+/// viewport width. Fully expressible in the macro grammar: `align = stretch` on
+/// the column hands the row the window's width, which is its definite main axis,
+/// and `flex(grow = …)` sets the weights.
+fn flex_grow_view() -> impl View {
     view! {
-        column(gap = 16.0) {
+        column(gap = 16.0, align = stretch) {
             text(size = 20.0, wrap = WrapMode::Word) { "flex(grow = n): weighted gaps share free space 1 : 2" }
-            row(width = row_w) {
+            row {
                 text { "A" }
                 flex(grow = 1.0)
                 text { "B" }
@@ -386,14 +379,10 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             App::mount_with_size_scaled(stage(padding_view()), width, height, scale)
         }
         Scenario::Stack => App::mount_with_size_scaled(stage(stack_view()), width, height, scale),
-        Scenario::Spacer => {
-            App::mount_with_size_scaled(stage(spacer_view(width, height)), width, height, scale)
-        }
-        Scenario::Wrap => {
-            App::mount_with_size_scaled(stage(wrap_view(width, height)), width, height, scale)
-        }
+        Scenario::Spacer => App::mount_with_size_scaled(stage(spacer_view()), width, height, scale),
+        Scenario::Wrap => App::mount_with_size_scaled(stage(wrap_view()), width, height, scale),
         Scenario::FlexGrow => {
-            App::mount_with_size_scaled(stage(flex_grow_view(width)), width, height, scale)
+            App::mount_with_size_scaled(stage(flex_grow_view()), width, height, scale)
         }
         Scenario::FlexWrap => {
             App::mount_with_size_scaled(stage(flex_wrap_view()), width, height, scale)
@@ -597,6 +586,21 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Resize the live window: every scenario lays out as a fresh mount at the
+    /// new size does, wider and narrower, at either scale.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        for resized in [(420, 360), (900, 500)] {
+            schnellui::testing::fuzz::assert_resize_matches_fresh(
+                Scenario::iter(),
+                (680, 420),
+                resized,
+                &[1.0, 1.5],
+                scenario_app,
+            );
+        }
+    }
 
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.

@@ -678,6 +678,24 @@ fn mount_scenario(
     )
 }
 
+/// The windowed remount hook: a requested remount rebuilds the navigator at
+/// the window's live logical size, not the size the window was launched with.
+fn remount_hook(
+    scenario: Scenario,
+    scale: f32,
+    state: ExampleState,
+) -> impl FnMut(schnellui::scene::Size) -> Option<App> {
+    move |viewport| {
+        state.take_remount().then(|| {
+            let (width, height) = (
+                viewport.width.round().max(1.0) as u32,
+                viewport.height.round().max(1.0) as u32,
+            );
+            mount_scenario(scenario, width, height, scale, state.clone())
+        })
+    }
+}
+
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> (App, ExampleState) {
     let state = ExampleState::new(scenario);
     let mut app = mount_scenario(scenario, width, height, scale, state.clone());
@@ -908,18 +926,10 @@ fn main() -> ExitCode {
     if cli.windowed || cli.headless_windowed {
         let (mut app, state) = scenario_app(scenario, cli.width, cli.height, cli.scale);
         app.set_escape_exits(true);
-        let remount_state = state.clone();
-        return match app.run_windowed_with("Grouped tabs / Project navigator", move || {
-            remount_state.take_remount().then(|| {
-                mount_scenario(
-                    scenario,
-                    cli.width,
-                    cli.height,
-                    cli.scale,
-                    remount_state.clone(),
-                )
-            })
-        }) {
+        return match app.run_windowed_with_viewport(
+            "Grouped tabs / Project navigator",
+            remount_hook(scenario, cli.scale, state),
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("windowed run failed: {error}");
@@ -946,6 +956,45 @@ mod tests {
 
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
+    /// Resize the live window, then fold a branch (a remount): the navigator
+    /// is laid out as a fresh mount at the new size lays it out.
+    #[test]
+    fn a_remount_after_a_live_resize_keeps_the_window_size() {
+        use schnellui::scene::Size;
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in [1.0, 1.5] {
+            let (mut app, state) = scenario_app(Scenario::Tree, 760, 600, scale);
+            app.frame();
+            let mut host = HeadlessHost::new(app);
+            let mut hook = remount_hook(Scenario::Tree, scale, state);
+            host.set_remount(move |size: Size, _| {
+                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+            });
+            host.resize(520.0, 480.0);
+            for _ in 0..2 {
+                let id = host.app().find_widget(Role::Tab, Some("Planning")).unwrap();
+                host.dispatch_action(&ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: to_access_id(id),
+                    data: None,
+                });
+            }
+            assert_eq!(host.remounts(), 1, "folding a branch remounts");
+            let (mut fresh, state) = scenario_app(Scenario::Tree, 520, 480, scale);
+            drive_click(&mut fresh, "Planning");
+            drive_click(&mut fresh, "Planning");
+            assert!(state.take_remount());
+            let mut fresh = mount_scenario(Scenario::Tree, 520, 480, scale, state);
+            assert_eq!(
+                layout_diff(host.app_mut(), &mut fresh),
+                None,
+                "scale {scale}"
+            );
+        }
+    }
+
     #[test]
     fn nothing_is_clipped_sideways_at_360() {
         use schnellui::testing::fuzz::sideways_clips;

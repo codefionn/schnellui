@@ -234,6 +234,19 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    /// Resize the live window: every scenario lays out as a fresh mount at the
+    /// new size does, so no size from the launch is left in the page.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        schnellui::testing::fuzz::assert_resize_matches_fresh(
+            Scenario::iter(),
+            (520, 220),
+            (400, 300),
+            &[1.0, 1.5],
+            scenario_app,
+        );
+    }
+
     #[test]
     fn scenarios_satisfy_their_assertions() {
         for scenario in Scenario::iter() {

@@ -325,3 +325,83 @@ pub fn strip_interactions(theme: Theme) -> Theme {
         ..theme
     }
 }
+
+/// Where two apps differ in what a user or an assistive client can see: the
+/// size, then each node's role, name, value and layout rect in tree order.
+/// `None` when they match. For tests that mount at one size, resize live and
+/// compare against a fresh mount at the new size.
+pub fn layout_diff(live: &mut App, fresh: &mut App) -> Option<String> {
+    live.frame();
+    fresh.frame();
+    if live.size() != fresh.size() {
+        return Some(format!(
+            "size {:?} against a fresh {:?}",
+            live.size(),
+            fresh.size()
+        ));
+    }
+    let (a, b) = (live.scene(), fresh.scene());
+    let (ids_a, ids_b): (Vec<_>, Vec<_>) = (a.preorder().collect(), b.preorder().collect());
+    for (index, (&x, &y)) in ids_a.iter().zip(&ids_b).enumerate() {
+        let semantics = |scene: &schnellui::scene::Scene, id| {
+            scene
+                .a11y(id)
+                .map(|s| (s.role, s.name.clone(), s.value.clone()))
+        };
+        if semantics(a, x) != semantics(b, y) {
+            return Some(format!(
+                "node {index}: {:?} against a fresh {:?}",
+                semantics(a, x),
+                semantics(b, y)
+            ));
+        }
+        let rect = |scene: &schnellui::scene::Scene, id| scene.layout(id).map(|l| l.rect);
+        let same = match (rect(a, x), rect(b, y)) {
+            (Some(p), Some(q)) => {
+                (p.x - q.x).abs() < 0.01
+                    && (p.y - q.y).abs() < 0.01
+                    && (p.width - q.width).abs() < 0.01
+                    && (p.height - q.height).abs() < 0.01
+            }
+            (p, q) => p.is_none() == q.is_none(),
+        };
+        if !same {
+            return Some(format!(
+                "node {index} {:?}: rect {:?} against a fresh {:?}",
+                semantics(a, x),
+                rect(a, x),
+                rect(b, y)
+            ));
+        }
+    }
+    (ids_a.len() != ids_b.len())
+        .then(|| format!("{} nodes against a fresh {}", ids_a.len(), ids_b.len()))
+}
+
+/// Mounts each scenario at `launch`, resizes the live window to `resized`
+/// through the window host, and checks it against a fresh mount at `resized`
+/// ([`layout_diff`]), at every scale. `mount` builds a scenario at a logical
+/// size and scale, as an example's `scenario_app` does. Panics on a mismatch.
+pub fn assert_resize_matches_fresh<S: Copy + std::fmt::Debug>(
+    scenarios: impl IntoIterator<Item = S>,
+    launch: (u32, u32),
+    resized: (u32, u32),
+    scales: &[f32],
+    mount: impl Fn(S, u32, u32, f32) -> App,
+) {
+    let scenarios: Vec<S> = scenarios.into_iter().collect();
+    for &scale in scales {
+        for &scenario in &scenarios {
+            let mut app = mount(scenario, launch.0, launch.1, scale);
+            app.frame();
+            let mut host = HeadlessHost::new(app);
+            host.resize(resized.0 as f32, resized.1 as f32);
+            let mut fresh = mount(scenario, resized.0, resized.1, scale);
+            assert_eq!(
+                layout_diff(host.app_mut(), &mut fresh),
+                None,
+                "{scenario:?} at scale {scale}: {launch:?} resized to {resized:?}"
+            );
+        }
+    }
+}

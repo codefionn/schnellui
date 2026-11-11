@@ -331,6 +331,19 @@ mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
 
+    /// Resize the live window: every scenario lays out as a fresh mount at the
+    /// new size does, so no size from the launch is left in the page.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        schnellui::testing::fuzz::assert_resize_matches_fresh(
+            Scenario::iter(),
+            (400, 300),
+            (520, 420),
+            &[1.0, 1.5],
+            scenario_app,
+        );
+    }
+
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
     #[test]

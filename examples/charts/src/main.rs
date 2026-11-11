@@ -458,7 +458,9 @@ fn main() -> ExitCode {
     if cli.windowed || cli.headless_windowed {
         let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
         app.set_escape_exits(true);
-        return match app.run_windowed("charts") {
+        // A chart is a fixed-size figure, so a window resize rebuilds the scenario
+        // at the new size instead of leaving it at the launch size.
+        return match app.run_windowed_with_viewport("charts", resize_hook(scenario, &cli)) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("windowed run failed: {e}");
@@ -477,6 +479,16 @@ fn main() -> ExitCode {
     render_one(scenario, &cli, &out)
 }
 
+/// The windowed remount hook: rebuilds the scenario when the window is resized.
+fn resize_hook(scenario: Scenario, cli: &Cli) -> impl FnMut(schnellui::scene::Size) -> Option<App> {
+    let scale = cli.scale;
+    App::rebuild_on_resize((cli.width, cli.height), move |width, height| {
+        let mut app = scenario_app(scenario, width, height, scale);
+        app.set_escape_exits(true);
+        app
+    })
+}
+
 /// One `--manifest` entry (SOUL §7.1). Kept as a hand-rolled object to avoid a serde
 /// derive on a throwaway type.
 fn serde_manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
@@ -487,6 +499,38 @@ fn serde_manifest_entry(name: &str, path: &str, width: u32, height: u32) -> Stri
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Resize the live window: the charts follow it, and the page matches a
+    /// fresh mount at the new size, wider and narrower, at either scale.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        use schnellui::scene::Size;
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in ["1", "1.5"] {
+            for resized in [(360u32, 400u32), (700, 700)] {
+                for scenario in Scenario::iter() {
+                    let cli = Cli::parse_from(["charts", "--scale", scale]);
+                    let mut app = scenario_app(scenario, cli.width, cli.height, cli.scale);
+                    app.frame();
+                    let mut host = HeadlessHost::new(app);
+                    let mut hook = resize_hook(scenario, &cli);
+                    host.set_remount(move |size: Size, _| {
+                        hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+                    });
+                    host.resize(resized.0 as f32, resized.1 as f32);
+                    assert_eq!(host.remounts(), 1);
+                    let mut fresh = scenario_app(scenario, resized.0, resized.1, cli.scale);
+                    assert_eq!(
+                        layout_diff(host.app_mut(), &mut fresh),
+                        None,
+                        "{} at scale {scale}, resized to {resized:?}",
+                        scenario.name()
+                    );
+                }
+            }
+        }
+    }
 
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.

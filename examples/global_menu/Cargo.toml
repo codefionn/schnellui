@@ -15,3 +15,7 @@ path = "src/main.rs"
 schnellui.workspace = true
 clap.workspace = true
 strum.workspace = true
+
+[dev-dependencies]
+# Live-resize equivalence checks (`testing::fuzz::HeadlessHost`).
+schnellui = { workspace = true, features = ["fuzzing"] }

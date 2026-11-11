@@ -359,6 +359,26 @@ pub(crate) struct Cli {
     headless_windowed: bool,
 }
 
+/// The windowed remount hook: the workspace is rebuilt when the runtime asks
+/// for it and whenever the window's size changes, at the live size.
+pub(crate) fn remount_hook(
+    runtime: WorkspaceRuntime,
+    mut mounted_size: (u32, u32),
+    scale: f32,
+) -> impl FnMut(Size) -> Option<App> {
+    move |viewport| {
+        let current_size = (
+            viewport.width.round().max(1.0) as u32,
+            viewport.height.round().max(1.0) as u32,
+        );
+        let should_remount = runtime.take_remount() || current_size != mounted_size;
+        should_remount.then(|| {
+            mounted_size = current_size;
+            mount_workspace(runtime.clone(), current_size.0, current_size.1, scale)
+        })
+    }
+}
+
 pub(crate) fn render_one(scenario: Scenario, cli: &Cli, out: &str) -> ExitCode {
     let runtime = WorkspaceRuntime::default();
     let mut app = match scenario_app(&runtime, scenario, cli.width, cli.height, cli.scale) {
@@ -425,26 +445,9 @@ pub fn main() -> ExitCode {
         let (width, height, scale) = (cli.width, cli.height, cli.scale);
         let mut app = mount_workspace(runtime.clone(), width, height, scale);
         app.set_escape_exits(true);
-        let mut mounted_size = (width, height);
-        let remount_runtime = runtime.clone();
         return match app.run_windowed_with_viewport(
             "My Day · Dockable Workspace",
-            move |viewport| {
-                let current_size = (
-                    viewport.width.round().max(1.0) as u32,
-                    viewport.height.round().max(1.0) as u32,
-                );
-                let should_remount = remount_runtime.take_remount() || current_size != mounted_size;
-                should_remount.then(|| {
-                    mounted_size = current_size;
-                    mount_workspace(
-                        remount_runtime.clone(),
-                        current_size.0,
-                        current_size.1,
-                        scale,
-                    )
-                })
-            },
+            remount_hook(runtime, (width, height), scale),
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

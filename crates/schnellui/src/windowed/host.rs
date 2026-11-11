@@ -660,6 +660,10 @@ impl WindowedApp {
             let (pw, ph) = r.size();
             let scale = self.app.scale();
             self.app.resize(pw as f32 / scale, ph as f32 / scale);
+        } else {
+            // No surface (the headless host): the viewport the hook was polled
+            // with is the window's live size.
+            self.app.resize(viewport.width, viewport.height);
         }
         self.accessibility_full_update_pending = true;
         // Settle replacement geometry immediately so a stationary pointer

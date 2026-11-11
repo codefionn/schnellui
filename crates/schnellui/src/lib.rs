@@ -807,6 +807,8 @@ mod tests_pointer_handoff;
 #[cfg(test)]
 mod tests_remount;
 #[cfg(test)]
+mod tests_remount_viewport;
+#[cfg(test)]
 mod tests_reveal;
 #[cfg(test)]
 mod tests_rich_links;

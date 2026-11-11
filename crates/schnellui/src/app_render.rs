@@ -225,6 +225,30 @@ impl App {
         windowed::run(self, title, Some(Box::new(updates)))
     }
 
+    /// A viewport-aware remount hook for views whose geometry is computed from
+    /// the window size (fixed-size charts, canvases): it yields `None` while the
+    /// window is still the size the app was mounted at, and `build(width, height)`
+    /// with the new logical size once it changes. For
+    /// [`App::run_windowed_with_viewport`]. State the views own is the
+    /// caller's to carry; prefer layout that adapts (`fill`, `fit_parent`) where
+    /// it can.
+    pub fn rebuild_on_resize(
+        mounted: (u32, u32),
+        mut build: impl FnMut(u32, u32) -> App,
+    ) -> impl FnMut(scene::Size) -> Option<App> {
+        let mut mounted = mounted;
+        move |viewport| {
+            let size = (
+                viewport.width.round().max(1.0) as u32,
+                viewport.height.round().max(1.0) as u32,
+            );
+            (size != mounted).then(|| {
+                mounted = size;
+                build(size.0, size.1)
+            })
+        }
+    }
+
     /// Writes the AccessKit tree as JSON to `path` (SOUL §7.1 `--dump-a11y`). This
     /// is fully implemented — the semantic ground truth for the agent loop (§6.5).
     pub fn dump_a11y(&self, path: impl AsRef<Path>) -> std::io::Result<()> {

@@ -147,7 +147,7 @@ impl Scenario {
 }
 
 /// The screenshotter CLI contract (SOUL §7.1).
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     name = "playground",
     about = "schnellui one-shot screenshotter (SOUL §7.1)"
@@ -1120,6 +1120,17 @@ fn click(app: &mut App, role: Role, name: Option<&str>) {
 /// chrome's Theme dropdown shows its option list (only ever open on a windowed
 /// remount — headless shots take the closed, deterministic chrome, SOUL §7.3).
 fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> App {
+    scenario_app_at(runtime, state, cli, (cli.width, cli.height))
+}
+
+/// [`scenario_app`] at an explicit logical window size: a remount builds at
+/// the window's live size, not the size it was launched with.
+fn scenario_app_at(
+    runtime: &PlaygroundRuntime,
+    state: MountState,
+    cli: &Cli,
+    (width, height): (u32, u32),
+) -> App {
     let scenario = state.scenario;
     // A scenario is entered on its first mount, a switcher-tab change, and every
     // headless run. It then starts from its defaults and is driven to its target
@@ -1127,7 +1138,7 @@ fn scenario_app(runtime: &PlaygroundRuntime, state: MountState, cli: &Cli) -> Ap
     // pick, Density or Fruit toggles) keeps what the user did and drives nothing:
     // a scripted click there would land outside an open list and close it again.
     let entered = runtime.enter(scenario);
-    let (width, height, scale) = (cli.width, cli.height, cli.scale);
+    let scale = cli.scale;
     // The ambient design system is read at build time (SOUL §8.1), so it is set
     // BEFORE the mount below; the remount hook re-enters here on a theme switch.
     let theme = state.theme.theme();
@@ -1605,11 +1616,8 @@ fn main() -> ExitCode {
         );
         app.set_escape_exits(true);
         let remount_runtime = runtime.clone();
-        let result = app.run_windowed_with("playground", move || {
-            remount_runtime
-                .take_mount()
-                .map(|state| scenario_app(&remount_runtime, state, &cli))
-        });
+        let result =
+            app.run_windowed_with_viewport("playground", remount_hook(remount_runtime, cli));
         return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -1625,6 +1633,23 @@ fn main() -> ExitCode {
     render_one(scenario, &cli, &out)
 }
 
+/// The windowed remount hook: a parked mount is rebuilt at the window's live
+/// logical size. The scale is the launch scale, which a window never changes.
+fn remount_hook(
+    runtime: PlaygroundRuntime,
+    cli: Cli,
+) -> impl FnMut(schnellui::scene::Size) -> Option<App> {
+    move |viewport| {
+        let size = (
+            viewport.width.round().max(1.0) as u32,
+            viewport.height.round().max(1.0) as u32,
+        );
+        runtime
+            .take_mount()
+            .map(|state| scenario_app_at(&runtime, state, &cli, size))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1633,6 +1658,59 @@ mod tests {
     /// A live (windowed) CLI, so the chrome and dropdowns park remounts.
     fn live_cli() -> Cli {
         Cli::parse_from(["playground", "--headless-windowed"])
+    }
+
+    /// Resize the live window, then open the Theme dropdown (a remount). The
+    /// page is laid out as a fresh mount at the new size lays it out, at every
+    /// scale: the remount does not go back to the launch size.
+    #[test]
+    fn a_remount_after_a_live_resize_keeps_the_window_size() {
+        use schnellui::scene::Size;
+        use schnellui::testing::fuzz::{layout_diff, HeadlessHost};
+        use schnellui::{Remount, WindowUpdate};
+        for scale in ["1", "1.5", "2"] {
+            let cli = Cli::parse_from(["playground", "--headless-windowed", "--scale", scale]);
+            let runtime = PlaygroundRuntime::default();
+            let start = MountState {
+                scenario: Scenario::Gallery,
+                theme: ThemeChoice::Light,
+                theme_open: false,
+            };
+            let mut app = scenario_app(&runtime, start, &cli);
+            app.frame();
+            let mut host = HeadlessHost::new(app);
+            let mut hook = remount_hook(runtime.clone(), cli.clone());
+            host.set_remount(move |size: Size, _| {
+                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+            });
+            host.resize(360.0, 170.0);
+            let id = host
+                .app()
+                .find_widget(Role::ComboBox, Some("Theme"))
+                .expect("the chrome's Theme dropdown");
+            let opened = host.dispatch_action(&ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: to_access_id(id),
+                data: None,
+            });
+            assert!(opened);
+            assert_eq!(host.remounts(), 1, "scale {scale}: the open is a remount");
+            let mut fresh = scenario_app_at(
+                &PlaygroundRuntime::default(),
+                MountState {
+                    theme_open: true,
+                    ..start
+                },
+                &cli,
+                (360, 170),
+            );
+            assert_eq!(
+                layout_diff(host.app_mut(), &mut fresh),
+                None,
+                "scale {scale}"
+            );
+        }
     }
 
     /// Every Tab stop of every scenario can be shown, at the default size and

@@ -379,11 +379,10 @@ fn document_view() -> impl View {
     )
 }
 
-fn editor_view(width: f32) -> impl View {
+fn editor_view() -> impl View {
     stage(
         Column::new()
             .fill()
-            .width(width - 48.0)
             .gap(8.0)
             .child(RichText::new(RichDoc::new().heading(2, ["Source editor"])))
             .child(pane_caption(
@@ -407,46 +406,58 @@ fn editor_view(width: f32) -> impl View {
     )
 }
 
-fn preview_view(width: f32) -> impl View {
+fn preview_view() -> impl View {
     let source = schnellui::signal::create_signal(PREVIEW_SOURCE.to_string());
-    let pane = ((width - 48.0 - 24.0) / 2.0).floor();
     stage(
         Row::new()
             .fill()
             .gap(24.0)
             .align(Align::Start)
             .child(
-                Column::new()
-                    .fill()
-                    .width(pane)
-                    .gap(8.0)
-                    .child(pane_caption("MARKUP SOURCE"))
+                // The panes share the row equally at whatever width the window has.
+                Flex::new()
+                    .grow(1.0)
+                    .shrink(1.0)
+                    .basis(0.0)
+                    .min_width(0.0)
                     .child(
-                        Flex::new().grow(1.0).shrink(1.0).child(
-                            Scroll::new().scrollbar(true).child(
-                                TextArea::new(PREVIEW_SOURCE)
-                                    .placeholder("mini markup source")
-                                    .size(15.0)
-                                    .rows(25)
-                                    .wrap(WrapMode::Word)
-                                    .highlight(highlight_markup)
-                                    .on_input(move |v| source.set(v.to_string())),
+                        Column::new()
+                            .fill()
+                            .gap(8.0)
+                            .child(pane_caption("MARKUP SOURCE"))
+                            .child(
+                                Flex::new().grow(1.0).shrink(1.0).child(
+                                    Scroll::new().scrollbar(true).child(
+                                        TextArea::new(PREVIEW_SOURCE)
+                                            .placeholder("mini markup source")
+                                            .size(15.0)
+                                            .rows(25)
+                                            .wrap(WrapMode::Word)
+                                            .highlight(highlight_markup)
+                                            .on_input(move |v| source.set(v.to_string())),
+                                    ),
+                                ),
                             ),
-                        ),
                     ),
             )
             .child(
-                Column::new()
-                    .fill()
-                    .width(pane)
-                    .gap(8.0)
-                    .child(pane_caption("PREVIEW"))
+                Flex::new()
+                    .grow(1.0)
+                    .shrink(1.0)
+                    .basis(0.0)
+                    .min_width(0.0)
                     .child(
-                        Flex::new().grow(1.0).shrink(1.0).child(
-                            Scroll::new()
-                                .scrollbar(true)
-                                .child(RichText::dynamic(move || parse_mini_markup(&source.get()))),
-                        ),
+                        Column::new()
+                            .fill()
+                            .gap(8.0)
+                            .child(pane_caption("PREVIEW"))
+                            .child(
+                                Flex::new().grow(1.0).shrink(1.0).child(
+                                    Scroll::new().scrollbar(true).child(RichText::dynamic(
+                                        move || parse_mini_markup(&source.get()),
+                                    )),
+                                ),
+                            ),
                     ),
             ),
     )
@@ -474,8 +485,7 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             app
         }
         Scenario::Editor => {
-            let mut app =
-                App::mount_with_size_scaled(editor_view(width as f32), width, height, scale);
+            let mut app = App::mount_with_size_scaled(editor_view(), width, height, scale);
             app.frame();
             // focus the editor by role, then edit through the real key path:
             // append a comment line at the end of the source (SOUL §6.3).
@@ -493,8 +503,7 @@ fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App 
             app
         }
         Scenario::Preview => {
-            let mut app =
-                App::mount_with_size_scaled(preview_view(width as f32), width, height, scale);
+            let mut app = App::mount_with_size_scaled(preview_view(), width, height, scale);
             app.frame();
             // drive a new source through the inbound AccessKit SetValue path;
             // on_input feeds the signal, the dynamic viewer re-flows (§6.3).
@@ -675,6 +684,19 @@ fn manifest_entry(name: &str, path: &str, width: u32, height: u32) -> String {
 mod tests {
     use super::*;
     use schnellui::testing::fuzz::tab_stops_reachable;
+
+    /// Resize the live window: every scenario lays out as a fresh mount at the
+    /// new size does, so no pane keeps its launch width, at either scale.
+    #[test]
+    fn a_live_resize_matches_a_fresh_mount() {
+        schnellui::testing::fuzz::assert_resize_matches_fresh(
+            Scenario::iter(),
+            (880, 640),
+            (700, 500),
+            &[1.0, 1.5],
+            scenario_app,
+        );
+    }
 
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
