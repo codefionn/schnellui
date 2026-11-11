@@ -1086,9 +1086,22 @@ impl WindowedApp {
             MouseScrollDelta::LineDelta(_, y) => -y * crate::SCROLL_STEP,
             MouseScrollDelta::PixelDelta(pos) => -(pos.y as f32) / scale,
         };
-        // A wheel leaves dropdowns alone; pointer presses still dismiss
-        // them. This avoids two unrelated full-tree walks per wheel event
-        // (generic hit testing + expanded-dropdown collection).
+        // An open dropdown or combo list takes the wheel before the page does:
+        // it scrolls the list under the pointer, or closes on a wheel elsewhere.
+        // The check walks the overlay roots, not the tree.
+        if let Some(changed) = self.app.wheel_on_open_list(p, dy) {
+            if changed {
+                // Closing is a structural update: fold it in, then hand hover
+                // to whatever is under the pointer now.
+                self.poll_remount();
+                let rest = self.resting_pointer();
+                let _ = self.app.update_pointer_proximity(rest);
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            return EventTail::Skip;
+        }
         // The deepest scroll viewport gets the wheel first. If it cannot
         // move at that edge, routing walks upward to a scroll ancestor.
         if schnellui::widgets::dispatch_wheel_at(

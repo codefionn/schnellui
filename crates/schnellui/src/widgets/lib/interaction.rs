@@ -1802,9 +1802,9 @@ fn update_pointer_state(
             let Some(tooltip) = registry.hover_tooltips.get_mut(id) else {
                 continue;
             };
-            let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
-                continue;
-            };
+            // The rect as drawn: a page scrolled under the pointer moves the
+            // control without moving its layout box.
+            let rect = scene.composited_rect(id);
             let own_menu_open = crate::widgets::context_menu::context_menu_open_for(runtime, id);
             let allowed = match (registry.tooltip_when.get(id), registry.window) {
                 (Some(query), Some(window)) => query.matches(window),

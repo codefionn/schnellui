@@ -910,6 +910,48 @@ impl App {
         dismissed | back.is_some_and(|id| self.focus_after_replacement(id, self.keyboard_modality))
     }
 
+    /// A wheel turned while a dropdown or combo list is open. Over a list it
+    /// scrolls the list if the list overflows and is otherwise spent on it; the
+    /// page beneath never moves. Anywhere else it closes the lists, picks
+    /// nothing, and is spent doing so, as it is for a context menu. Focus goes
+    /// back to the trigger with the ring the last input gave it. `None` when no
+    /// list is open, and the wheel goes on to the page.
+    pub(crate) fn wheel_on_open_list(&mut self, point: scene::Point, delta_y: f32) -> Option<bool> {
+        let lists = schnellui::widgets::open_lists(&self.scene);
+        if lists.is_empty() {
+            return None;
+        }
+        let over = |scene: &Scene, id: scene::WidgetId| {
+            lists
+                .iter()
+                .any(|list| schnellui::widgets::is_in_subtree(scene, id, list.popup))
+        };
+        let hit = schnellui::widgets::hit_test(&self.widgets, &self.scene, point);
+        if hit.is_some_and(|hit| over(&self.scene, hit)) {
+            // Only a viewport inside the list takes it: at its end the wheel is
+            // still the list's, and does not chain out to the page.
+            let moved = schnellui::widgets::hit_test_scroll_in(&self.widgets, &self.scene, point)
+                .filter(|&scroll| over(&self.scene, scroll))
+                .is_some_and(|scroll| {
+                    schnellui::widgets::dispatch_scroll(
+                        &self.widgets,
+                        &mut self.scene,
+                        scroll,
+                        delta_y,
+                    )
+                });
+            return Some(moved);
+        }
+        let mut changed = false;
+        for list in &lists {
+            if self.focused_widget() != Some(list.trigger) {
+                changed |= self.focus_after_replacement(list.trigger, self.keyboard_modality);
+            }
+        }
+        changed |= schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, None);
+        Some(changed)
+    }
+
     /// Escape's ladder, the same from the keyboard path and the window: a
     /// content drag in flight is cancelled first, then an open menu closes,
     /// then any open dropdown or combo list, then the top dialog. `None`

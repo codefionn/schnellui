@@ -670,6 +670,41 @@ pub(crate) fn dispatch_click_dropdown(
     }
 }
 
+/// One open dropdown or combo list: its floating popup and the control that
+/// opened it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenList {
+    pub popup: WidgetId,
+    pub trigger: WidgetId,
+}
+
+/// The open dropdown and combo lists, found through the overlay roots, so the
+/// cost is the number of overlays and not the size of the scene. A list is an
+/// overlay at the popup level whose wrapper holds an expanded combo trigger.
+pub fn open_lists(scene: &Scene) -> SmallVec<[OpenList; 2]> {
+    let mut lists = SmallVec::new();
+    for popup in scene.overlays() {
+        if scene.overlay_level(popup) != crate::widgets::POPUP_OVERLAY_LEVEL {
+            continue;
+        }
+        let Some(wrapper) = scene.node(popup).and_then(|node| node.parent) else {
+            continue;
+        };
+        let trigger = scene.node(wrapper).and_then(|node| {
+            node.children.iter().copied().find(|&child| {
+                scene.a11y(child).is_some_and(|a| {
+                    Role::from_u16(a.role) == Role::ComboBox
+                        && StateFlags(a.state).contains(StateFlags::EXPANDED)
+                })
+            })
+        });
+        if let Some(trigger) = trigger {
+            lists.push(OpenList { popup, trigger });
+        }
+    }
+    lists
+}
+
 /// Dismisses every expanded dropdown that does not contain `interaction_target`.
 ///
 /// Dropdown visibility is structural, so dismissal fires the same `on_toggle`
