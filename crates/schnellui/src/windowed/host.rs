@@ -832,7 +832,9 @@ impl WindowedApp {
     /// stable even after the pointer leaves the original chrome.
     pub(super) fn sync_cursor(&mut self) {
         self.cursor_synced_key = Some(self.cursor_sync_state());
-        let next = self.app.cursor_at(self.cursor_logical());
+        // A pointer outside the window hits nothing: only a capture (dialog
+        // move/resize, a held drag) still decides the icon.
+        let next = self.app.cursor_at(self.resting_pointer());
         if next == self.cursor_icon {
             return;
         }

@@ -698,6 +698,9 @@ impl WindowedApp {
                 w.request_redraw();
             }
         }
+        // The stored icon follows: outside the window nothing is hovered. The
+        // OS restores the real cursor itself.
+        self.sync_cursor();
         EventTail::Normal
     }
 

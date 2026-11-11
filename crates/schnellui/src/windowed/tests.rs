@@ -2480,7 +2480,7 @@ mod debug_input_trace {
     use super::windowed_host;
     use crate::a11y::Role;
     use crate::debug_server::{
-        DebugAction, DebugButton, DebugCommand, DebugKey, DebugPress, DebugTarget,
+        DebugAction, DebugButton, DebugCommand, DebugKey, DebugPoint, DebugPress, DebugTarget,
     };
     use crate::interaction_debug::{InteractionRecorder, InteractionTrace};
     use crate::widgets::{Column, Slider, TextInput};
@@ -2666,6 +2666,58 @@ mod debug_input_trace {
         assert_eq!(action["target"]["role"], "text_input");
         assert_eq!(action["value_len"], 2);
         assert!(action.get("value").is_none());
+    }
+
+    #[test]
+    fn debug_leave_over_a_text_field_resets_the_cursor_icon_and_is_traced() {
+        let p = path("leave");
+        let mut host = host(Some(
+            InteractionTrace::file(&p).include_pointer_moves(false),
+        ));
+        let id = host.app.find_widget(Role::TextInput, None).unwrap();
+        let r = host.app.scene().layout(id).unwrap().rect;
+        let reply = host.handle_debug_command(
+            None,
+            DebugCommand::PointerMove(DebugPoint {
+                x: r.x + r.width / 2.0,
+                y: r.y + r.height / 2.0,
+            }),
+        );
+        let inside: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(inside["status"]["cursor_icon"], "text");
+        assert_eq!(inside["status"]["cursor_inside"], true);
+        let reply = host.handle_debug_command(None, DebugCommand::PointerLeave);
+        let out: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(out["status"]["cursor_inside"], false);
+        assert_eq!(out["status"]["cursor_icon"], "default");
+        assert_eq!(host.debug_status()["cursor_icon"], "default");
+        let all = records(&p);
+        assert!(all.iter().any(|r| r["event"] == "pointer_left"));
+        let change = all
+            .iter()
+            .rfind(|r| r["event"] == "cursor_changed")
+            .unwrap();
+        assert_eq!(change["from"], "text");
+        assert_eq!(change["to"], "default");
+    }
+
+    #[test]
+    fn a_window_cursor_left_event_resets_the_cursor_icon_too() {
+        use winit::dpi::PhysicalPosition;
+        let mut host = host(None);
+        let id = host.app.find_widget(Role::TextInput, None).unwrap();
+        let r = host.app.scene().layout(id).unwrap().rect;
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(r.x + r.width / 2.0),
+            f64::from(r.y + r.height / 2.0),
+        ));
+        host.sync_cursor();
+        assert_eq!(host.debug_status()["cursor_icon"], "text");
+        host.on_cursor_left();
+        assert_eq!(host.debug_status()["cursor_icon"], "default");
+        // A later sync with no event in between keeps it.
+        host.sync_cursor();
+        assert_eq!(host.debug_status()["cursor_icon"], "default");
     }
 
     #[test]
