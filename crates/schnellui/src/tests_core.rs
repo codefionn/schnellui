@@ -2846,6 +2846,186 @@ mod undo_redo {
         }
     }
 
+    fn right(app: &mut App) {
+        app.dispatch_key(UiKey::Right {
+            shift: false,
+            ctrl: false,
+        });
+    }
+
+    fn commit_ime(app: &mut App, text: &str) {
+        assert_eq!(
+            app.dispatch_ime(crate::RawImeEvent::Commit(text.into())),
+            FocusedInputResult::Handled
+        );
+    }
+
+    /// A caret that wanders off and returns to where the typed run ended must
+    /// not pick the run up again: the move closed it.
+    #[test]
+    fn a_caret_that_returns_to_the_end_of_a_run_starts_a_new_step() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "ab");
+            left(&mut app);
+            right(&mut app);
+            type_text(&mut app, "c");
+            assert_eq!(value(&app, id), "abc");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab", "area: {area}");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "");
+        }
+    }
+
+    #[test]
+    fn an_ime_commit_after_a_caret_round_trip_is_its_own_step() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "ab");
+            left(&mut app);
+            right(&mut app);
+            commit_ime(&mut app, "X");
+            assert_eq!(value(&app, id), "abX");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "ab", "area: {area}");
+        }
+    }
+
+    /// The rich_text editor scenario: lines added through the edit-key path,
+    /// the word selected, then the user types at the end again.
+    #[test]
+    fn typing_after_a_selection_that_ends_at_the_run_end_keeps_the_seed() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            assert!(app.dispatch_edit_key(EditKey::Insert("// seeded")));
+            assert!(app.dispatch_edit_key(EditKey::Left {
+                select: true,
+                word: true,
+            }));
+            right(&mut app);
+            type_text(&mut app, "Z");
+            assert_eq!(value(&app, id), "// seededZ");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "// seeded", "area: {area}");
+        }
+    }
+
+    #[test]
+    fn a_value_the_app_set_is_not_part_of_the_next_undo_group() {
+        for area in [false, true] {
+            let (mut app, id) = if area { area_app("") } else { input_app("") };
+            type_text(&mut app, "old");
+            assert!(schnellui::widgets::set_text_value(
+                &app.widgets,
+                &mut app.scene,
+                &mut app.text,
+                &mut app.atlas,
+                id,
+                "seed",
+            ));
+            type_text(&mut app, "Z");
+            assert_eq!(value(&app, id), "seedZ");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "seed", "area: {area}");
+            assert!(!app.dispatch_key(UiKey::Undo), "not past the app's value");
+            commit_ime(&mut app, "X");
+            assert!(app.dispatch_key(UiKey::Undo));
+            assert_eq!(value(&app, id), "seed");
+            assert!(!app.dispatch_key(UiKey::Undo));
+        }
+    }
+
+    /// A controlled field stores every change. The echo is not a rewrite, so
+    /// the history survives it and undo still goes a word at a time.
+    #[test]
+    fn controlled_fields_that_store_every_change_undo_a_word_at_a_time() {
+        for area in [false, true] {
+            let state = schnellui::signal::create_signal(String::new());
+            let mut app = App::mount_themed(theme::LIGHT, move || {
+                if area {
+                    Column::new().child(TextArea::new(state.get()).on_input(move |v| {
+                        state.set(v.to_string());
+                    }))
+                } else {
+                    Column::new().child(TextInput::new(state.get()).on_input(move |v| {
+                        state.set(v.to_string());
+                    }))
+                }
+            });
+            app.frame();
+            let role = if area {
+                Role::MultilineTextInput
+            } else {
+                Role::TextInput
+            };
+            let id = app.find_widget(role, None).unwrap();
+            app.focus(Some(id));
+            type_text(&mut app, "one two three");
+            app.frame();
+            for want in ["one two", "one", ""] {
+                assert!(app.dispatch_key(UiKey::Undo), "area: {area}");
+                app.frame();
+                let id = app.find_widget(role, None).unwrap();
+                assert_eq!(value(&app, id), want);
+                assert_eq!(state.get(), want);
+            }
+            assert!(!app.dispatch_key(UiKey::Undo));
+            for want in ["one", "one two", "one two three"] {
+                assert!(app.dispatch_key(UiKey::Redo), "area: {area}");
+                app.frame();
+                assert_eq!(state.get(), want);
+            }
+        }
+    }
+
+    /// The app replaces the text of a controlled field while the user has
+    /// history: undo stops at the replacement and redo is empty.
+    #[test]
+    fn an_app_replacement_of_a_controlled_field_ends_the_history() {
+        for area in [false, true] {
+            let state = schnellui::signal::create_signal(String::new());
+            let mut app = App::mount_themed(theme::LIGHT, move || {
+                if area {
+                    Column::new().child(TextArea::new(state.get()).on_input(move |v| {
+                        state.set(v.to_string());
+                    }))
+                } else {
+                    Column::new().child(TextInput::new(state.get()).on_input(move |v| {
+                        state.set(v.to_string());
+                    }))
+                }
+            });
+            app.frame();
+            let role = if area {
+                Role::MultilineTextInput
+            } else {
+                Role::TextInput
+            };
+            let id = app.find_widget(role, None).unwrap();
+            app.focus(Some(id));
+            type_text(&mut app, "typed words");
+            app.frame();
+            state.set(String::from("seed"));
+            assert!(app.set_theme(theme::DARK));
+            app.frame();
+            let id = app.find_widget(role, None).unwrap();
+            assert_eq!(value(&app, id), "seed", "area: {area}");
+            type_text(&mut app, "Z");
+            app.frame();
+            assert!(app.dispatch_key(UiKey::Undo));
+            app.frame();
+            let id = app.find_widget(role, None).unwrap();
+            assert_eq!(value(&app, id), "seed");
+            assert_eq!(state.get(), "seed");
+            assert!(!app.dispatch_key(UiKey::Undo), "not past the replacement");
+            assert!(app.dispatch_key(UiKey::Redo));
+            app.frame();
+            assert_eq!(state.get(), "seedZ");
+            assert!(!app.dispatch_key(UiKey::Redo));
+        }
+    }
+
     #[test]
     fn undo_and_redo_without_history_return_false() {
         for area in [false, true] {

@@ -811,6 +811,38 @@ mod tests {
         assert!(line.contains('Q') && line.contains("edited"), "{value:?}");
     }
 
+    /// The seeded comment line ends with its word selected. The user clicks
+    /// past the end of that line and types Z: the caret is back where the
+    /// seed's typed run ended, and undo must still take back only the Z.
+    #[test]
+    fn undo_after_typing_in_the_seeded_editor_keeps_the_seeded_line() {
+        use schnellui::scene::Point;
+        use schnellui::UiKey;
+        let mut app = scenario_app(Scenario::Editor, 880, 640, 1.0);
+        app.frame();
+        let id = app
+            .find_widget(Role::MultilineTextInput, None)
+            .expect("the text area");
+        let value = |app: &App| {
+            let tree = a11y::dump_tree(app.scene());
+            find_by_role_name(&tree, "multiline_text_input", None)
+                .and_then(|n| n.value.clone())
+                .expect("the editor's value")
+        };
+        let seeded = value(&app);
+        assert!(seeded.ends_with("// edited headlessly"), "{seeded:?}");
+        let rect = app.scene().layout(id).expect("laid out").rect;
+        let past_the_end = Point {
+            x: rect.x + 600.0,
+            y: rect.y + 12.0 + 4.5 * 22.0,
+        };
+        assert!(app.dispatch_text_pointer(id, past_the_end, false));
+        assert!(app.dispatch_key(UiKey::Char("Z")));
+        assert_eq!(value(&app), format!("{seeded}Z"));
+        assert!(app.dispatch_key(UiKey::Undo));
+        assert_eq!(value(&app), seeded, "undo took back the seed too");
+    }
+
     /// The viewer's column is as wide as its page, so once the page scrolls
     /// the column ends at the scrollbar's gutter instead of running under it
     /// (the code block's frame reached 12px under the bar).

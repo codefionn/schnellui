@@ -1391,6 +1391,11 @@ fn commit_area_change(
     match change {
         Change::None => false,
         Change::Caret => {
+            runtime.with(|rt| {
+                if let Some(st) = rt.borrow_mut().areas.get_mut(id) {
+                    st.history.seal();
+                }
+            });
             emit_text_area_paint(runtime, scene, shaper, atlas, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
             true

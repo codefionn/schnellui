@@ -150,6 +150,11 @@ fn commit_change(
     match change {
         Change::None => false,
         Change::Caret => {
+            runtime.with(|rt| {
+                if let Some(e) = rt.borrow_mut().edits.get_mut(id) {
+                    e.history.seal();
+                }
+            });
             emit_text_input_paint(runtime, scene, shaper, atlas, id);
             scene.mark_dirty(id, DirtyFlags::PAINT);
             true

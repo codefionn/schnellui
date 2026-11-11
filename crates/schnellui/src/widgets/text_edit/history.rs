@@ -10,8 +10,8 @@
 //!
 //! Runs: typed inserts that continue at the caret, and Backspace or Delete
 //! runs that continue at the caret, extend the open step. A whitespace
-//! insert, a caret move or selection change, a different kind of edit, an
-//! undo or a redo closes the run.
+//! insert, a caret move or selection change (even one that ends where the run did),
+//! a different kind of edit, an undo or a redo closes the run.
 //!
 //! The history trusts that every change of the value goes through
 //! [`EditHistory::begin`]/[`EditHistory::finish`], [`EditHistory::undo`] or
@@ -138,6 +138,13 @@ impl EditHistory {
     pub(crate) fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+        self.run_open = false;
+    }
+
+    /// Closes the open run: the caret or selection moved without an edit.
+    /// Comparing the caret with where the run ended is not enough, because
+    /// the caret can leave and come back to the same offset.
+    pub(crate) fn seal(&mut self) {
         self.run_open = false;
     }
 
