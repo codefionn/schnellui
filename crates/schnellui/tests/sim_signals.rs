@@ -6,7 +6,8 @@
 //! scope disposals. After every
 //! step the graph must agree with a model that recomputes everything eagerly.
 //!
-//! The signal runtime is process-global; run with `--test-threads=1`.
+//! The signal runtime is process-global, so the tests here take `SERIAL` and
+//! run one at a time whatever `--test-threads` says.
 
 use std::sync::{Arc, Mutex};
 
@@ -18,8 +19,21 @@ use schnellui::Store;
 mod common;
 use common::signals::{run, GraphSpec};
 
+/// One test's flush runs every queued effect, the other test's too, and that
+/// test may be disposing the scope those effects read from.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+/// Takes [`SERIAL`]. A test that failed while holding it leaves it poisoned,
+/// and the next one runs anyway instead of failing on the lock.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn random_reactive_graphs_match_an_eager_model() {
+    let _serial = serial();
     for_each_seed("signals/random-graph", 200, |rng| {
         run(&GraphSpec::random(rng))
     });
@@ -27,6 +41,7 @@ fn random_reactive_graphs_match_an_eager_model() {
 
 #[test]
 fn store_selectors_only_wake_effects_for_their_slice() {
+    let _serial = serial();
     for_each_seed("signals/store-selectors", 100, |rng| {
         let scope = create_scope();
         run_in_scope(scope, || {

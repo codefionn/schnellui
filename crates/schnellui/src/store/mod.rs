@@ -387,7 +387,9 @@ mod tests {
     use super::Store;
 
     // The reactive arena is process-global. Serializing the tests prevents one
-    // test's queued effect from being flushed by another test.
+    // test's queued effect from being flushed by another test. It does not
+    // hold off the rest of the crate's tests, so node counts are taken under a
+    // scope the test owns, never from the whole arena.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -602,44 +604,50 @@ mod tests {
     #[test]
     fn selector_outlives_its_store_and_final_handle_disposes_scope() {
         let _serial = TEST_LOCK.lock().unwrap();
-        let before = Runtime::node_count();
+        let root = create_scope();
         let title = {
-            let store = Store::new(AppState {
-                title: "Owned".into(),
-                clicks: 0,
+            let store = run_in_scope(root, || {
+                Store::new(AppState {
+                    title: "Owned".into(),
+                    clicks: 0,
+                })
             });
             let title = store.select(|state| state.title.clone());
 
             // The store creates one scope and one source signal; the selector adds
             // its own scope and memo.
-            assert_eq!(Runtime::node_count(), before + 4);
+            assert_eq!(Runtime::node_count_under(root), 4);
             title
         };
 
         // The selector keeps the shared owner alive after its Store is dropped.
         assert_eq!(title.get(), "Owned");
-        assert_eq!(Runtime::node_count(), before + 4);
+        assert_eq!(Runtime::node_count_under(root), 4);
 
         drop(title);
-        assert_eq!(Runtime::node_count(), before);
+        assert_eq!(Runtime::node_count_under(root), 0);
+        root.dispose();
     }
 
     #[test]
     fn dropped_selectors_leave_no_nodes_behind() {
         let _serial = TEST_LOCK.lock().unwrap();
-        let store = Store::new(AppState {
-            title: "Many".into(),
-            clicks: 0,
+        let root = create_scope();
+        let store = run_in_scope(root, || {
+            Store::new(AppState {
+                title: "Many".into(),
+                clicks: 0,
+            })
         });
         let live = store.select(|s| s.clicks);
         assert_eq!(live.get(), 0);
-        let baseline = Runtime::node_count();
+        let baseline = Runtime::node_count_under(root);
         for i in 0..10_000usize {
             let sel = store.select(move |s| s.clicks + i);
             assert_eq!(sel.get(), i);
         }
         // Every dropped selector took its scope and memo with it.
-        assert_eq!(Runtime::node_count(), baseline);
+        assert_eq!(Runtime::node_count_under(root), baseline);
         let runs = Arc::new(AtomicUsize::new(0));
         let counted = {
             let runs = Arc::clone(&runs);
@@ -653,15 +661,19 @@ mod tests {
         assert_eq!(live.get(), 5);
         assert_eq!(counted.get(), 5);
         assert_eq!(runs.load(Ordering::SeqCst), 2);
+        drop((store, live, counted));
+        root.dispose();
     }
 
     #[test]
     fn cloned_selector_survives_one_owner_and_dies_with_the_last() {
         let _serial = TEST_LOCK.lock().unwrap();
-        let before = Runtime::node_count();
-        let store = Store::new(AppState {
-            title: "Shared".into(),
-            clicks: 1,
+        let root = create_scope();
+        let store = run_in_scope(root, || {
+            Store::new(AppState {
+                title: "Shared".into(),
+                clicks: 1,
+            })
         });
         let first = store.select(|s| s.clicks);
         let second = first.clone();
@@ -670,9 +682,10 @@ mod tests {
         assert_eq!(second.get(), 2);
         drop(store);
         assert_eq!(second.get(), 2);
-        assert_eq!(Runtime::node_count(), before + 4);
+        assert_eq!(Runtime::node_count_under(root), 4);
         drop(second);
-        assert_eq!(Runtime::node_count(), before);
+        assert_eq!(Runtime::node_count_under(root), 0);
+        root.dispose();
     }
 
     #[test]

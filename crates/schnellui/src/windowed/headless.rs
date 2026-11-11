@@ -479,9 +479,19 @@ impl HeadlessHost {
     }
 
     /// What the host holds of a pointer gesture under way: the `pointer`
-    /// part of the debug server's status, as JSON text.
+    /// part of the debug server's status, as JSON text with its keys in
+    /// alphabetical order. serde_json keeps insertion order instead when some
+    /// crate in the build turns on its `preserve_order` feature, so the keys
+    /// are sorted here and the text reads the same in every build.
     pub fn pointer_state(&self) -> String {
-        self.host.debug_status()["pointer"].to_string()
+        let status = self.host.debug_status();
+        match status["pointer"].as_object() {
+            Some(pointer) => {
+                let sorted: std::collections::BTreeMap<_, _> = pointer.iter().collect();
+                serde_json::to_string(&sorted).unwrap_or_default()
+            }
+            None => status["pointer"].to_string(),
+        }
     }
 
     /// Delivers one input-method event, as the window's `Ime` event does.

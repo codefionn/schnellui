@@ -376,6 +376,24 @@ impl Runtime {
     pub fn node_count() -> usize {
         RUNTIME.lock().nodes.len()
     }
+
+    /// Number of live nodes owned by `scope`, directly or through a nested
+    /// scope, not counting `scope` itself. The arena is process-global and
+    /// tests run in parallel, so a test that counts its own nodes counts them
+    /// under a scope it made; [`Self::node_count`] moves with every other test.
+    #[cfg(test)]
+    pub(crate) fn node_count_under(scope: super::Scope) -> usize {
+        let rt = RUNTIME.lock();
+        let mut pending = vec![scope.id];
+        let mut count = 0;
+        while let Some(id) = pending.pop() {
+            if let Some(owned) = rt.scopes.get(id) {
+                count += owned.len();
+                pending.extend(owned.iter().copied());
+            }
+        }
+        count
+    }
 }
 
 /// Runs `f` without the calling thread's current reactive observer.
