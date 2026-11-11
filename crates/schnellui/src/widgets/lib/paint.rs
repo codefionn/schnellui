@@ -214,11 +214,16 @@ fn button_intrinsic(
     appearance: ButtonAppearance,
 ) -> Size {
     let sh = theme_for(runtime, id).shape;
+    if appearance == ButtonAppearance::Link {
+        return ts;
+    }
     // Every appearance takes the design's frame, so solid, outlined and ghost
     // buttons in one row share a height; a thin outline sits in the padding.
     let chrome = match appearance {
         ButtonAppearance::Solid => 2.0 * sh.frame + sh.shadow,
-        ButtonAppearance::Outline | ButtonAppearance::Ghost => 2.0 * sh.frame,
+        ButtonAppearance::Outline | ButtonAppearance::Ghost | ButtonAppearance::Link => {
+            2.0 * sh.frame
+        }
     };
     Size {
         width: ts.width + 2.0 * sh.pad(PAD_H) + chrome,
@@ -274,7 +279,9 @@ pub fn emit_button_paint(
     // A filled button's label is bold: dark strokes on a light fill thin out
     // under antialiasing, and the heavier face keeps the main action as
     // legible as the outlined ones beside it.
-    let face = if appearance == ButtonAppearance::Solid && !disabled {
+    let face = if (appearance == ButtonAppearance::Solid && !disabled)
+        || appearance == ButtonAppearance::Link
+    {
         FontFace::SansBold
     } else {
         FontFace::Sans
@@ -301,7 +308,7 @@ pub fn emit_button_paint(
         _ if disabled => sh.frame,
         ButtonAppearance::Solid => sh.frame,
         ButtonAppearance::Outline => OUTLINE_FRAME,
-        ButtonAppearance::Ghost => 0.0,
+        ButtonAppearance::Ghost | ButtonAppearance::Link => 0.0,
     };
     // A disabled button lies flat: no block shadow to suggest it can be pressed.
     let shadow = if solid && !disabled { sh.shadow } else { 0.0 };
@@ -309,7 +316,7 @@ pub fn emit_button_paint(
         (true, _) => t.disabled,
         (false, ButtonAppearance::Solid) => t.accent,
         (false, ButtonAppearance::Outline) => t.surface,
-        (false, ButtonAppearance::Ghost) => Color::TRANSPARENT,
+        (false, ButtonAppearance::Ghost | ButtonAppearance::Link) => Color::TRANSPARENT,
     };
     // The body is the layout box minus the shadow's offset strip.
     let body = Rect::new(

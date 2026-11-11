@@ -115,6 +115,9 @@ pub enum ButtonAppearance {
     /// outline, with text-colored label. Sits beside a [`Solid`](Self::Solid)
     /// primary action or stands alone in forms and lists.
     Outline,
+    /// Bold label on no background with no padding or frame, so the text sits
+    /// flush with the text around it. For a name that opens something.
+    Link,
 }
 
 /// A push button (SOUL §8.1). Carries `Role::Button`; its `on_click` is the same

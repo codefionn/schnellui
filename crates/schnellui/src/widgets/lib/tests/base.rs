@@ -143,6 +143,42 @@ fn ghost_button_keeps_button_semantics_with_transparent_chrome() {
 }
 
 #[test]
+fn link_button_has_no_padding_and_a_transparent_ground() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    set_theme(runtime, Theme::default());
+    let size_of = |appearance| {
+        let (mut scene, mut layout, _text, _atlas, id) =
+            build_one(runtime, Button::new("Bob").appearance(appearance));
+        layout.sync_tree(&scene, id);
+        layout.compute(
+            &mut scene,
+            id,
+            Size {
+                width: 400.0,
+                height: 200.0,
+            },
+        );
+        let rect = scene.layout(id).expect("layout").rect;
+        let transparent = matches!(
+            scene.paint(id).unwrap().primitives[0],
+            Primitive::SolidRect { color, .. } if color == Color::TRANSPARENT
+        );
+        (
+            rect.width,
+            rect.height,
+            transparent,
+            scene.a11y(id).unwrap().role,
+        )
+    };
+    let (link_w, link_h, link_clear, role) = size_of(ButtonAppearance::Link);
+    let (ghost_w, ghost_h, _, _) = size_of(ButtonAppearance::Ghost);
+    assert!(link_clear);
+    assert_eq!(Role::from_u16(role), Role::Button);
+    assert!(link_w < ghost_w && link_h < ghost_h);
+}
+
+#[test]
 fn icon_only_button_keeps_its_name_and_reveals_a_compact_hover_label() {
     let runtime_handle = crate::widgets::Runtime::new();
     #[allow(unused_variables)]
@@ -1031,12 +1067,14 @@ fn dynamic_text_updates_retained_content_on_signal_set_and_flush() {
     // paint re-shaped to new glyph quads + both dirty channels flagged (§6.2)
     assert_ne!(scene.paint(id).unwrap().primitives, paint_before);
     // the re-emitted primitives are real glyph quads, not solid placeholder blocks
-    assert!(scene
-        .paint(id)
-        .unwrap()
-        .primitives
-        .iter()
-        .all(|p| matches!(p, Primitive::GlyphQuad { .. })));
+    assert!(
+        scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .all(|p| matches!(p, Primitive::GlyphQuad { .. }))
+    );
     assert!(scene.dirty_flags(id).contains(DirtyFlags::PAINT));
     assert!(scene.dirty_flags(id).contains(DirtyFlags::A11Y));
     // width changed ("0" → "42") ⇒ the layout channel is flagged too (§8.1)
