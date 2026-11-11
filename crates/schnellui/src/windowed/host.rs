@@ -1,4 +1,4 @@
-use super::event_handler::{raw_capture_target_survives, remount_allowed, EventTail};
+use super::event_handler::{raw_capture_target_survives, EventTail};
 use super::*;
 
 /// What the platform adapter last received, kept to decide the next update.
@@ -56,53 +56,6 @@ pub(super) fn plan_accessibility_update(
         AccessibilityPlan::Incremental
     } else {
         AccessibilityPlan::Skip
-    }
-}
-
-/// Input that arrived while a pointer button was held and a structural update
-/// was already waiting for its release.
-#[derive(Default)]
-pub(super) struct HeldInput {
-    pub(super) parked: Option<WindowUpdate>,
-    pub(super) keys: Vec<HeldKey>,
-}
-
-/// A [`UiKey`] kept past the event that carried it: typed text is copied.
-pub(super) enum HeldKey {
-    Plain(UiKey<'static>),
-    Text(String),
-}
-
-impl HeldKey {
-    fn of(key: UiKey<'_>) -> Self {
-        match key {
-            UiKey::Tab { shift } => Self::Plain(UiKey::Tab { shift }),
-            UiKey::Enter => Self::Plain(UiKey::Enter),
-            UiKey::Space { shift } => Self::Plain(UiKey::Space { shift }),
-            UiKey::Backspace => Self::Plain(UiKey::Backspace),
-            UiKey::Delete => Self::Plain(UiKey::Delete),
-            UiKey::Left { shift, ctrl } => Self::Plain(UiKey::Left { shift, ctrl }),
-            UiKey::Right { shift, ctrl } => Self::Plain(UiKey::Right { shift, ctrl }),
-            UiKey::Up { shift } => Self::Plain(UiKey::Up { shift }),
-            UiKey::Down { shift } => Self::Plain(UiKey::Down { shift }),
-            UiKey::Home { shift, ctrl } => Self::Plain(UiKey::Home { shift, ctrl }),
-            UiKey::End { shift, ctrl } => Self::Plain(UiKey::End { shift, ctrl }),
-            UiKey::PageUp => Self::Plain(UiKey::PageUp),
-            UiKey::PageDown => Self::Plain(UiKey::PageDown),
-            UiKey::Escape => Self::Plain(UiKey::Escape),
-            UiKey::SelectAll => Self::Plain(UiKey::SelectAll),
-            UiKey::Undo => Self::Plain(UiKey::Undo),
-            UiKey::Redo => Self::Plain(UiKey::Redo),
-            UiKey::Control(c) => Self::Plain(UiKey::Control(c)),
-            UiKey::Char(text) => Self::Text(text.to_owned()),
-        }
-    }
-
-    fn as_key(&self) -> UiKey<'_> {
-        match self {
-            Self::Plain(key) => *key,
-            Self::Text(text) => UiKey::Char(text),
-        }
     }
 }
 
@@ -251,33 +204,8 @@ impl WindowedApp {
     /// Dispatches a key to the app, then performs any clipboard command a
     /// context-menu row asked for.
     pub(super) fn dispatch_ui_key(&mut self, key: UiKey<'_>) -> bool {
-        // Once a key has produced a structural update that is waiting for the
-        // pointer release, the tree on screen is stale: the next key would act
-        // on a control the update is about to replace. Keep it for after the
-        // update lands, in order.
-        if self.held.parked.is_some() {
-            self.held.keys.push(HeldKey::of(key));
-            return true;
-        }
         let changed = self.app.dispatch_key(key);
-        let changed = self.drain_pending_clipboard() | changed;
-        if !remount_allowed(self.left_pointer_down) {
-            self.park_remount();
-        }
-        changed
-    }
-
-    /// While a pointer button is held, asks the remount hook whether the key
-    /// that just ran requested a structural update and keeps the answer for
-    /// the release ([`WindowedApp::poll_remount`]).
-    fn park_remount(&mut self) {
-        let viewport = self.app.size();
-        let Some(hook) = self.remount.as_mut() else {
-            return;
-        };
-        let (update, _engine_claimed) =
-            crate::app_new::with_engine_donor(&mut self.app, || hook(viewport));
-        self.held.parked = update;
+        self.drain_pending_clipboard() | changed
     }
 
     /// A key pressed while a menu is open: the arrows, Home and End walk its
@@ -543,33 +471,12 @@ impl WindowedApp {
     /// tree inherits the surface: renderer scale/clear follow the new app, the GPU
     /// glyph atlas is reconciled from actual texel content, the tree is laid out at
     /// the window's current size, and a redraw is requested.
+    ///
+    /// A held pointer button does not hold the update back: the drag in
+    /// progress follows its control to the replacement tree
+    /// ([`WindowedApp::apply_update`]), so input during a drag acts on the
+    /// current tree at once.
     pub(super) fn poll_remount(&mut self) {
-        // A structural replacement between pointer press and release
-        // invalidates the WidgetId retained by click/drag handling. Leave
-        // the remount hook unpolled so its pending state is preserved; the
-        // release event clears `left_pointer_down` and applies the newest
-        // tree after the interaction has completed.
-        if !remount_allowed(self.left_pointer_down) {
-            return;
-        }
-        // An update parked by a key during the press lands first, then the
-        // hook is asked again for whatever the rest of the drag changed.
-        if let Some(parked) = self.held.parked.take() {
-            let viewport = self.app.size();
-            self.apply_update(parked, viewport);
-        }
-        self.poll_remount_hook();
-        // Keys typed behind the parked update replay against the tree it
-        // built. Each may request an update of its own.
-        if !self.held.keys.is_empty() {
-            for key in std::mem::take(&mut self.held.keys) {
-                let _ = self.dispatch_ui_key(key.as_key());
-                self.poll_remount_hook();
-            }
-        }
-    }
-
-    fn poll_remount_hook(&mut self) {
         let viewport = self.app.size();
         let Some(hook) = self.remount.as_mut() else {
             return;
@@ -611,10 +518,22 @@ impl WindowedApp {
         if !self.raw_pointer_capture.is_empty() && !continuing_raw_capture {
             interrupted.push("raw_pointer");
         }
-        if self.drag_text.is_some() {
+        // A text selection or slider drag carries on in the control's
+        // counterpart. It ends only when the replacement has none.
+        let held_controls = crate::remount::CounterpartMap::new(
+            self.app.scene(),
+            new_app.scene(),
+            [self.drag_text, self.drag_slider, self.backdrop_press]
+                .into_iter()
+                .flatten(),
+        );
+        let drag_text = self.drag_text.and_then(|id| held_controls.get(id));
+        let drag_slider = self.drag_slider.and_then(|id| held_controls.get(id));
+        let backdrop_press = self.backdrop_press.and_then(|id| held_controls.get(id));
+        if self.drag_text.is_some() && drag_text.is_none() {
             interrupted.push("text_selection");
         }
-        if self.drag_slider.is_some() {
+        if self.drag_slider.is_some() && drag_slider.is_none() {
             interrupted.push("slider");
         }
         if widget_state.content_drag_source.is_some() {
@@ -646,10 +565,11 @@ impl WindowedApp {
         let _ = new_app.apply_reduced_motion(reduce_motion);
         carry_redraw_signal(&self.app, &mut new_app);
         self.app = new_app;
-        // A drag target from the old tree must not extend selections in the new one.
-        self.drag_text = None;
-        self.drag_slider = None;
-        self.backdrop_press = None;
+        // A drag target of the old tree continues on its counterpart; one
+        // without a counterpart is gone, and the release clicks nothing.
+        self.drag_text = drag_text;
+        self.drag_slider = drag_slider;
+        self.backdrop_press = backdrop_press;
         self.last_text_click = None;
         if !continuing_raw_capture {
             self.raw_pointer_capture.clear();
@@ -745,6 +665,17 @@ impl WindowedApp {
         if applied.is_empty() {
             return;
         }
+        // A drag whose control sat in a replaced subtree has nothing to drive.
+        let scene = self.app.scene();
+        let alive = |id: Option<_>| id.filter(|&id| scene.node(id).is_some());
+        let (text, slider, backdrop) = (
+            alive(self.drag_text),
+            alive(self.drag_slider),
+            alive(self.backdrop_press),
+        );
+        self.drag_text = text;
+        self.drag_slider = slider;
+        self.backdrop_press = backdrop;
 
         if let Some(target) = focus_after {
             if let Some(widget) = self.app.scene().resolve_ref(target) {
@@ -1707,7 +1638,6 @@ pub fn run(
         drag_slider: None,
         backdrop_press: None,
         left_pointer_down: false,
-        held: Default::default(),
         remount,
     };
     event_loop.run_app(&mut handler)?;
@@ -1792,7 +1722,6 @@ pub(crate) fn run_headless(
         drag_slider: None,
         backdrop_press: None,
         left_pointer_down: false,
-        held: Default::default(),
         remount,
     };
     handler.on_redraw_requested();

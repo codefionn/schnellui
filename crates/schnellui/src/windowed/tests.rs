@@ -1,4 +1,4 @@
-use super::event_handler::{raw_capture_target_survives, remount_allowed};
+use super::event_handler::raw_capture_target_survives;
 use super::host::coalesce_subtree_replacements;
 use super::{
     control_letter_from_text, hit_path_json, is_control_key, modifier_text_implies_control,
@@ -121,12 +121,6 @@ fn raw_capture_continues_only_on_the_same_remounted_surface() {
         &previous,
         &raw_surface("Browser viewport tab", false)
     ));
-}
-
-#[test]
-fn structural_remount_waits_for_pointer_release() {
-    assert!(!remount_allowed(true));
-    assert!(remount_allowed(false));
 }
 
 #[test]
@@ -448,7 +442,6 @@ fn windowed_host(
         drag_slider: None,
         backdrop_press: None,
         left_pointer_down: false,
-        held: Default::default(),
         remount,
     }
 }

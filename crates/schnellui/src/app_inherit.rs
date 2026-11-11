@@ -207,6 +207,8 @@ impl App {
         stateful_nodes.extend(changed_controls.iter().copied());
         let previous_drag = schnellui::widgets::content_drag_source(&previous.widgets);
         stateful_nodes.extend(previous_drag);
+        let previous_scrollbar = schnellui::widgets::scrollbar_pointer_target(&previous.widgets);
+        stateful_nodes.extend(previous_scrollbar);
         let previous_panels = schnellui::widgets::dialog_panels(&previous.widgets);
         let modal_ids = previous
             .modal_openers
@@ -381,6 +383,15 @@ impl App {
         self.reopen_context_menu = previous_menu.and_then(|(source, position, can_paste)| {
             Some((counterparts.get(source)?, position, can_paste))
         });
+        // A scrollbar thumb held across the rebuild stays held on the
+        // counterpart of its viewport.
+        if let Some(target) = previous_scrollbar.and_then(|id| counterparts.get(id)) {
+            schnellui::widgets::transfer_scrollbar_pointer(
+                &self.widgets,
+                target,
+                &previous.widgets,
+            );
+        }
         // A drag in progress keeps going from the source's counterpart, so
         // a rebuild under a held button neither drops it nor fires a click.
         self.redrive_content_drag = previous_drag

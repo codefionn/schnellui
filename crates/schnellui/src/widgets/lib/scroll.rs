@@ -530,6 +530,30 @@ pub fn end_scrollbar_pointer(runtime: &Runtime) -> bool {
     runtime.with(|rt| rt.borrow_mut().scrollbar_pointer.take().is_some())
 }
 
+/// The viewport whose scrollbar thumb is captured, if any.
+pub(crate) fn scrollbar_pointer_target(runtime: &Runtime) -> Option<WidgetId> {
+    runtime.with(|rt| rt.borrow().scrollbar_pointer.map(|capture| capture.id))
+}
+
+/// Hands a scrollbar thumb drag in progress on `previous` to `target`, its
+/// viewport's counterpart in a rebuilt tree, so a remount under the held
+/// button keeps the thumb following the pointer.
+pub(crate) fn transfer_scrollbar_pointer(
+    replacement: &Runtime,
+    target: WidgetId,
+    previous: &Runtime,
+) {
+    let Some(capture) = previous.with(|rt| rt.borrow().scrollbar_pointer) else {
+        return;
+    };
+    replacement.with(|rt| {
+        rt.borrow_mut().scrollbar_pointer = Some(ScrollbarPointerCapture {
+            id: target,
+            ..capture
+        });
+    });
+}
+
 /// Whether a scrollbar thumb currently owns the pointer stream.
 pub fn scrollbar_pointer_active(runtime: &Runtime) -> bool {
     runtime.with(|rt| rt.borrow().scrollbar_pointer.is_some())

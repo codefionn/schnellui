@@ -1115,7 +1115,3 @@ pub(super) fn raw_capture_target_survives(previous: &App, replacement: &App) -> 
                 })
         })
 }
-
-pub(super) const fn remount_allowed(left_pointer_down: bool) -> bool {
-    !left_pointer_down
-}
