@@ -1147,6 +1147,26 @@ impl WindowedApp {
                 let mut changed = false;
                 let mut buf = [0u8; 4];
                 for c in text.chars() {
+                    if request.ctrl {
+                        // A chord: the native key path's table (clipboard,
+                        // select all, undo, application shortcuts), never
+                        // the letter itself.
+                        let logical = Key::Character(c.encode_utf8(&mut buf).into());
+                        changed |= self.handle_key_chord(KeyChord {
+                            logical_key: &logical,
+                            physical_key: PhysicalKey::Unidentified(
+                                winit::keyboard::NativeKeyCode::Unidentified,
+                            ),
+                            text: None,
+                            modifier_text: None,
+                            repeat: false,
+                            shift: request.shift,
+                            ctrl: true,
+                            alt: false,
+                            super_key: cfg!(target_os = "macos"),
+                        });
+                        continue;
+                    }
                     changed |= self.app.dispatch_shortcut(crate::Shortcut::new(
                         c,
                         request.ctrl,
@@ -1280,12 +1300,36 @@ impl WindowedApp {
         let ctrl = self.modifiers.control_key()
             || self.control_pressed
             || modifier_text_implies_control(modifier_text, event.physical_key);
+        self.handle_key_chord(KeyChord {
+            logical_key: &event.logical_key,
+            physical_key: event.physical_key,
+            text: event.text.as_deref(),
+            modifier_text,
+            repeat: event.repeat,
+            shift,
+            ctrl,
+            alt: self.modifiers.alt_key(),
+            super_key: self.modifiers.super_key(),
+        })
+    }
+
+    /// The key path shared by the window's key events and the debug server's
+    /// modified text keys, so both run one chord table.
+    pub(super) fn handle_key_chord(&mut self, event: KeyChord<'_>) -> bool {
+        let KeyChord {
+            shift,
+            ctrl,
+            alt,
+            super_key,
+            modifier_text,
+            ..
+        } = event;
         let command = if cfg!(target_os = "macos") {
-            self.modifiers.super_key()
+            super_key
         } else {
             ctrl
         };
-        let logical_text = match &event.logical_key {
+        let logical_text = match event.logical_key {
             Key::Character(value) => Some(value.as_ref()),
             _ => None,
         };
@@ -1299,7 +1343,7 @@ impl WindowedApp {
             }
         }
         if command {
-            match &event.logical_key {
+            match event.logical_key {
                 Key::Character(c) if c.eq_ignore_ascii_case("c") => {
                     return self.copy_or_cut(false);
                 }
@@ -1317,16 +1361,13 @@ impl WindowedApp {
         // Do not repeat application commands while a key is held (a toggling
         // command such as Ctrl+, would otherwise oscillate between screens).
         if !event.repeat {
-            if let Key::Character(value) = &event.logical_key {
+            if let Key::Character(value) = event.logical_key {
                 let mut chars = value.chars();
                 if let Some(character) = chars.next() {
                     if chars.next().is_none()
-                        && self.app.dispatch_shortcut(Shortcut::new(
-                            character,
-                            command,
-                            shift,
-                            self.modifiers.alt_key(),
-                        ))
+                        && self
+                            .app
+                            .dispatch_shortcut(Shortcut::new(character, command, shift, alt))
                     {
                         return true;
                     }
@@ -1334,7 +1375,7 @@ impl WindowedApp {
             }
         }
         let physical_key = special_key_from_physical(event.physical_key, shift, ctrl);
-        let key = match &event.logical_key {
+        let key = match event.logical_key {
             Key::Named(NamedKey::Tab) => UiKey::Tab { shift },
             Key::Named(NamedKey::Enter) => UiKey::Enter,
             Key::Named(NamedKey::Space) => UiKey::Space { shift },
@@ -1365,10 +1406,10 @@ impl WindowedApp {
                 // Character insertion rides `KeyEvent::text` (the layout- and
                 // shift-resolved text). Command chords and control characters
                 // (Enter, Esc, …) never insert.
-                if ctrl || self.modifiers.alt_key() || self.modifiers.super_key() {
+                if ctrl || alt || super_key {
                     return false;
                 }
-                return match &event.text {
+                return match event.text {
                     Some(t) if !t.is_empty() && !t.chars().any(|ch| ch.is_control()) => {
                         self.dispatch_ui_key(UiKey::Char(t))
                     }
@@ -1378,6 +1419,20 @@ impl WindowedApp {
         };
         self.dispatch_ui_key(key)
     }
+}
+
+/// A key press reduced to what the chord table reads, so a window's `KeyEvent`
+/// and a debug-server key (which cannot build one) take the same path.
+pub(super) struct KeyChord<'a> {
+    pub(super) logical_key: &'a Key,
+    pub(super) physical_key: PhysicalKey,
+    pub(super) text: Option<&'a str>,
+    pub(super) modifier_text: Option<&'a str>,
+    pub(super) repeat: bool,
+    pub(super) shift: bool,
+    pub(super) ctrl: bool,
+    pub(super) alt: bool,
+    pub(super) super_key: bool,
 }
 
 /// Builds the event loop and runs `app` in a window titled `title` (SOUL §8).

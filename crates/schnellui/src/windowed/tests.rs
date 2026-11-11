@@ -2264,3 +2264,37 @@ fn debug_status_hit_path_is_empty_once_the_pointer_has_left() {
     let snapshot = host.build_interaction_snapshot(host.cursor_logical());
     assert!(snapshot["hit_path"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn debug_ctrl_text_keys_run_the_editing_and_clipboard_chords() {
+    use crate::debug_server::DebugKey;
+
+    let mut app = App::mount(crate::widgets::TextInput::new("hello"));
+    app.frame();
+    let input = app.find_widget(Role::TextInput, None).unwrap();
+    app.focus(Some(input));
+    let mut host = windowed_host(app, None);
+    let chord = |host: &mut super::WindowedApp, c: &str| {
+        host.handle_debug_key(DebugKey {
+            key: "text".into(),
+            shift: false,
+            ctrl: true,
+            text: Some(c.into()),
+        });
+    };
+    let value = |host: &super::WindowedApp| host.app.scene().a11y(input).unwrap().value.clone();
+
+    chord(&mut host, "a");
+    assert_eq!(value(&host).as_deref(), Some("hello"));
+    chord(&mut host, "c");
+    assert_eq!(host.clipboard.read_text().unwrap(), "hello");
+    chord(&mut host, "x");
+    assert_eq!(value(&host).as_deref(), Some(""));
+    chord(&mut host, "v");
+    assert_eq!(value(&host).as_deref(), Some("hello"));
+    chord(&mut host, "z");
+    assert_eq!(value(&host).as_deref(), Some(""));
+    // No chord ever types its letter.
+    chord(&mut host, "q");
+    assert_eq!(value(&host).as_deref(), Some(""));
+}
