@@ -892,7 +892,7 @@ impl Scene {
     /// Accumulated translation and window-space clip for this property node.
     /// The clip includes ancestor viewport clips and this node's explicit clip.
     pub fn composite_context(&self, id: WidgetId) -> (Point, Rect) {
-        self.composite_context_in(id, false)
+        self.composite_context_in(id, false, false)
     }
 
     /// The `(offset, clip)` an overlay root inherits from where it sits in the
@@ -900,13 +900,15 @@ impl Scene {
     /// `clip_spares_overlays` on its ancestors are left out: an overlay resolves
     /// its clip from its layer, not from the window that owns its control.
     pub fn overlay_inherited_context(&self, id: WidgetId) -> (Point, Rect) {
-        self.inherited_context_in(id, false)
+        self.inherited_context_in(id, false, false)
     }
 
     /// `spare` is set once the walk up has crossed an overlay root that escapes
-    /// frame clips, so frame clips above that root do not apply.
-    fn composite_context_in(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
-        let (mut offset, mut clip) = self.inherited_context_in(id, spare);
+    /// frame clips, so frame clips above that root do not apply. `tail` is set
+    /// once it has crossed a tail control (see [`Scene::set_overlay_tail`]) that
+    /// no clip cuts, so the scroll viewports above it do not cut its tail either.
+    fn composite_context_in(&self, id: WidgetId, spare: bool, tail: bool) -> (Point, Rect) {
+        let (mut offset, mut clip) = self.inherited_context_in(id, spare, tail);
         let properties = self.composite_properties(id);
         offset.x += properties.translation.x;
         offset.y += properties.translation.y;
@@ -920,13 +922,15 @@ impl Scene {
         (offset, clip)
     }
 
-    fn inherited_context_in(&self, id: WidgetId, spare: bool) -> (Point, Rect) {
+    fn inherited_context_in(&self, id: WidgetId, spare: bool, tail: bool) -> (Point, Rect) {
         match self.tree.get(id).and_then(|node| node.parent) {
             Some(parent) => {
+                let spares = self.overlay_spares_frame_clips(id);
+                let tail = tail || (spares && self.overlay_tail.contains_key(id));
                 let (mut offset, mut clip) =
-                    self.composite_context_in(parent, spare || self.overlay_spares_frame_clips(id));
+                    self.composite_context_in(parent, spare || spares, tail);
                 if self.tree[parent].kind == WidgetKind::Scroll {
-                    if let Some(layout) = self.layout.get(parent) {
+                    if let Some(layout) = self.layout.get(parent).filter(|_| !tail) {
                         let mut viewport = layout.rect;
                         viewport.x += offset.x;
                         viewport.y += offset.y;

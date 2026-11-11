@@ -1103,3 +1103,29 @@ fn a_tail_overlay_inside_a_sparing_frame_clip_escapes_it_and_one_outside_does_no
     assert!(scene.composited_rect(outside).is_empty());
     assert!(!scene.composited_rect(inside).is_empty());
 }
+
+/// A tooltip host that its scroll viewport shows whole paints its tail past
+/// the viewport; one the viewport cuts stays clipped with it.
+#[test]
+fn a_tail_overlay_whole_inside_a_scroll_viewport_escapes_its_clip() {
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Column, None);
+    scene.set_root(root);
+    let list = scene.insert(WidgetKind::Scroll, Some(root));
+    scene.set_rect(list, Rect::new(0.0, 100.0, 80.0, 200.0));
+    let whole = scene.insert(WidgetKind::Button, Some(list));
+    let cut = scene.insert(WidgetKind::Button, Some(list));
+    let popup = scene.insert(WidgetKind::Column, Some(list));
+    scene.set_rect(whole, Rect::new(12.0, 110.0, 44.0, 44.0));
+    scene.set_rect(cut, Rect::new(12.0, 280.0, 44.0, 44.0));
+    scene.set_rect(popup, Rect::new(12.0, 110.0, 44.0, 44.0));
+    for id in [whole, cut, popup] {
+        scene.set_overlay_level(id, 5);
+    }
+    scene.set_overlay_tail(whole);
+    scene.set_overlay_tail(cut);
+    let viewport = Rect::new(0.0, 100.0, 80.0, 200.0);
+    assert!(scene.overlay_inherited_context(whole).1.width > 1000.0);
+    assert_eq!(scene.overlay_inherited_context(cut).1, viewport);
+    assert_eq!(scene.overlay_inherited_context(popup).1, viewport);
+}

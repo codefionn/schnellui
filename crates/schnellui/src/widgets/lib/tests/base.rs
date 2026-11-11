@@ -254,6 +254,63 @@ fn hover_tooltip_stays_inside_viewport_at_top_left_edge() {
     assert!(rect.bottom() <= viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN);
 }
 
+/// A tooltip on the trailing side sits right of its button and level with it,
+/// so in a column of icons it covers none of them.
+#[test]
+fn hover_tooltip_on_the_after_side_sits_right_of_its_button() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    #[allow(unused_variables)]
+    let runtime = &runtime_handle;
+    set_theme(runtime, Theme::default());
+    let (mut scene, mut layout, _text, _atlas, root) = build_one(
+        runtime,
+        Stack::new().size(300.0, 100.0).child(
+            Pad::all(4.0).child(
+                // The row keeps the button at its own width.
+                Row::new().align(Align::Start).child(
+                    Button::new("Direct messages")
+                        .icon_only()
+                        .tooltip("Direct messages")
+                        .tooltip_side(crate::widgets::TooltipSide::After)
+                        .width(44.0)
+                        .height(44.0)
+                        .appearance(ButtonAppearance::Ghost),
+                ),
+            ),
+        ),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 300.0,
+            height: 100.0,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+
+    let pad = scene.node(root).unwrap().children[0];
+    let row = scene.node(pad).unwrap().children[0];
+    let button = scene.node(row).unwrap().children[0];
+    let tooltip = runtime.with(|registry| {
+        *registry
+            .borrow()
+            .hover_tooltips
+            .get(button)
+            .expect("button registers its tooltip")
+    });
+    let Primitive::SolidRect { rect, .. } =
+        scene.paint(button).unwrap().primitives[tooltip.background]
+    else {
+        panic!("tooltip background is a solid rectangle");
+    };
+    let target = scene.layout(button).unwrap().rect;
+    assert!(rect.x >= target.right(), "{rect:?} is right of {target:?}");
+    let middle = rect.y + rect.height * 0.5;
+    assert!((middle - (target.y + target.height * 0.5)).abs() < 0.01);
+}
+
 #[test]
 fn minimum_size_extension_constrains_any_component_without_a_scene_wrapper() {
     let runtime_handle = crate::widgets::Runtime::new();

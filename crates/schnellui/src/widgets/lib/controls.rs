@@ -131,6 +131,7 @@ pub struct Button {
     pub(crate) appearance: ButtonAppearance,
     pub(crate) show_label: bool,
     pub(crate) tooltip: Option<Cow<'static, str>>,
+    pub(crate) tooltip_side: crate::widgets::TooltipSide,
     pub(crate) text_size: Option<f32>,
     pub(crate) display: Option<Cow<'static, str>>,
     pub(crate) menu: Option<crate::widgets::ContextMenu>,
@@ -152,6 +153,7 @@ impl Button {
             appearance: ButtonAppearance::Solid,
             show_label: true,
             tooltip: None,
+            tooltip_side: crate::widgets::TooltipSide::Above,
             text_size: None,
             display: None,
             menu: None,
@@ -244,6 +246,12 @@ impl Button {
     /// matching wording so sighted and non-sighted users receive the same name.
     pub fn tooltip(mut self, label: impl Into<Cow<'static, str>>) -> Button {
         self.tooltip = Some(label.into());
+        self
+    }
+
+    /// Puts the tooltip on `side` of the button. The default is above it.
+    pub fn tooltip_side(mut self, side: crate::widgets::TooltipSide) -> Button {
+        self.tooltip_side = side;
         self
     }
 
@@ -341,6 +349,7 @@ impl View for Button {
                 intrinsic,
                 ctx.scale,
             );
+            crate::widgets::set_tooltip_side(&ctx.runtime, id, this.tooltip_side);
             crate::widgets::elevate_tooltip_host(ctx.scene, id);
         }
         ctx.layout

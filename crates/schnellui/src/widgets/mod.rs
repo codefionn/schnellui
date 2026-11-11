@@ -475,6 +475,21 @@ const TOOLTIP_PAD_X: f32 = 7.0;
 const TOOLTIP_PAD_Y: f32 = 4.0;
 const TOOLTIP_VIEWPORT_MARGIN: f32 = 4.0;
 
+/// Where a hover tooltip sits against its control. A side that has no room in
+/// the window falls back to [`TooltipSide::Above`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TooltipSide {
+    /// Above the control, or below it when the top of the window is close.
+    #[default]
+    Above,
+    /// Left of the control, level with it. For small controls in a row of a
+    /// list, whose neighbours above and below are other rows.
+    Before,
+    /// Right of the control, level with it. For a column of icons along the
+    /// window's left edge, where above would cover the icon before it.
+    After,
+}
+
 #[derive(Clone, Copy)]
 struct HoverTooltipState {
     base_primitive_end: usize,
@@ -485,9 +500,7 @@ struct HoverTooltipState {
     background_color: Color,
     text_color: Color,
     visible: bool,
-    /// Sits beside the host, not above it: set for controls inside a stack of
-    /// rows, where above or below would cover a neighbouring row.
-    beside: bool,
+    side: TooltipSide,
     /// Primitives in the host's own paint (before `base_primitive_end`) that show
     /// only with the tooltip, each with its shown colour: a chart tints the
     /// hovered mark this way. See [`set_tooltip_highlights`].
@@ -509,9 +522,6 @@ pub(crate) fn set_tooltip_highlights(
     });
 }
 
-/// Makes the hover tooltips on `root` and its descendants sit to the left of
-/// their control, level with it, when there is room. For small controls in a
-/// row of a list, whose neighbours above and below are other rows.
 /// Records the host window's logical size, which bounds where hover tooltips
 /// go. The next [`reposition_paint`] re-places every tooltip when it changed.
 pub fn set_window_size(runtime: &Runtime, size: Size) {
@@ -529,26 +539,41 @@ pub(crate) fn take_window_resized(runtime: &Runtime) -> bool {
     runtime.with(|registry| std::mem::take(&mut registry.borrow_mut().window_resized))
 }
 
+/// Makes the hover tooltips on `root` and its descendants sit to the left of
+/// their control, level with it, when there is room. For small controls in a
+/// row of a list, whose neighbours above and below are other rows.
 pub(crate) fn place_tooltips_beside(runtime: &Runtime, scene: &Scene, root: WidgetId) {
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
-        runtime.with(|registry| {
-            if let Some(tooltip) = registry.borrow_mut().hover_tooltips.get_mut(id) {
-                tooltip.beside = true;
-            }
-        });
+        set_tooltip_side(runtime, id, TooltipSide::Before);
         if let Some(node) = scene.node(id) {
             stack.extend(node.children.iter().copied());
         }
     }
 }
 
-fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, beside: bool) -> Point {
-    if beside {
-        let x = target.x - TOOLTIP_GAP - tooltip.width;
+/// Sets the side the hover tooltip of `id` sits on. Call after
+/// [`register_hover_tooltip`]; a host without a tooltip is left alone.
+pub(crate) fn set_tooltip_side(runtime: &Runtime, id: WidgetId, side: TooltipSide) {
+    runtime.with(|registry| {
+        if let Some(tooltip) = registry.borrow_mut().hover_tooltips.get_mut(id) {
+            tooltip.side = side;
+        }
+    });
+}
+
+fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, side: TooltipSide) -> Point {
+    let x = match side {
+        TooltipSide::Above => None,
+        TooltipSide::Before => Some(target.x - TOOLTIP_GAP - tooltip.width),
+        TooltipSide::After => Some(target.right() + TOOLTIP_GAP),
+    };
+    if let Some(x) = x {
         let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
         let bottom = (viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN - tooltip.height).max(top);
-        if x >= viewport.x + TOOLTIP_VIEWPORT_MARGIN {
+        if x >= viewport.x + TOOLTIP_VIEWPORT_MARGIN
+            && x + tooltip.width <= viewport.right() - TOOLTIP_VIEWPORT_MARGIN
+        {
             let y = (target.y + (target.height - tooltip.height) * 0.5).clamp(top, bottom);
             return Point { x, y };
         }
@@ -602,9 +627,15 @@ fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     else {
         return;
     };
-    let origin = hover_tooltip_origin(target, tooltip.size, viewport, tooltip.beside);
-    let dx = origin.x - rect.x;
-    let dy = origin.y - rect.y;
+    // The window bounds apply where the control is drawn, which a scrolled
+    // list moves away from its layout box.
+    let (offset, _) = scene.composite_context(id);
+    let mut drawn = target;
+    drawn.x += offset.x;
+    drawn.y += offset.y;
+    let origin = hover_tooltip_origin(drawn, tooltip.size, viewport, tooltip.side);
+    let dx = origin.x - offset.x - rect.x;
+    let dy = origin.y - offset.y - rect.y;
     if dx.abs() < 0.001 && dy.abs() < 0.001 {
         return;
     }
@@ -691,7 +722,7 @@ fn emit_hover_tooltip(
         background_color: theme.text,
         text_color: theme.surface,
         visible: false,
-        beside: false,
+        side: TooltipSide::Above,
         highlights: [None; 2],
     }
 }
