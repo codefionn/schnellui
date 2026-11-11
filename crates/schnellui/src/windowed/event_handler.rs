@@ -160,6 +160,18 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     }
                     AccessKitWindowEvent::ActionRequested(request) => {
                         self.remount_trigger = "accesskit_action";
+                        let text = match &request.data {
+                            Some(schnellui::a11y::accesskit_reexport::ActionData::Value(v)) => {
+                                Some(v.as_ref())
+                            }
+                            _ => None,
+                        };
+                        self.trace_a11y_action(
+                            "accesskit",
+                            request.action,
+                            request.target_node,
+                            text,
+                        );
                         let acted = self.app.dispatch_action(&request);
                         if self.drain_pending_clipboard() | acted {
                             self.poll_remount();
@@ -415,6 +427,28 @@ impl WindowedApp {
     }
 
     fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: KeyEvent) -> EventTail {
+        // Traced before any handler can consume it, with the same record a
+        // debug key produces. Skipped without a recorder: no format, no JSON.
+        if self.interaction_trace.is_some() {
+            let ctrl = self.modifiers.control_key() || self.control_pressed;
+            self.trace_key_input(
+                "window",
+                || format!("{:?}", event.logical_key),
+                KeyTrace {
+                    state: if event.state == ElementState::Pressed {
+                        "pressed"
+                    } else {
+                        "released"
+                    },
+                    repeat: event.repeat,
+                    shift: self.modifiers.shift_key(),
+                    ctrl,
+                    alt: self.modifiers.alt_key(),
+                    super_key: self.modifiers.super_key(),
+                    text: event.text.as_deref(),
+                },
+            );
+        }
         if is_control_key(&event.logical_key, event.physical_key) {
             self.control_pressed = event.state == ElementState::Pressed;
         }
@@ -543,6 +577,21 @@ impl WindowedApp {
             winit::event::Ime::Preedit(text, cursor) => RawImeEvent::Preedit { text, cursor },
             winit::event::Ime::Commit(text) => RawImeEvent::Commit(text),
         };
+        if let RawImeEvent::Commit(text) = &ime {
+            self.trace_key_input(
+                "window",
+                || "ime_commit".to_owned(),
+                KeyTrace {
+                    state: "pressed",
+                    repeat: false,
+                    shift: false,
+                    ctrl: false,
+                    alt: false,
+                    super_key: false,
+                    text: Some(text),
+                },
+            );
+        }
         let result = self.app.dispatch_ime(ime);
         if self.apply_focused_input_result(result) {
             if let Some(w) = &self.window {

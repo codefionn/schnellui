@@ -62,6 +62,16 @@ microseconds. Useful event records include:
   that selected it.
 - `content_drag_release`: whether release became a click, accepted drop, or no
   drag action.
+- `key_input`: one key, typed text or IME commit, from the window
+  (`"origin": "window"`) or from `schnellui-debug key` and `type`
+  (`"origin": "debug"`). Fields: `key`, `state` (`pressed` or `released`),
+  `repeat`, `shift`, `ctrl`, `alt`, `super`, and `text_len` when text came with
+  it. Window keys are recorded before any handler can consume them. Debug
+  `type` shows as `"key": "text"`; an IME commit as `"key": "ime_commit"`.
+- `a11y_action`: an accessibility action, from `schnellui-debug action`
+  (`"origin": "debug"`) or the platform adapter (`"origin": "accesskit"`).
+  Fields: `action` (snake_case), `target` with `id`, `role` and `name`, and
+  `value_len` for `set_value`.
 - `remount`: stable reason and triggering event, remount count, and complete
   before/after snapshots.
 - `interaction_interrupted_by_remount` and
@@ -84,8 +94,23 @@ jq -c 'select(.event == "pointer_move" or .event == "cursor_changed") |
   /tmp/schnellui-interaction.jsonl
 ```
 
+Keys, actions and pointer records share one sequence, so the timing of a key
+during a slider drag reads straight off the file:
+
+```sh
+jq -c 'select(.event == "pointer_button" or .event == "key_input" or .event == "a11y_action")
+  | {sequence, elapsed_us, event, key, action, origin}' /tmp/schnellui-interaction.jsonl
+```
+
 Semantic names and editable values are included because they are needed to
 identify routing mistakes. Treat traces as application data when sharing them.
+
+Typed text is the exception. `key_input` and `a11y_action` record only the
+length of typed, IME and `set_value` text (`text_len`, `value_len`), because it
+can be a password or a message. To record it verbatim, set
+`SCHNELLUI_INTERACTION_TRACE_TEXT=1` or call
+`InteractionTrace::include_text(true)`; the record then also carries `text` or
+`value`.
 
 ## Drive the pointer from a debug session
 

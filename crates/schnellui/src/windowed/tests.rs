@@ -2472,3 +2472,207 @@ mod global_menu {
         assert!(host.app.global_menu_stale());
     }
 }
+
+/// Keys, typed text and accessibility actions sent through the debug server
+/// land in the interaction trace, in order with the pointer records.
+mod debug_input_trace {
+    use super::super::WindowedApp;
+    use super::windowed_host;
+    use crate::a11y::Role;
+    use crate::debug_server::{
+        DebugAction, DebugButton, DebugCommand, DebugKey, DebugPress, DebugTarget,
+    };
+    use crate::interaction_debug::{InteractionRecorder, InteractionTrace};
+    use crate::widgets::{Column, Slider, TextInput};
+    use crate::App;
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    fn path(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "schnellui-key-trace-{}-{tag}.jsonl",
+            std::process::id()
+        ))
+    }
+
+    fn host(trace: Option<InteractionTrace>) -> WindowedApp {
+        let mut app = App::mount_with_size(
+            Column::new()
+                .gap(20.0)
+                .child(Slider::new(0.0, 0.0, 100.0).name("Level"))
+                .child(TextInput::new("hello")),
+            400,
+            300,
+        );
+        app.frame();
+        let mut host = windowed_host(app, None);
+        host.interaction_trace = InteractionRecorder::open(trace).unwrap();
+        host
+    }
+
+    fn slider_centre(host: &WindowedApp) -> (f32, f32) {
+        let id = host.app.find_widget(Role::Slider, Some("Level")).unwrap();
+        let r = host.app.scene().layout(id).unwrap().rect;
+        (r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    fn key(name: &str, text: Option<&str>, shift: bool, ctrl: bool) -> DebugCommand {
+        DebugCommand::Key(DebugKey {
+            key: name.into(),
+            shift,
+            ctrl,
+            text: text.map(str::to_owned),
+        })
+    }
+
+    /// Press the slider, send a key, text and an action, release.
+    fn drive(host: &mut WindowedApp) {
+        let (x, y) = slider_centre(host);
+        let commands = [
+            DebugCommand::PointerPress(DebugPress {
+                x: Some(x),
+                y: Some(y),
+                button: DebugButton::Left,
+            }),
+            key("right", None, true, false),
+            key("text", Some("s3cret"), false, false),
+            DebugCommand::Action(DebugAction {
+                action: "focus".into(),
+                target: DebugTarget {
+                    id: None,
+                    role: Some("text_input".into()),
+                    name: None,
+                },
+                value: None,
+            }),
+            DebugCommand::PointerRelease(DebugPress {
+                x: None,
+                y: None,
+                button: DebugButton::Left,
+            }),
+        ];
+        for command in commands {
+            let reply = host.handle_debug_command(None, command);
+            assert_eq!(
+                reply.status,
+                200,
+                "{}",
+                String::from_utf8_lossy(&reply.body)
+            );
+        }
+    }
+
+    fn records(path: &PathBuf) -> Vec<Value> {
+        let text = std::fs::read_to_string(path).unwrap();
+        let _ = std::fs::remove_file(path);
+        text.lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn keys_text_and_actions_are_traced_in_order_between_pointer_records() {
+        let p = path("order");
+        let mut host = host(Some(
+            InteractionTrace::file(&p).include_pointer_moves(false),
+        ));
+        drive(&mut host);
+        let all = records(&p);
+        let seq: Vec<&str> = all
+            .iter()
+            .map(|r| r["event"].as_str().unwrap())
+            .filter(|e| matches!(*e, "pointer_button" | "key_input" | "a11y_action"))
+            .collect();
+        assert_eq!(
+            seq,
+            [
+                "pointer_button",
+                "key_input",
+                "key_input",
+                "a11y_action",
+                "pointer_button"
+            ]
+        );
+        let inputs: Vec<&Value> = all.iter().filter(|r| r["event"] == "key_input").collect();
+        assert_eq!(inputs[0]["origin"], "debug");
+        assert_eq!(inputs[0]["key"], "right");
+        assert_eq!(inputs[0]["shift"], true);
+        assert_eq!(inputs[0]["ctrl"], false);
+        assert_eq!(inputs[1]["key"], "text");
+        assert_eq!(inputs[1]["text_len"], 6);
+        // Typed text is private: only its length is recorded by default.
+        assert!(inputs[1].get("text").is_none());
+        let action = all.iter().find(|r| r["event"] == "a11y_action").unwrap();
+        assert_eq!(action["origin"], "debug");
+        assert_eq!(action["action"], "focus");
+        assert_eq!(action["target"]["role"], "text_input");
+        assert!(action["target"]["id"].is_u64());
+        // Sequence numbers stay strictly increasing across all record kinds.
+        let seqs: Vec<u64> = all
+            .iter()
+            .map(|r| r["sequence"].as_u64().unwrap())
+            .collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn text_is_recorded_only_when_the_trace_opts_in() {
+        let p = path("optin");
+        let mut host = host(Some(InteractionTrace::file(&p).include_text(true)));
+        drive(&mut host);
+        let all = records(&p);
+        let typed = all
+            .iter()
+            .find(|r| r["event"] == "key_input" && r["key"] == "text")
+            .unwrap();
+        assert_eq!(typed["text"], "s3cret");
+    }
+
+    #[test]
+    fn window_input_uses_the_same_records_as_debug_input() {
+        use crate::windowed::KeyTrace;
+        let p = path("window");
+        let mut host = host(Some(InteractionTrace::file(&p)));
+        host.trace_key_input(
+            "window",
+            || "Character(\"q\")".into(),
+            KeyTrace {
+                state: "released",
+                repeat: false,
+                shift: false,
+                ctrl: true,
+                alt: false,
+                super_key: false,
+                text: Some("q"),
+            },
+        );
+        let id = host.app.find_widget(Role::TextInput, None).unwrap();
+        host.trace_a11y_action(
+            "accesskit",
+            schnellui::a11y::accesskit_reexport::Action::SetValue,
+            schnellui::a11y::to_access_id(id),
+            Some("pw"),
+        );
+        let all = records(&p);
+        let key = all.iter().find(|r| r["event"] == "key_input").unwrap();
+        assert_eq!(key["origin"], "window");
+        assert_eq!(key["state"], "released");
+        assert_eq!(key["ctrl"], true);
+        assert_eq!(key["text_len"], 1);
+        assert!(key.get("text").is_none());
+        let action = all.iter().find(|r| r["event"] == "a11y_action").unwrap();
+        assert_eq!(action["origin"], "accesskit");
+        assert_eq!(action["action"], "set_value");
+        assert_eq!(action["target"]["role"], "text_input");
+        assert_eq!(action["value_len"], 2);
+        assert!(action.get("value").is_none());
+    }
+
+    #[test]
+    fn tracing_off_records_nothing() {
+        let mut host = host(None);
+        assert!(host.interaction_trace.is_none());
+        drive(&mut host);
+        assert!(host.interaction_trace.is_none());
+    }
+}

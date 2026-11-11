@@ -365,6 +365,80 @@ impl WindowedApp {
         }
     }
 
+    /// Records one key, typed text or IME commit, from the window or the debug
+    /// server, as a `key_input` record. The payload is built only while a
+    /// recorder is open. Typed text is private, so only its length is recorded
+    /// unless the trace opted in to text (`InteractionTrace::include_text`).
+    pub(super) fn trace_key_input(
+        &mut self,
+        origin: &'static str,
+        key: impl FnOnce() -> String,
+        input: KeyTrace<'_>,
+    ) {
+        let Some(trace) = &self.interaction_trace else {
+            return;
+        };
+        let include_text = trace.includes_text();
+        let mut payload = json!({
+            "origin": origin,
+            "key": key(),
+            "state": input.state,
+            "repeat": input.repeat,
+            "shift": input.shift,
+            "ctrl": input.ctrl,
+            "alt": input.alt,
+            "super": input.super_key,
+        });
+        if let Some(text) = input.text {
+            payload["text_len"] = json!(text.chars().count());
+            if include_text {
+                payload["text"] = json!(text);
+            }
+        }
+        self.trace("key_input", payload);
+    }
+
+    /// Records an accessibility action, from the debug server or the platform
+    /// adapter, as an `a11y_action` record naming the target by id, role and
+    /// name. A `set_value` value is private like typed text: length only.
+    pub(super) fn trace_a11y_action(
+        &mut self,
+        origin: &'static str,
+        action: schnellui::a11y::accesskit_reexport::Action,
+        target: schnellui::a11y::accesskit_reexport::NodeId,
+        value: Option<&str>,
+    ) {
+        let Some(trace) = &self.interaction_trace else {
+            return;
+        };
+        let include_text = trace.includes_text();
+        let mut label = String::new();
+        for (i, c) in format!("{action:?}").chars().enumerate() {
+            if c.is_ascii_uppercase() && i > 0 {
+                label.push('_');
+            }
+            label.push(c.to_ascii_lowercase());
+        }
+        let widget = schnellui::a11y::resolve_target(self.app.scene(), target);
+        let a11y = widget.and_then(|id| self.app.scene().a11y(id));
+        let mut payload = json!({
+            "origin": origin,
+            "action": label,
+            "target": {
+                "id": target.0,
+                "role": a11y.map(|node| schnellui::a11y::Role::from_u16(node.role).label()),
+                "name": a11y.and_then(|node| node.name.as_deref()),
+            },
+        });
+        if let Some(value) = value {
+            payload["value_len"] = json!(value.chars().count());
+            if include_text {
+                payload["value"] = json!(value);
+            }
+        }
+        self.trace("a11y_action", payload);
+    }
+
     /// Reconnects a freshly themed tree to the existing native surface.
     pub(super) fn sync_renderer_after_theme_rebuild(&mut self) {
         if let Some(r) = &mut self.renderer {
@@ -1079,6 +1153,12 @@ impl WindowedApp {
                 )
             }
         };
+        self.trace_a11y_action(
+            "debug",
+            action,
+            schnellui::a11y::to_access_id(target),
+            request.value.as_deref(),
+        );
         let data = if action == Action::SetValue {
             let Some(value) = request.value else {
                 return DebugReply::error(400, "set_value requires value");
@@ -1107,6 +1187,19 @@ impl WindowedApp {
 
     pub(super) fn handle_debug_key(&mut self, request: DebugKey) -> DebugReply {
         let name = request.key.to_ascii_lowercase().replace('-', "_");
+        self.trace_key_input(
+            "debug",
+            || name.clone(),
+            KeyTrace {
+                state: "pressed",
+                repeat: false,
+                shift: request.shift,
+                ctrl: request.ctrl,
+                alt: false,
+                super_key: false,
+                text: request.text.as_deref(),
+            },
+        );
         // As the windowed host does: a key takes hover from the resting
         // pointer until the pointer moves again.
         let _ = self.app.hold_pointer_hover();

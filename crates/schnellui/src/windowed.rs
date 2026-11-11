@@ -270,6 +270,17 @@ fn hit_path_json(app: &App, point: Point) -> Value {
     Value::Array(path)
 }
 
+/// What a window or debug key event contributes to a `key_input` trace record.
+pub(crate) struct KeyTrace<'a> {
+    pub(crate) state: &'static str,
+    pub(crate) repeat: bool,
+    pub(crate) shift: bool,
+    pub(crate) ctrl: bool,
+    pub(crate) alt: bool,
+    pub(crate) super_key: bool,
+    pub(crate) text: Option<&'a str>,
+}
+
 fn focused_json(app: &App) -> Value {
     app.focused_widget()
         .map(|id| widget_json(app, id))

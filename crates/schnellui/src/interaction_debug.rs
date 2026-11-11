@@ -19,11 +19,17 @@ use crate::App;
 /// standard error. An explicit [`InteractionTrace`] on [`App`] takes priority.
 pub const INTERACTION_TRACE_ENV: &str = "SCHNELLUI_INTERACTION_TRACE";
 
+/// Opt-in to recording typed and set text verbatim in `key_input` and
+/// `a11y_action` records. Any value other than empty or `0` enables it. Without
+/// it only the text's length is recorded.
+pub const INTERACTION_TRACE_TEXT_ENV: &str = "SCHNELLUI_INTERACTION_TRACE_TEXT";
+
 /// Destination and verbosity for a native interaction trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InteractionTrace {
     pub(crate) destination: TraceDestination,
     pub(crate) include_pointer_moves: bool,
+    pub(crate) include_text: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +44,7 @@ impl InteractionTrace {
         Self {
             destination: TraceDestination::File(path.into()),
             include_pointer_moves: true,
+            include_text: text_opt_in_from_env(),
         }
     }
 
@@ -46,6 +53,7 @@ impl InteractionTrace {
         Self {
             destination: TraceDestination::Stderr,
             include_pointer_moves: true,
+            include_text: text_opt_in_from_env(),
         }
     }
 
@@ -56,6 +64,14 @@ impl InteractionTrace {
     /// to diagnose hit-test and cursor-boundary problems.
     pub fn include_pointer_moves(mut self, include: bool) -> Self {
         self.include_pointer_moves = include;
+        self
+    }
+
+    /// Records typed, IME and `set_value` text verbatim instead of only its
+    /// length. Off by default because typed text can be a password or message;
+    /// [`INTERACTION_TRACE_TEXT_ENV`] turns it on for env-configured traces.
+    pub fn include_text(mut self, include: bool) -> Self {
+        self.include_text = include;
         self
     }
 
@@ -72,6 +88,11 @@ impl InteractionTrace {
             Self::file(value)
         })
     }
+}
+
+fn text_opt_in_from_env() -> bool {
+    std::env::var_os(INTERACTION_TRACE_TEXT_ENV)
+        .is_some_and(|value| !matches!(value.to_string_lossy().trim(), "" | "0"))
 }
 
 /// A replacement [`App`] paired with the host-level reason that required it.
@@ -108,6 +129,7 @@ pub(crate) struct InteractionRecorder {
     started: Instant,
     sequence: u64,
     include_pointer_moves: bool,
+    include_text: bool,
 }
 
 impl InteractionRecorder {
@@ -124,11 +146,16 @@ impl InteractionRecorder {
             started: Instant::now(),
             sequence: 0,
             include_pointer_moves: config.include_pointer_moves,
+            include_text: config.include_text,
         }))
     }
 
     pub(crate) fn includes_pointer_moves(&self) -> bool {
         self.include_pointer_moves
+    }
+
+    pub(crate) fn includes_text(&self) -> bool {
+        self.include_text
     }
 
     pub(crate) fn record(&mut self, event: &'static str, payload: Value) {

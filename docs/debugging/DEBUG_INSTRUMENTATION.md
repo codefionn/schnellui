@@ -102,6 +102,11 @@ The endpoints are `GET /v1/status`, `GET /v1/tree`, `GET /v1/snapshot`,
 `GET /v1/screenshot`, and
 `POST /v1/action`, `/v1/pointer/move`, `/v1/pointer/click`, `/v1/pointer/press`,
 `/v1/pointer/release`, `/v1/pointer/drag`, `/v1/pointer/leave`, `/v1/key`, `/v1/quit`.
+With an interaction trace on (`SCHNELLUI_INTERACTION_TRACE`, see
+`INTERACTION_DEBUGGING.md`), `/v1/key` (`key` and `type`) and `/v1/action` are
+recorded as `key_input` and `a11y_action` records in order with the pointer
+records, exactly as real keyboard and accessibility input is. Typed text is
+recorded by length only unless `SCHNELLUI_INTERACTION_TRACE_TEXT=1`.
 `GET /v1/global-shortcuts` lists the app's global shortcuts, the bindings the
 system reported and any error. `POST /v1/global-shortcut/trigger` with
 `{"id": "...", "phase": "press"|"release"|"tap"}` fires one as the system would
