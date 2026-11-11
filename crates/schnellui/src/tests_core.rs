@@ -2108,6 +2108,77 @@ fn escape_in_a_docked_region_returns_focus_to_where_it_came_from() {
     assert_eq!(app.dispatch_escape(), None);
 }
 
+/// A docked region whose opener vanished with the thing that opened it (a card's button) still
+/// has a way out: Escape goes to the fallback target's first focusable control.
+#[test]
+fn escape_in_a_docked_region_falls_back_when_the_opener_is_gone() {
+    use schnellui::scene::ComponentRef;
+    use widgets::{Button, Column, Row, View};
+
+    let dock = ComponentRef::new();
+    let home = ComponentRef::new();
+    let cards = ComponentRef::new();
+    let mut app = App::mount_with_size(
+        Row::new()
+            .child(Row::new().child(Button::new("Home")).with_ref(home))
+            .child(Row::new().child(Button::new("Card")).with_ref(cards))
+            .child(Column::new().with_ref(dock)),
+        480,
+        160,
+    );
+    app.frame();
+    let card = app.find_widget(Role::Button, Some("Card")).unwrap();
+    assert!(app.focus(Some(card)));
+    app.apply_subtree_replacement(
+        SubtreeReplacement::new(dock, Column::new().child(Button::new("Inside")), "open")
+            .with_escape_return()
+            .with_escape_fallback(home),
+    )
+    .unwrap();
+    app.frame();
+    // The opener leaves with its card.
+    app.apply_subtree_replacement(SubtreeReplacement::new(cards, Row::new(), "card gone"))
+        .unwrap();
+    app.frame();
+    assert!(app.find_widget(Role::Button, Some("Card")).is_none());
+    let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
+    app.focus(Some(inside));
+    assert_eq!(app.focused_widget(), Some(inside));
+    assert_eq!(app.dispatch_escape(), Some(true));
+    let home_button = app.find_widget(Role::Button, Some("Home")).unwrap();
+    assert_eq!(app.focused_widget(), Some(home_button));
+}
+
+/// With no opener at all (nothing had focus when the region appeared) the fallback answers.
+#[test]
+fn escape_in_a_docked_region_with_no_opener_uses_the_fallback() {
+    use schnellui::scene::ComponentRef;
+    use widgets::{Button, Column, Row, View};
+
+    let dock = ComponentRef::new();
+    let home = ComponentRef::new();
+    let mut app = App::mount_with_size(
+        Row::new()
+            .child(Row::new().child(Button::new("Home")).with_ref(home))
+            .child(Column::new().with_ref(dock)),
+        240,
+        160,
+    );
+    app.frame();
+    app.apply_subtree_replacement(
+        SubtreeReplacement::new(dock, Column::new().child(Button::new("Inside")), "open")
+            .with_escape_return()
+            .with_escape_fallback(home),
+    )
+    .unwrap();
+    app.frame();
+    let inside = app.find_widget(Role::Button, Some("Inside")).unwrap();
+    assert!(app.focus(Some(inside)));
+    assert_eq!(app.dispatch_escape(), Some(true));
+    let home_button = app.find_widget(Role::Button, Some("Home")).unwrap();
+    assert_eq!(app.focused_widget(), Some(home_button));
+}
+
 /// A dropdown popup inside a modal dialog takes the pointer over the dialog
 /// content it covers, which comes later in tree order.
 #[test]

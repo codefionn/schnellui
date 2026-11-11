@@ -615,8 +615,10 @@ pub(crate) struct RegionFocus {
 #[derive(Clone, Copy, Debug)]
 struct RegionReturn {
     region: scene::ComponentRef,
-    opener: WidgetId,
+    opener: Option<WidgetId>,
     ring_visible: bool,
+    /// Where Escape goes when the opener is gone.
+    fallback: Option<scene::ComponentRef>,
 }
 
 #[derive(Clone, Copy, Debug)]

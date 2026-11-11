@@ -116,7 +116,12 @@ impl App {
         let ring = self.focus_ring_shown();
         let region = self.region_focus_before(replacement.target);
         let root = self.replace_subtree_boxed(replacement.target, replacement.view)?;
-        self.note_region_return(replacement.target, replacement.escape_return, region);
+        self.note_region_return(
+            replacement.target,
+            replacement.escape_return,
+            replacement.escape_fallback,
+            region,
+        );
         if let Some(target) = focus_after {
             if let Some(widget) = self.scene.resolve_ref(target) {
                 let widget = self.first_focusable_in(widget).unwrap_or(widget);
@@ -149,6 +154,7 @@ impl App {
         &mut self,
         target: scene::ComponentRef,
         escape_return: bool,
+        fallback: Option<scene::ComponentRef>,
         before: RegionFocus,
     ) {
         if !escape_return {
@@ -158,8 +164,11 @@ impl App {
                 .position(|entry| entry.region == target)
                 .map(|index| self.region_returns.remove(index));
             if let Some(entry) = entry.filter(|_| before.inside) {
-                if app_inherit::takes_focus(&self.scene, entry.opener) {
-                    let _ = self.focus_after_replacement(entry.opener, entry.ring_visible);
+                if let Some(opener) = entry
+                    .opener
+                    .filter(|&opener| app_inherit::takes_focus(&self.scene, opener))
+                {
+                    let _ = self.focus_after_replacement(opener, entry.ring_visible);
                 }
             }
             return;
@@ -182,9 +191,25 @@ impl App {
             self.region_returns.retain(|entry| entry.region != target);
             self.region_returns.push(RegionReturn {
                 region: target,
-                opener,
+                opener: Some(opener),
                 ring_visible,
+                fallback,
             });
+        } else if fallback.is_some() {
+            // No opener is known (nothing had focus, or a rebuild kept the old one).
+            match self
+                .region_returns
+                .iter_mut()
+                .find(|entry| entry.region == target)
+            {
+                Some(entry) => entry.fallback = fallback,
+                None => self.region_returns.push(RegionReturn {
+                    region: target,
+                    opener: None,
+                    ring_visible: false,
+                    fallback,
+                }),
+            }
         }
     }
 
@@ -193,10 +218,18 @@ impl App {
         let focused = self.focused_widget()?;
         self.region_returns.iter().rev().find_map(|entry| {
             let root = self.scene.resolve_ref(entry.region)?;
-            (schnellui::widgets::is_in_subtree(&self.scene, focused, root)
-                && entry.opener != focused
-                && app_inherit::takes_focus(&self.scene, entry.opener))
-            .then_some((entry.opener, entry.ring_visible))
+            if !schnellui::widgets::is_in_subtree(&self.scene, focused, root) {
+                return None;
+            }
+            let opener = entry.opener.filter(|&opener| {
+                opener != focused && app_inherit::takes_focus(&self.scene, opener)
+            });
+            if let Some(opener) = opener {
+                return Some((opener, entry.ring_visible));
+            }
+            let fallback = self.scene.resolve_ref(entry.fallback?)?;
+            let fallback = self.first_focusable_in(fallback)?;
+            (fallback != focused).then_some((fallback, true))
         })
     }
 

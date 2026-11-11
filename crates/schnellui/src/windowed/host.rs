@@ -618,9 +618,11 @@ impl WindowedApp {
             }
             let region = self.app.region_focus_before(target);
             let escape_return = replacement.escape_return;
+            let escape_fallback = replacement.escape_fallback;
             match self.app.replace_subtree_boxed(target, replacement.view) {
                 Ok(root) => {
-                    self.app.note_region_return(target, escape_return, region);
+                    self.app
+                        .note_region_return(target, escape_return, escape_fallback, region);
                     applied.push((target.id(), root, reason));
                 }
                 Err(error) => self.trace_with("subtree_replacement_rejected", |this| {

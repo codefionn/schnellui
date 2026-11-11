@@ -17,6 +17,7 @@ pub struct SubtreeReplacement {
     pub(crate) reason: Cow<'static, str>,
     pub(crate) focus_after: Option<ComponentRef>,
     pub(crate) escape_return: bool,
+    pub(crate) escape_fallback: Option<ComponentRef>,
 }
 
 impl SubtreeReplacement {
@@ -31,6 +32,7 @@ impl SubtreeReplacement {
             reason: reason.into(),
             focus_after: None,
             escape_return: false,
+            escape_fallback: None,
         }
     }
 
@@ -48,6 +50,15 @@ impl SubtreeReplacement {
     /// closes.
     pub fn with_escape_return(mut self) -> Self {
         self.escape_return = true;
+        self
+    }
+
+    /// Where Escape goes when the remembered opener is gone, or when none was remembered (the
+    /// control that opened the region vanished with it, as a card's button does). `target` is
+    /// resolved when Escape is pressed: focus goes to it or to its first focusable descendant.
+    /// Only meaningful together with [`Self::with_escape_return`].
+    pub fn with_escape_fallback(mut self, target: ComponentRef) -> Self {
+        self.escape_fallback = Some(target);
         self
     }
 }
