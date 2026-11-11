@@ -23,7 +23,7 @@ fn a_replacement_mounted_at_the_launch_size_takes_the_live_size() {
         }
         // The hook ignores the viewport and mounts at its launch size.
         let app = App::mount_with_size(Button::new("Save"), 640, 700);
-        Some(WindowUpdate::Remount(Remount::new(app, "test")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
     });
     host.resize(360.0, 170.0);
     pending.set(true);

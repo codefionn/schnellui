@@ -68,7 +68,9 @@ fn host() -> (HeadlessHost, Rc<Cell<Choice>>) {
         }
         let (s, d) = (s.clone(), d.clone());
         let app = App::mount_with_size(view(s, d), size.width as u32, size.height as u32);
-        Some(WindowUpdate::Remount(Remount::new(app, "dropdown")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(
+            app, "dropdown",
+        ))))
     });
     (host, state)
 }

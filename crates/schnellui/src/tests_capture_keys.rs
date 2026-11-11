@@ -102,7 +102,9 @@ fn host_with(hide_slider: bool) -> (HeadlessHost, Rc<Cell<Choice>>, Seen) {
             size.width as u32,
             size.height as u32,
         );
-        Some(WindowUpdate::Remount(Remount::new(app, "dropdown")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(
+            app, "dropdown",
+        ))))
     });
     (host, state, seen)
 }
@@ -292,7 +294,7 @@ fn a_scrollbar_drag_survives_a_remount_under_the_held_button() {
             return None;
         }
         let app = App::mount_with_size(scroll_view(), size.width as u32, size.height as u32);
-        Some(WindowUpdate::Remount(Remount::new(app, "rows")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(app, "rows"))))
     });
     let offset = |host: &HeadlessHost| {
         let id = host
@@ -357,7 +359,7 @@ fn a_window_drag_survives_a_remount_under_the_held_button() {
             return None;
         }
         let app = App::mount_with_size(board_view(), size.width as u32, size.height as u32);
-        Some(WindowUpdate::Remount(Remount::new(app, "board")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(app, "board"))))
     });
     let rect = |host: &HeadlessHost| {
         let id = host.app().find_widget(Role::Dialog, Some("Board")).unwrap();
@@ -400,7 +402,7 @@ fn a_text_selection_drag_survives_a_remount_under_the_held_button() {
             return None;
         }
         let app = App::mount_with_size(field(), size.width as u32, size.height as u32);
-        Some(WindowUpdate::Remount(Remount::new(app, "field")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(app, "field"))))
     });
     let at = center(&host, Role::TextInput, "Note");
     host.pointer_move(at);

@@ -260,7 +260,7 @@ impl Theme {
             InteractionComponent::Editable => self.component_interactions.editable,
             InteractionComponent::RawSurface => self.component_interactions.raw_surface,
         };
-        let states = override_states.unwrap_or_else(|| match component {
+        let states = override_states.unwrap_or(match component {
             InteractionComponent::Editable => InteractionStates {
                 hover: InteractionStyle {
                     border: self.interactions.hover.border,

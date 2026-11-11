@@ -155,7 +155,7 @@ impl App {
             Some(Box::new(move |_| {
                 crate::app_new::claim_remount_engine(&mut remount)
                     .map(Remount::unspecified)
-                    .map(WindowUpdate::Remount)
+                    .map(|replacement| WindowUpdate::Remount(Box::new(replacement)))
             })),
         )
     }
@@ -175,7 +175,7 @@ impl App {
             Some(Box::new(move |viewport| {
                 crate::app_new::claim_remount_engine(|| remount(viewport))
                     .map(Remount::unspecified)
-                    .map(WindowUpdate::Remount)
+                    .map(|replacement| WindowUpdate::Remount(Box::new(replacement)))
             })),
         )
     }
@@ -191,7 +191,8 @@ impl App {
             self,
             title,
             Some(Box::new(move |_| {
-                crate::app_new::claim_remount_engine(&mut remount).map(WindowUpdate::Remount)
+                crate::app_new::claim_remount_engine(&mut remount)
+                    .map(|replacement| WindowUpdate::Remount(Box::new(replacement)))
             })),
         )
     }
@@ -208,7 +209,7 @@ impl App {
             title,
             Some(Box::new(move |viewport| {
                 crate::app_new::claim_remount_engine(|| remount(viewport))
-                    .map(WindowUpdate::Remount)
+                    .map(|replacement| WindowUpdate::Remount(Box::new(replacement)))
             })),
         )
     }

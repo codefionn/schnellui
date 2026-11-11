@@ -643,9 +643,13 @@ fn token_eq(left: &str, right: &str) -> bool {
 }
 
 fn cookie(name: &str, value: &str, config: AppConfig, http_only: bool, clear: bool) -> HeaderValue {
-    let secure = config.secure_cookies.then_some("; Secure").unwrap_or("");
-    let http_only = http_only.then_some("; HttpOnly").unwrap_or("");
-    let expiry = clear.then_some("; Max-Age=0").unwrap_or("");
+    let secure = if config.secure_cookies {
+        "; Secure"
+    } else {
+        ""
+    };
+    let http_only = if http_only { "; HttpOnly" } else { "" };
+    let expiry = if clear { "; Max-Age=0" } else { "" };
     HeaderValue::from_str(&format!(
         "{name}={value}; Path=/; SameSite=Strict{secure}{http_only}{expiry}"
     ))

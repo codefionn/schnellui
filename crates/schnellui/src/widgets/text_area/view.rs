@@ -72,7 +72,7 @@ impl View for TextArea {
             let line_h = {
                 let phys = phys_size_px(this.size_px, ctx.scale);
                 let inv = 1.0 / norm_scale(ctx.scale);
-                shape_area_line(&mut ctx.text, "Ag", phys).height * inv
+                shape_area_line(ctx.text, "Ag", phys).height * inv
             };
             let h = this.min_rows.max(1) as f32 * line_h + 2.0 * AREA_PAD;
             ctx.runtime.with(|rt| {

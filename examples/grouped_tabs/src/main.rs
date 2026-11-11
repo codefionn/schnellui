@@ -969,7 +969,7 @@ mod tests {
             let mut host = HeadlessHost::new(app);
             let mut hook = remount_hook(Scenario::Tree, scale, state);
             host.set_remount(move |size: Size, _| {
-                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+                hook(size).map(|app| WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
             });
             host.resize(520.0, 480.0);
             for _ in 0..2 {

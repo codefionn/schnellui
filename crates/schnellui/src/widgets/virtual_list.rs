@@ -119,9 +119,12 @@ where
 /// `row` is called only for rows entering the retained pixel window, plus a
 /// single bootstrap row before the first viewport layout. It may return any
 /// regular SchnellUI view, including rich markdown cards.
+/// The row factory of a [`VirtualList`]: builds one visible row's view from its key.
+type RowFactory<K> = Box<dyn FnMut(&K) -> AnyView>;
+
 pub struct VirtualList<K> {
     controller: VirtualListController<K>,
-    row: Option<Box<dyn FnMut(&K) -> AnyView>>,
+    row: Option<RowFactory<K>>,
     scroll: Scroll,
 }
 
@@ -206,7 +209,7 @@ where
 
 struct VirtualListContent<K> {
     controller: VirtualListController<K>,
-    row: Box<dyn FnMut(&K) -> AnyView>,
+    row: RowFactory<K>,
 }
 
 impl<K> View for VirtualListContent<K>
@@ -288,6 +291,8 @@ pub fn measure_virtual_lists(
 
 pub(crate) trait MountedVirtualList {
     fn alive(&self, scene: &Scene) -> bool;
+    // Grouping these into a parameter struct would only move the list around.
+    #[allow(clippy::too_many_arguments)]
     fn reconcile(
         &mut self,
         runtime: &Runtime,
@@ -303,7 +308,7 @@ pub(crate) trait MountedVirtualList {
 
 struct MountedList<K> {
     controller: VirtualListController<K>,
-    row: Box<dyn FnMut(&K) -> AnyView>,
+    row: RowFactory<K>,
     scroll: WidgetId,
     content: WidgetId,
     before: WidgetId,

@@ -581,7 +581,7 @@ impl WindowedApp {
 
     fn apply_update(&mut self, update: WindowUpdate, viewport: Size) {
         let replacement = match update {
-            WindowUpdate::Remount(replacement) => replacement,
+            WindowUpdate::Remount(replacement) => *replacement,
             WindowUpdate::Subtrees(replacements) => {
                 self.apply_subtree_replacements(replacements, viewport);
                 return;

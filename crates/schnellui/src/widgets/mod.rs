@@ -142,7 +142,7 @@ use reactivity::RetainedReactivity;
 #[path = "lib/probes.rs"]
 pub(crate) mod probes;
 #[cfg(test)]
-#[path = "lib/tests.rs"]
+#[path = "lib/tests/mod.rs"]
 mod tests;
 
 /// Window-system-independent pointer cursor requested by the widget under the
@@ -664,6 +664,8 @@ fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
 /// Appends a pre-rasterized tooltip fragment in a transparent state. Pointer
 /// proximity only recolors these stable primitives, so showing a tooltip needs
 /// no shaping, atlas work, or allocation on the interaction path.
+// Grouping these into a parameter struct would only move the list around.
+#[allow(clippy::too_many_arguments)]
 fn emit_hover_tooltip(
     runtime: &Runtime,
     scene: &mut Scene,
@@ -738,6 +740,8 @@ const TOOLTIP_OVERLAY_LEVEL: u8 = 5;
 /// one right now, so it opens above every dialog, modal ones included.
 pub(crate) const POPUP_OVERLAY_LEVEL: u8 = 30;
 
+// Grouping these into a parameter struct would only move the list around.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn register_hover_tooltip(
     runtime: &Runtime,
     scene: &mut Scene,
@@ -1675,7 +1679,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
 
     runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
-        if rt.pending_submit.is_some_and(|form| removed(form)) {
+        if rt.pending_submit.is_some_and(&removed) {
             rt.pending_submit = None;
         }
         for &id in nodes {

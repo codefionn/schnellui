@@ -329,11 +329,14 @@ impl View for Referenced {
 /// can overflow. While the content overflows, layout reserves the bar's strip
 /// (`SCROLLBAR_WIDTH + SCROLLBAR_INSET`, 12 px) at the right edge and lays the content
 /// out in the rest, so the bar never covers it. Content that fits keeps the full width.
+/// Debounce delay, max wait, and the handler behind [`Scroll::on_scroll_debounced`].
+type DebouncedScrollHandler = (Duration, Duration, Box<dyn FnMut(f32) + 'static>);
+
 pub struct Scroll {
     pub(crate) child: Option<AnyView>,
     pub(crate) style: ContainerStyle,
     pub(crate) on_scroll: Option<Box<dyn FnMut(f32) + 'static>>,
-    pub(crate) on_scroll_debounced: Option<(Duration, Duration, Box<dyn FnMut(f32) + 'static>)>,
+    pub(crate) on_scroll_debounced: Option<DebouncedScrollHandler>,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) scrollbar: bool,
     pub(crate) edge_auto_scroll: bool,

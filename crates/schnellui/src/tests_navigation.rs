@@ -473,7 +473,7 @@ fn remount_preserves_pointer_focus_modality_without_synthetic_focus_events() {
         },
     );
     raw_replacement.inherit_remount_state(&raw_previous);
-    assert_eq!(raw_replacement.focused_widget().is_some(), true);
+    assert!(raw_replacement.focused_widget().is_some());
     assert_eq!(gains.get(), 0, "remount continuity is not a focus gain");
 }
 
@@ -1272,7 +1272,7 @@ fn a_tooltip_stays_in_the_window_when_the_root_overflows_it() {
             }
             _ => None,
         })
-        .last()
+        .next_back()
         .expect("the tooltip shows above or below the button");
     assert!(
         tooltip.x >= 0.0 && tooltip.right() <= 120.0,
@@ -1817,7 +1817,7 @@ fn a_tab_tooltip_below_the_tab_stays_above_the_content_after_it() {
             }
             _ => None,
         })
-        .last()
+        .next_back()
         .expect("the tooltip opens below the tab");
     let pixels = app.render_rgba8().unwrap();
     let at = |x: f32, y: f32| {

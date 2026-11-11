@@ -514,7 +514,8 @@ mod tests {
                     let mut host = HeadlessHost::new(app);
                     let mut hook = resize_hook(scenario, &cli);
                     host.set_remount(move |size: Size, _| {
-                        hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+                        hook(size)
+                            .map(|app| WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
                     });
                     host.resize(resized.0 as f32, resized.1 as f32);
                     assert_eq!(host.remounts(), 1);

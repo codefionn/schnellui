@@ -189,14 +189,14 @@ fn subtree_replacement_keeps_end_following_viewports_pinned_to_the_end() {
                 .restoration_key("agent-a")
                 .size(240.0, 100.0)
                 .follow_end(true)
-                .child(content.with_ref(content_ref.clone()))
-                .with_ref(scroll_ref.clone()),
+                .child(content.with_ref(*content_ref))
+                .with_ref(*scroll_ref),
         )
     }
 
     let mut app = App::mount_with_size(transcript(&content_ref, &scroll_ref, 40), 320, 180);
     app.frame();
-    let scroll = app.resolve_ref(scroll_ref.clone()).unwrap();
+    let scroll = app.resolve_ref(scroll_ref).unwrap();
     assert!(schnellui::widgets::scroll_is_at_end(app.scene(), scroll));
 
     // Stream growth arrives as a subtree replacement of just the content.
@@ -204,7 +204,7 @@ fn subtree_replacement_keeps_end_following_viewports_pinned_to_the_end() {
     for row in 0..60 {
         grown = grown.child(Text::new(format!("Row {row}")));
     }
-    app.replace_subtree(content_ref.clone(), grown).unwrap();
+    app.replace_subtree(content_ref, grown).unwrap();
     app.frame();
     assert!(
         schnellui::widgets::scroll_is_at_end(app.scene(), scroll),
@@ -3104,7 +3104,7 @@ mod uncontrolled_state_across_rebuilds {
     fn a11y(app: &App, role: Role) -> (Option<String>, u32) {
         let id = app.find_widget(role, None).unwrap();
         let a = app.scene().a11y(id).unwrap();
-        (a.value.clone(), a.state.into())
+        (a.value.clone(), a.state)
     }
 
     fn form() -> Column {

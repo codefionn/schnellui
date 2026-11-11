@@ -66,7 +66,10 @@ impl SubtreeReplacement {
 /// One structural update yielded by a native window host callback.
 pub enum WindowUpdate {
     /// Replace the complete app while retaining the native window and GPU surface.
-    Remount(Remount),
+    ///
+    /// Boxed because a [`Remount`] carries a whole app (~9 KB); boxing keeps the
+    /// enum small where it is passed through host callbacks by value.
+    Remount(Box<Remount>),
     /// Replace one or more independent retained branches in the current app.
     Subtrees(Vec<SubtreeReplacement>),
 }
@@ -83,7 +86,7 @@ impl WindowUpdate {
 
 impl From<Remount> for WindowUpdate {
     fn from(value: Remount) -> Self {
-        Self::Remount(value)
+        Self::Remount(Box::new(value))
     }
 }
 

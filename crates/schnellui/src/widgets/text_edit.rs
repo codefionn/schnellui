@@ -680,6 +680,8 @@ pub(crate) fn set_min_height(runtime: &crate::widgets::Runtime, id: WidgetId, he
 }
 
 /// Registers a text input's edit state at build (caret parked at the end).
+// Grouping these into a parameter struct would only move the list around.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn register_edit_state(
     runtime: &crate::widgets::Runtime,
     id: WidgetId,

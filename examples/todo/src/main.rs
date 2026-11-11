@@ -816,7 +816,7 @@ mod tests {
             let mut host = HeadlessHost::new(app);
             let mut hook = remount_hook(runtime, scale);
             host.set_remount(move |size: Size, _| {
-                hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+                hook(size).map(|app| WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
             });
             host.resize(700.0, 500.0);
             let id = host
@@ -852,7 +852,7 @@ mod tests {
         let mut host = HeadlessHost::new(app);
         let mut hook = remount_hook(runtime, 1.0);
         host.set_remount(move |size: Size, _| {
-            hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+            hook(size).map(|app| WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
         });
         let input = host
             .app()
@@ -904,7 +904,6 @@ mod tests {
         // The Remove buttons sit at the right end of their rows.
         let content = scene
             .preorder()
-            .into_iter()
             .filter(|&id| {
                 scene
                     .a11y(id)

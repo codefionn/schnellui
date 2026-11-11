@@ -117,7 +117,7 @@ fn the_drawn_thumb_is_slimmer_than_the_part_the_pointer_grabs() {
             Primitive::SolidRect { rect, .. } => Some(*rect),
             _ => None,
         })
-        .last()
+        .next_back()
         .unwrap();
     assert_eq!(
         drawn.width,

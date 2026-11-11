@@ -495,14 +495,15 @@ impl View for Table {
 // paint-fragment emission + in-place recolor (SOUL §3.2, §8.1)
 // ---------------------------------------------------------------------------
 
+/// How far a cell's fill and rule reach back under the previous cell.
+const CELL_SEAM_OVERLAP: f32 = 1.0;
+
 /// Emits one cell's paint: `[0]` the background surface (header band / selection
 /// tint / white), `[1]` the bottom separator hairline, then the label as real glyph
 /// quads inset by the shared padding (SOUL §8.1). The background at index `[0]` is
 /// the recolor target of a row-selection toggle.
+// Grouping these into a parameter struct would only move the list around.
 #[allow(clippy::too_many_arguments)]
-/// How far a cell's fill and rule reach back under the previous cell.
-const CELL_SEAM_OVERLAP: f32 = 1.0;
-
 fn emit_cell_paint(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,

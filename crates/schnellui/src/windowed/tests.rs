@@ -539,7 +539,7 @@ mod dropdown_pointer {
             hook_state.set(State { dirty: false, ..s });
             Some(match update {
                 Update::Remount => {
-                    WindowUpdate::Remount(Remount::new(mount(&hook_state, slot), "test"))
+                    WindowUpdate::Remount(Box::new(Remount::new(mount(&hook_state, slot), "test")))
                 }
                 Update::Subtree => WindowUpdate::Subtrees(vec![SubtreeReplacement::new(
                     slot,
@@ -777,9 +777,9 @@ mod platform_theme_change {
                 }
                 let mut app = mount();
                 app.frame();
-                Some(crate::WindowUpdate::Remount(crate::Remount::new(
+                Some(crate::WindowUpdate::Remount(Box::new(crate::Remount::new(
                     app, "test",
-                )))
+                ))))
             });
         let mut host = windowed_host(app, Some(remount));
         let save = host.app.find_widget(Role::Button, Some("Save")).unwrap();
@@ -2175,7 +2175,7 @@ mod remount_during_a_held_press {
                     size.width as u32,
                     size.height as u32,
                 );
-                Some(WindowUpdate::Remount(Remount::new(app, "test")))
+                Some(WindowUpdate::Remount(Box::new(Remount::new(app, "test"))))
             })),
         );
         let trace = std::env::temp_dir().join(format!(
@@ -3360,7 +3360,7 @@ mod remount_host_settings {
         let mut slot = Some(replacement);
         let hook: Box<dyn FnMut(Size) -> Option<WindowUpdate>> = Box::new(move |_| {
             slot.take()
-                .map(|app| WindowUpdate::Remount(Remount::new(app, "t")))
+                .map(|app| WindowUpdate::Remount(Box::new(Remount::new(app, "t"))))
         });
         let mut host = windowed_host(first, Some(hook));
         host.poll_remount();

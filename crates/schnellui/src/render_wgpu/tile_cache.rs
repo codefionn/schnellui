@@ -78,6 +78,8 @@ impl TileCache {
         }
     }
 
+    // Grouping these into a parameter struct would only move the list around.
+    #[allow(clippy::too_many_arguments)]
     pub fn encode(
         &mut self,
         core: &GpuCore,

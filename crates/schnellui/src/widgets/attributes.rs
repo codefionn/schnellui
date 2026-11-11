@@ -101,7 +101,7 @@ impl View for ReactiveAttr {
             });
             (key, bindings.entries[key].subscription.clone())
         });
-        let value = subscription.track(|| producer());
+        let value = subscription.track(&mut producer);
         if attribute == Attribute::FontSize {
             prepare_font(&ctx.runtime, ctx.scene, ctx.layout, id, ctx.scale);
             apply_font(
@@ -205,7 +205,7 @@ pub fn run_reactive_attributes(
             runtime.with(|rt| rt.borrow_mut().attributes.forget(id));
             continue;
         }
-        let value = subscription.track(|| producer());
+        let value = subscription.track(&mut producer);
         if last != Some(value) {
             if attr == Attribute::FontSize {
                 apply_font(runtime, scene, layout, shaper, atlas, id, value);

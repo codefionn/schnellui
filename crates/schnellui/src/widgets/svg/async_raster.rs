@@ -102,6 +102,8 @@ fn raster_pool() -> Option<&'static Mutex<Sender<SvgJob>>> {
 /// with the current mount generation (a completion that outlives its tree is
 /// dropped, never written into a reused [`WidgetId`]'s rect). Returns the doc
 /// back when the pool is unavailable so the caller can rasterize synchronously.
+// Grouping these into a parameter struct would only move the list around.
+#[allow(clippy::too_many_arguments)]
 fn submit_svg_raster(
     runtime: &crate::widgets::Runtime,
     doc: Arc<SvgDoc>,

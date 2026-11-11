@@ -731,6 +731,8 @@ type PaintSink<'a> = Option<Sink<'a>>;
 /// unconstrained), returning the logical size. With a paint sink, emits
 /// primitives at absolute positions (origin + offsets) in paint order
 /// (surfaces under glyphs).
+// Grouping these into a parameter struct would only move the list around.
+#[allow(clippy::too_many_arguments)]
 fn flow_doc(
     shaper: &mut TextShaper,
     doc: &RichDoc,

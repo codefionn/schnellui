@@ -81,6 +81,9 @@ pub use windowed::RedrawSignal;
 const SCROLL_STEP: f32 = 48.0;
 
 /// How a themed application chooses its root design system.
+// Boxing the `System` themes would shrink the enum, but `ThemeMode` is `Copy`
+// and passed by value throughout the app API; the inline pair stays.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ThemeMode {
     /// Always use this theme.

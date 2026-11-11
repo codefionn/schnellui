@@ -211,9 +211,7 @@ impl<T: Send + Sync + 'static> Store<T> {
     /// Mutates the state in place and returns the closure's result, or `None`
     /// without calling `transaction` after the store has been disposed.
     pub fn try_transaction<R>(&self, transaction: impl FnOnce(&mut T) -> R) -> Option<R> {
-        if self.revision.try_peek(|_| ()).is_none() {
-            return None;
-        }
+        self.revision.try_peek(|_| ())?;
         let result = {
             let mut data = self.data.write();
             catch_unwind(AssertUnwindSafe(|| transaction(&mut data)))

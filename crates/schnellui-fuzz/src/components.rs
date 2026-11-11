@@ -990,7 +990,10 @@ fn scroll_resize(mount: &Mount) -> HeadlessHost {
             scale,
         );
         app.apply_reduced_motion(!animate);
-        Some(WindowUpdate::Remount(Remount::new(app, "scroll_resize")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(
+            app,
+            "scroll_resize",
+        ))))
     });
     host
 }
@@ -1080,7 +1083,9 @@ fn dropdown(mount: &Mount) -> HeadlessHost {
             scale,
         );
         app.apply_reduced_motion(!animate);
-        Some(WindowUpdate::Remount(Remount::new(app, "dropdown")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(
+            app, "dropdown",
+        ))))
     });
     host
 }
@@ -1343,7 +1348,7 @@ fn todo(mount: &Mount) -> HeadlessHost {
             scale,
         );
         app.apply_reduced_motion(!animate);
-        Some(WindowUpdate::Remount(Remount::new(app, "todo")))
+        Some(WindowUpdate::Remount(Box::new(Remount::new(app, "todo"))))
     });
     host
 }
