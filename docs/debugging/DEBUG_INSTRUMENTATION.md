@@ -60,6 +60,8 @@ cargo run -p schnellui-debug -- leave
 cargo run -p schnellui-debug -- key tab
 cargo run -p schnellui-debug -- type 'typed into the focused input'
 cargo run -p schnellui-debug -- key text --text x --ctrl   # Ctrl+X: cuts, as a keyboard would
+cargo run -p schnellui-debug -- global-shortcuts            # registered, bound by the system, last error
+cargo run -p schnellui-debug -- global-shortcut toggle      # press and release the global shortcut `toggle`
 cargo run -p schnellui-debug -- screenshot /tmp/live.png
 cargo run -p schnellui-debug -- quit
 ```
@@ -98,6 +100,10 @@ The endpoints are `GET /v1/status`, `GET /v1/tree`, `GET /v1/snapshot`,
 `GET /v1/screenshot`, and
 `POST /v1/action`, `/v1/pointer/move`, `/v1/pointer/click`, `/v1/pointer/press`,
 `/v1/pointer/release`, `/v1/pointer/drag`, `/v1/pointer/leave`, `/v1/key`, `/v1/quit`.
+`GET /v1/global-shortcuts` lists the app's global shortcuts, the bindings the
+system reported and any error. `POST /v1/global-shortcut/trigger` with
+`{"id": "...", "phase": "press"|"release"|"tap"}` fires one as the system would
+(`tap`, the default, is a press then a release); it answers 404 for an unknown id.
 A `text` key with `ctrl` is a chord, not typing: Ctrl+C, X, V, A, Z and Y
 copy, cut, paste, select all, undo and redo through the same code as a
 keyboard, and application shortcuts see it first.

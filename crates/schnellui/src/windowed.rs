@@ -29,8 +29,8 @@ use super::{
     Shortcut, UiKey,
 };
 use crate::debug_server::{
-    DebugAction, DebugButton, DebugCommand, DebugDrag, DebugKey, DebugPoint, DebugPress,
-    DebugReply, DebugRequest, DebugServer, DebugTarget,
+    DebugAction, DebugButton, DebugCommand, DebugDrag, DebugGlobalShortcut, DebugKey, DebugPoint,
+    DebugPress, DebugReply, DebugRequest, DebugServer, DebugTarget,
 };
 use crate::interaction_debug::InteractionRecorder;
 use crate::{Remount, SubtreeReplacement, WindowUpdate};
@@ -39,6 +39,8 @@ use crate::{Remount, SubtreeReplacement, WindowUpdate};
 enum PlatformEvent {
     AccessKit(AccessKitEvent),
     ReducedMotionChanged(bool),
+    /// A global shortcut backend reported from its own thread.
+    GlobalShortcut(crate::platform::GlobalShortcutEvent),
     RedrawRequested,
     Debug(DebugRequest),
 }

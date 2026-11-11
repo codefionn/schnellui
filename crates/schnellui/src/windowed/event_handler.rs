@@ -183,6 +183,15 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     }
                 }
             }
+            PlatformEvent::GlobalShortcut(event) => {
+                self.remount_trigger = "global_shortcut";
+                if self.app.apply_global_shortcut_event(event) {
+                    self.poll_remount();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
             PlatformEvent::RedrawRequested => {
                 // Do not wait for a compositor paint to settle controller work.
                 // Winit can defer `WindowEvent::RedrawRequested` for an occluded
@@ -212,6 +221,7 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             event_loop.exit();
             return;
         }
+        self.sync_global_shortcuts();
         // Focus moved by any path this turn (keys, pointer, AccessKit, a
         // remount) decides whether the input method is on.
         self.sync_ime();
@@ -279,6 +289,24 @@ pub(super) enum EventTail {
 /// One method per window-event family, called from the short match in
 /// `ApplicationHandler::window_event`.
 impl WindowedApp {
+    /// Starts, replaces or ends the platform's global shortcut session when
+    /// the app's registered set changed. A comparison of two integers when it
+    /// did not. Hosts without an event loop proxy (headless) never ask the
+    /// system for anything.
+    pub(super) fn sync_global_shortcuts(&mut self) {
+        if !self.app.global_shortcuts_stale() {
+            return;
+        }
+        let Some(proxy) = self.event_loop_proxy.clone() else {
+            return;
+        };
+        self.app.sync_global_shortcut_session(|set| {
+            crate::platform::GlobalShortcuts::register(set, move |event| {
+                let _ = proxy.send_event(PlatformEvent::GlobalShortcut(event));
+            })
+        });
+    }
+
     fn on_close_requested(&mut self, event_loop: &ActiveEventLoop) -> EventTail {
         event_loop.exit();
         EventTail::Skip

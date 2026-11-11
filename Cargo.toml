@@ -22,6 +22,7 @@ members = [
     "examples/playground",
     "examples/rich_text",
     "examples/dialogs",
+    "examples/global_shortcuts",
     "examples/dockable_workspace",
     "examples/grouped_tabs",
     "examples/md_icons",
@@ -84,7 +85,7 @@ winit = "0.30.13"
 arboard = { version = "3.6.1", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 # --- native accessibility preferences ---
-ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "file_chooser", "settings"] }
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "file_chooser", "global_shortcuts", "settings"] }
 async-io = "2.6.0"
 futures-util = "0.3.34"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSFont", "NSWorkspace", "objc2-core-foundation"] }
@@ -93,8 +94,10 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_System_SystemServices",
+    "Win32_System_Threading",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

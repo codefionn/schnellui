@@ -2299,3 +2299,94 @@ fn debug_ctrl_text_keys_run_the_editing_and_clipboard_chords() {
     chord(&mut host, "q");
     assert_eq!(value(&host).as_deref(), Some(""));
 }
+
+mod global_shortcuts {
+    use super::windowed_host;
+    use crate::debug_server::{DebugCommand, DebugGlobalShortcut};
+    use crate::platform::{
+        GlobalShortcut, GlobalShortcutBinding, GlobalShortcutEvent, GlobalShortcutPhase,
+    };
+    use crate::App;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn host_with_handler() -> (
+        super::super::WindowedApp,
+        Rc<RefCell<Vec<GlobalShortcutPhase>>>,
+    ) {
+        let mut app = App::new(64, 64);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        app.register_global_shortcut(GlobalShortcut::new("toggle", "Toggle"), {
+            let seen = seen.clone();
+            move |phase| seen.borrow_mut().push(phase)
+        });
+        (windowed_host(app, None), seen)
+    }
+
+    fn json(reply: crate::debug_server::DebugReply) -> serde_json::Value {
+        serde_json::from_slice(&reply.body).unwrap()
+    }
+
+    #[test]
+    fn the_debug_command_fires_the_handler_and_lists_the_registration() {
+        let (mut host, seen) = host_with_handler();
+        let listed = json(host.handle_debug_command(None, DebugCommand::GlobalShortcuts));
+        assert_eq!(listed["registered"][0]["id"], "toggle");
+        assert_eq!(listed["bindings"], serde_json::json!([]));
+
+        let reply = host.handle_debug_command(
+            None,
+            DebugCommand::GlobalShortcutTrigger(DebugGlobalShortcut {
+                id: "toggle".into(),
+                phase: None,
+            }),
+        );
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            *seen.borrow(),
+            vec![GlobalShortcutPhase::Pressed, GlobalShortcutPhase::Released]
+        );
+
+        let missing = host.handle_debug_command(
+            None,
+            DebugCommand::GlobalShortcutTrigger(DebugGlobalShortcut {
+                id: "nope".into(),
+                phase: None,
+            }),
+        );
+        assert_eq!(missing.status, 404);
+        let bad = host.handle_debug_command(
+            None,
+            DebugCommand::GlobalShortcutTrigger(DebugGlobalShortcut {
+                id: "toggle".into(),
+                phase: Some("hold".into()),
+            }),
+        );
+        assert_eq!(bad.status, 422);
+    }
+
+    #[test]
+    fn backend_bindings_show_up_in_the_listing() {
+        let (mut host, _) = host_with_handler();
+        host.app
+            .apply_global_shortcut_event(GlobalShortcutEvent::Changed(vec![
+                GlobalShortcutBinding {
+                    id: "toggle".into(),
+                    description: "Toggle".into(),
+                    trigger: "Ctrl+T".into(),
+                },
+            ]));
+        let listed = json(host.handle_debug_command(None, DebugCommand::GlobalShortcuts));
+        assert_eq!(listed["bindings"][0]["trigger"], "Ctrl+T");
+    }
+
+    #[test]
+    fn a_host_without_an_event_loop_never_starts_a_session() {
+        let (mut host, _) = host_with_handler();
+        assert!(host.app.global_shortcuts_stale());
+        host.sync_global_shortcuts();
+        // Still stale: nothing was asked of the system.
+        assert!(host.app.global_shortcuts_stale());
+        assert!(host.app.global_shortcuts().is_empty());
+    }
+}

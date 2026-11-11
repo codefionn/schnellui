@@ -1290,6 +1290,69 @@ impl WindowedApp {
         )
     }
 
+    /// What the app registered, what the system bound, and why not if it failed.
+    fn debug_global_shortcuts(&self) -> Value {
+        let registered: Vec<Value> = self
+            .app
+            .registered_global_shortcuts()
+            .map(|shortcut| {
+                json!({
+                    "id": shortcut.id(),
+                    "description": shortcut.description(),
+                    "preferred_trigger": shortcut.trigger().map(|t| json!({
+                        "key": format!("{:?}", t.logical_key()),
+                        "command": t.uses_command(),
+                        "shift": t.uses_shift(),
+                        "alt": t.uses_alt(),
+                    })),
+                })
+            })
+            .collect();
+        let bindings: Vec<Value> = self
+            .app
+            .global_shortcuts()
+            .iter()
+            .map(|binding| {
+                json!({
+                    "id": binding.id,
+                    "description": binding.description,
+                    "trigger": binding.trigger,
+                })
+            })
+            .collect();
+        json!({
+            "supported": crate::platform::GlobalShortcuts::supported(),
+            "registered": registered,
+            "bindings": bindings,
+            "error": self.app.global_shortcut_error().map(|error| error.to_string()),
+        })
+    }
+
+    fn handle_debug_global_shortcut(&mut self, request: &DebugGlobalShortcut) -> DebugReply {
+        use crate::platform::GlobalShortcutPhase::{Pressed, Released};
+        let phases: &[_] = match request.phase.as_deref() {
+            None | Some("tap") => &[Pressed, Released],
+            Some("press") => &[Pressed],
+            Some("release") => &[Released],
+            Some(other) => {
+                return DebugReply::error(
+                    422,
+                    format!("phase must be press, release or tap, not {other:?}"),
+                )
+            }
+        };
+        let mut fired = false;
+        for phase in phases {
+            fired |= self.app.dispatch_global_shortcut(&request.id, *phase);
+        }
+        if !fired {
+            return DebugReply::error(404, format!("no global shortcut {:?}", request.id));
+        }
+        self.poll_remount();
+        self.settle_debug_command();
+        DebugReply::json(200, json!({ "fired": true, "status": self.debug_status() }))
+    }
+
     pub(super) fn handle_debug_command(
         &mut self,
         event_loop: Option<&ActiveEventLoop>,
@@ -1374,6 +1437,10 @@ impl WindowedApp {
                 )
             }
             DebugCommand::Key(request) => self.handle_debug_key(request),
+            DebugCommand::GlobalShortcuts => DebugReply::json(200, self.debug_global_shortcuts()),
+            DebugCommand::GlobalShortcutTrigger(request) => {
+                self.handle_debug_global_shortcut(&request)
+            }
             DebugCommand::Quit => {
                 if let Some(event_loop) = event_loop {
                     event_loop.exit();
@@ -1455,6 +1522,16 @@ impl WindowedApp {
         // Do not repeat application commands while a key is held (a toggling
         // command such as Ctrl+, would otherwise oscillate between screens).
         if !event.repeat {
+            if let Key::Named(named) = &event.logical_key {
+                if let Some(key) = crate::ShortcutKey::from_window_key(named) {
+                    if self
+                        .app
+                        .dispatch_shortcut(Shortcut::key(key, command, shift, alt))
+                    {
+                        return true;
+                    }
+                }
+            }
             if let Key::Character(value) = event.logical_key {
                 let mut chars = value.chars();
                 if let Some(character) = chars.next() {
@@ -1796,6 +1873,13 @@ pub(crate) fn run_headless(
             Some(PlatformEvent::ReducedMotionChanged(reduce)) => {
                 handler.remount_trigger = "reduced_motion";
                 if handler.app.apply_reduced_motion(reduce) {
+                    handler.on_redraw_requested();
+                    handler.sync_cursor();
+                }
+            }
+            Some(PlatformEvent::GlobalShortcut(event)) => {
+                handler.remount_trigger = "global_shortcut";
+                if handler.app.apply_global_shortcut_event(event) {
                     handler.on_redraw_requested();
                     handler.sync_cursor();
                 }

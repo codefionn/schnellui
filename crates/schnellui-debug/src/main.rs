@@ -141,8 +141,23 @@ enum Command {
     },
     /// Type text into the focused editable widget.
     Type { text: String },
+    /// List the app's global shortcuts: registered, bound by the system, and any error.
+    GlobalShortcuts,
+    /// Fire a registered global shortcut by id, as the system would while the window is unfocused.
+    GlobalShortcut {
+        id: String,
+        /// Send only a press or only a release; the default presses then releases.
+        #[arg(long, value_enum)]
+        phase: Option<ShortcutPhase>,
+    },
     /// Ask the application to close cleanly.
     Quit,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ShortcutPhase {
+    Press,
+    Release,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -384,6 +399,22 @@ fn run_connected(
             "POST",
             "/v1/key",
             Some(json!({ "key": "text", "text": text }).to_string()),
+            Output::Stdout,
+        ),
+        Command::GlobalShortcuts => ("GET", "/v1/global-shortcuts", None, Output::Stdout),
+        Command::GlobalShortcut { id, phase } => (
+            "POST",
+            "/v1/global-shortcut/trigger",
+            Some(
+                json!({
+                    "id": id,
+                    "phase": phase.map(|phase| match phase {
+                        ShortcutPhase::Press => "press",
+                        ShortcutPhase::Release => "release",
+                    }),
+                })
+                .to_string(),
+            ),
             Output::Stdout,
         ),
         Command::Quit => ("POST", "/v1/quit", Some("{}".into()), Output::Stdout),
@@ -1463,6 +1494,17 @@ mod tests {
             Command::Drag { steps: Some(5), .. }
         ));
         assert!(matches!(parse("leave").command, Command::Leave));
+        assert!(matches!(
+            parse("global-shortcuts").command,
+            Command::GlobalShortcuts
+        ));
+        assert!(matches!(
+            parse("global-shortcut toggle --phase press").command,
+            Command::GlobalShortcut {
+                phase: Some(ShortcutPhase::Press),
+                ..
+            }
+        ));
         assert!(ScriptInvocation::try_parse_from(["press", "10"]).is_err());
     }
 

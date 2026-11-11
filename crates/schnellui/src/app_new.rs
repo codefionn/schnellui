@@ -106,6 +106,7 @@ impl App {
             hot_reload: None,
             test_registry: HashMap::new(),
             shortcut_registry: HashMap::new(),
+            global_shortcuts: Default::default(),
             navigation_handler: None,
             focused_key_bindings: Vec::new(),
             focused_input_bindings: Vec::new(),

@@ -99,6 +99,15 @@ pub(crate) struct DebugKey {
     pub(crate) text: Option<String>,
 }
 
+/// Fires a registered global shortcut by id, as the platform would.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugGlobalShortcut {
+    pub(crate) id: String,
+    /// `press`, `release` or `tap` (a press then a release; the default).
+    #[serde(default)]
+    pub(crate) phase: Option<String>,
+}
+
 #[derive(Debug)]
 pub(crate) enum DebugCommand {
     Tree,
@@ -113,6 +122,8 @@ pub(crate) enum DebugCommand {
     PointerDrag(DebugDrag),
     PointerLeave,
     Key(DebugKey),
+    GlobalShortcuts,
+    GlobalShortcutTrigger(DebugGlobalShortcut),
     Quit,
 }
 
@@ -576,6 +587,10 @@ fn route_request(request: HttpRequest) -> Result<Option<DebugCommand>, DebugRepl
         ("POST", "/v1/pointer/drag") => DebugCommand::PointerDrag(parse_json(&request.body)?),
         ("POST", "/v1/pointer/leave") => DebugCommand::PointerLeave,
         ("POST", "/v1/key") => DebugCommand::Key(parse_json(&request.body)?),
+        ("GET", "/v1/global-shortcuts") => DebugCommand::GlobalShortcuts,
+        ("POST", "/v1/global-shortcut/trigger") => {
+            DebugCommand::GlobalShortcutTrigger(parse_json(&request.body)?)
+        }
         ("POST", "/v1/quit") => DebugCommand::Quit,
         _ => return Err(DebugReply::error(404, "unknown debug endpoint")),
     };
@@ -621,6 +636,32 @@ fn write_http_reply(stream: &mut impl Write, reply: DebugReply) -> io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routes_global_shortcut_requests() {
+        let list = HttpRequest {
+            method: "GET".into(),
+            path: "/v1/global-shortcuts".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        assert!(matches!(
+            route_request(list).unwrap().unwrap(),
+            DebugCommand::GlobalShortcuts
+        ));
+        let trigger = HttpRequest {
+            method: "POST".into(),
+            path: "/v1/global-shortcut/trigger".into(),
+            headers: Vec::new(),
+            body: br#"{"id":"toggle","phase":"press"}"#.to_vec(),
+        };
+        let Some(DebugCommand::GlobalShortcutTrigger(request)) = route_request(trigger).unwrap()
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!(request.id, "toggle");
+        assert_eq!(request.phase.as_deref(), Some("press"));
+    }
 
     #[test]
     fn routes_semantic_action_requests() {

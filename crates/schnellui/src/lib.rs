@@ -167,14 +167,97 @@ impl From<String> for TestValue {
 /// via its typed `set` (SOUL §7).
 type TestSetter = Box<dyn FnMut(TestValue) + 'static>;
 
+/// A key a [`Shortcut`] can name: a character, or one of the keys that have no
+/// character of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ShortcutKey {
+    /// A character key. Letters match case-insensitively.
+    Char(char),
+    /// A function key, `F(1)` to `F(24)`. Other numbers name no key.
+    F(u8),
+    Space,
+    Enter,
+    Tab,
+    Escape,
+    Backspace,
+    Delete,
+    Insert,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Left,
+    Right,
+    Up,
+    Down,
+    PrintScreen,
+    MediaPlayPause,
+    MediaStop,
+    MediaNext,
+    MediaPrevious,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+}
+
+impl ShortcutKey {
+    /// The key a window's keyboard event names, for the keys no widget uses for
+    /// editing or navigation: function, insert, print screen and media keys.
+    /// In-app dispatch of the others goes through the widgets' own key paths.
+    pub(crate) fn from_window_key(key: &winit::keyboard::NamedKey) -> Option<Self> {
+        use winit::keyboard::NamedKey as N;
+        Some(match key {
+            N::F1 => Self::F(1),
+            N::F2 => Self::F(2),
+            N::F3 => Self::F(3),
+            N::F4 => Self::F(4),
+            N::F5 => Self::F(5),
+            N::F6 => Self::F(6),
+            N::F7 => Self::F(7),
+            N::F8 => Self::F(8),
+            N::F9 => Self::F(9),
+            N::F10 => Self::F(10),
+            N::F11 => Self::F(11),
+            N::F12 => Self::F(12),
+            N::F13 => Self::F(13),
+            N::F14 => Self::F(14),
+            N::F15 => Self::F(15),
+            N::F16 => Self::F(16),
+            N::F17 => Self::F(17),
+            N::F18 => Self::F(18),
+            N::F19 => Self::F(19),
+            N::F20 => Self::F(20),
+            N::F21 => Self::F(21),
+            N::F22 => Self::F(22),
+            N::F23 => Self::F(23),
+            N::F24 => Self::F(24),
+            N::Insert => Self::Insert,
+            N::PrintScreen => Self::PrintScreen,
+            N::MediaPlayPause => Self::MediaPlayPause,
+            N::MediaStop => Self::MediaStop,
+            N::MediaTrackNext => Self::MediaNext,
+            N::MediaTrackPrevious => Self::MediaPrevious,
+            N::AudioVolumeUp => Self::VolumeUp,
+            N::AudioVolumeDown => Self::VolumeDown,
+            N::AudioVolumeMute => Self::VolumeMute,
+            _ => return None,
+        })
+    }
+}
+
 /// A platform-independent application keyboard shortcut.
 ///
 /// `command` is the platform's primary command modifier: Ctrl on Linux and
 /// Windows, and Cmd on macOS. Character keys are matched case-insensitively;
-/// callers use [`Shortcut::command`] for the common single-modifier form.
+/// callers use [`Shortcut::command`] for the common single-modifier form and
+/// [`Shortcut::key`] for keys without a character, such as F5 or Space.
+///
+/// [`App::register_shortcut`] fires for the character keys and for function,
+/// insert, print screen and media keys. Global shortcuts accept every
+/// [`ShortcutKey`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Shortcut {
-    key: char,
+    key: ShortcutKey,
     command: bool,
     shift: bool,
     alt: bool,
@@ -184,6 +267,12 @@ impl Shortcut {
     /// Creates a shortcut from a character and resolved platform-independent
     /// modifiers.
     pub const fn new(key: char, command: bool, shift: bool, alt: bool) -> Self {
+        Self::key(ShortcutKey::Char(key), command, shift, alt)
+    }
+
+    /// Creates a shortcut from any [`ShortcutKey`] and resolved
+    /// platform-independent modifiers.
+    pub const fn key(key: ShortcutKey, command: bool, shift: bool, alt: bool) -> Self {
         Self {
             key,
             command,
@@ -197,8 +286,30 @@ impl Shortcut {
         Self::new(key, true, false, false)
     }
 
+    /// The key this shortcut names.
+    pub const fn logical_key(&self) -> ShortcutKey {
+        self.key
+    }
+
+    /// Whether the platform command modifier is part of the chord.
+    pub const fn uses_command(&self) -> bool {
+        self.command
+    }
+
+    /// Whether Shift is part of the chord.
+    pub const fn uses_shift(&self) -> bool {
+        self.shift
+    }
+
+    /// Whether Alt (Option on macOS) is part of the chord.
+    pub const fn uses_alt(&self) -> bool {
+        self.alt
+    }
+
     fn normalized(mut self) -> Self {
-        self.key = self.key.to_ascii_lowercase();
+        if let ShortcutKey::Char(c) = self.key {
+            self.key = ShortcutKey::Char(c.to_ascii_lowercase());
+        }
         self
     }
 }
@@ -467,6 +578,9 @@ pub struct App {
     /// host resolves winit modifiers before dispatch; headless tests can drive
     /// the same path directly.
     shortcut_registry: HashMap<Shortcut, ShortcutHandler>,
+    /// System-wide shortcuts, their handlers and the platform session the
+    /// native window host keeps for them.
+    global_shortcuts: app_global_shortcuts::GlobalShortcutRegistry,
     /// What the mouse's back and forward buttons do where no raw surface
     /// takes them.
     navigation_handler: Option<NavigationHandler>,
@@ -644,6 +758,7 @@ fn owning_combo_trigger(scene: &Scene, option: WidgetId) -> Option<WidgetId> {
     None
 }
 
+mod app_global_shortcuts;
 mod app_inherit;
 mod app_input;
 mod app_interaction;
