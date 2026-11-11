@@ -2,6 +2,31 @@ use super::*;
 use schnellui::a11y::Role;
 use schnellui::scene::WidgetKind;
 
+/// The window-close fallback tests each control for being a Tab stop while it
+/// holds the cached tab order. A radio is a roving-group member, and asking
+/// the cache about it again from in there panicked on the borrow.
+#[test]
+fn the_window_close_fallback_passes_over_a_roving_group() {
+    use widgets::{Button, Column, Radio, Row};
+
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(
+                Row::new()
+                    .child(Radio::new(false).name("Daily"))
+                    .child(Radio::new(true).name("Weekly")),
+            )
+            .child(Button::new("after")),
+        400,
+        300,
+    );
+    app.frame();
+    // No window remembers a control, so the first Tab stop of the page wins:
+    // the group's entry, the checked radio, not its first member.
+    let weekly = app.find_widget(Role::Radio, Some("Weekly")).unwrap();
+    assert_eq!(app.closed_window_fallback(&[]), Some(weekly));
+}
+
 #[test]
 fn terminal_content_repaints_without_layout_invalidation() {
     use widgets::{TerminalGrid, TerminalGridModel, TerminalGridPoint};
@@ -2080,6 +2105,84 @@ fn focus_after_a_replacement_reaches_into_a_wrapper_node() {
         "the ref sits on the wrapper"
     );
     assert_eq!(app.focused_widget(), field);
+}
+
+/// A replacement is not an outside click: the focus moves it makes must not
+/// dismiss an open dropdown. Dismissal fires the host's `on_toggle`, which
+/// would flip state the host already settled for this replacement.
+#[test]
+fn a_subtree_replacement_does_not_dismiss_an_open_dropdown() {
+    use schnellui::a11y::StateFlags;
+    use schnellui::scene::ComponentRef;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use widgets::{Button, Column, ComboBox, ComboBoxOption, View};
+
+    let region = ComponentRef::new();
+    let picker = ComponentRef::new();
+    let toggles = Rc::new(Cell::new(0));
+    let combo = {
+        let toggles = toggles.clone();
+        move || {
+            ComboBox::new("")
+                .label("Font")
+                .open(true)
+                .on_toggle({
+                    let toggles = toggles.clone();
+                    move || toggles.set(toggles.get() + 1)
+                })
+                .option(ComboBoxOption::new("Mono"))
+                .with_ref(picker)
+        }
+    };
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("Outside"))
+            .child(Column::new().child(combo()).with_ref(region)),
+        240,
+        160,
+    );
+    app.frame();
+    let field = app
+        .find_widget(Role::ComboBox, Some("Font"))
+        .expect("combo");
+    // Focus inside the branch, so the replacement moves it to the combo's
+    // counterpart, and `with_focus_after` then to the combo again.
+    let _ = app.focus(Some(field));
+
+    app.apply_subtree_replacement(
+        SubtreeReplacement::new(region, Column::new().child(combo()), "again")
+            .with_focus_after(picker),
+    )
+    .unwrap();
+    app.frame();
+
+    assert_eq!(toggles.get(), 0, "the replacement dismissed the dropdown");
+    // Focus continuity onto a control outside the dropdown must not dismiss
+    // it either: the heir of a displaced focus can be anywhere.
+    let outside = app
+        .find_widget(Role::Button, Some("Outside"))
+        .expect("button");
+    let _ = app.focus_after_replacement(outside, true);
+    assert_eq!(toggles.get(), 0, "focus continuity dismissed the dropdown");
+    let field = app
+        .find_widget(Role::ComboBox, Some("Font"))
+        .expect("combo");
+    let a11y = app.scene().a11y(field).expect("combo a11y");
+    assert!(
+        StateFlags(a11y.state).contains(StateFlags::EXPANDED),
+        "the dropdown closed"
+    );
+    // A host that moves focus itself is no replacement. `focus_without_ring`
+    // acts as a pointer press would, and a press outside dismisses.
+    let _ = app.focus(Some(field));
+    assert_eq!(toggles.get(), 0);
+    let _ = app.focus_without_ring(Some(outside));
+    assert_eq!(
+        toggles.get(),
+        1,
+        "focus_without_ring kept the dropdown open"
+    );
 }
 
 /// A docked region is no dialog: Escape with focus inside it moves focus back to the control

@@ -4,12 +4,24 @@ impl App {
     /// Moves keyboard focus to `target` (or clears it with `None`) — the same
     /// exclusive [`StateFlags::FOCUSED`](a11y::StateFlags::FOCUSED) path an inbound
     /// AccessKit `Focus`/`Blur` action and the windowed Tab/click take (SOUL §6.3).
-    /// Returns `true` if focus actually moved (⇒ redraw).
+    /// An open dropdown outside `target` is dismissed, and so is an open
+    /// context menu unless `target` is one of its rows. Returns `true` if
+    /// focus actually moved (⇒ redraw).
     pub fn focus(&mut self, target: Option<scene::WidgetId>) -> bool {
+        self.focus_with(target, true)
+    }
+
+    /// [`Self::focus`] with the dismissal of open dropdowns on or off. Focus
+    /// continuity across a structural change runs it off: a replacement is
+    /// not an outside click, and dismissing there fires the host's
+    /// `on_toggle`, which flips state the host already settled for that change
+    /// (see `App::replace_subtree_boxed`). A context menu has no such callback
+    /// and is dismissed either way.
+    fn focus_with(&mut self, target: Option<scene::WidgetId>, dismiss_dropdowns: bool) -> bool {
         self.keyboard_modality = true;
         let previous = self.focused_input_semantics();
-        let dismissed =
-            schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
+        let dismissed = dismiss_dropdowns
+            && schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
         // Focus walking the rows of an open menu keeps it open.
         let context_dismissed =
             !target.is_some_and(|id| {
@@ -667,7 +679,7 @@ impl App {
     /// The first navigation key shows the ring.
     pub fn focus_without_ring(&mut self, target: Option<scene::WidgetId>) -> bool {
         match target {
-            Some(target) => self.focus_after_replacement(target, false),
+            Some(target) => self.focus_ringed(target, false, true),
             None => self.focus(None),
         }
     }
@@ -682,8 +694,19 @@ impl App {
         target: scene::WidgetId,
         ring_visible: bool,
     ) -> bool {
+        self.focus_ringed(target, ring_visible, false)
+    }
+
+    /// Focuses `target` with the ring shown only when `ring_visible`, and
+    /// leaves the keyboard modality as it was.
+    fn focus_ringed(
+        &mut self,
+        target: scene::WidgetId,
+        ring_visible: bool,
+        dismiss_dropdowns: bool,
+    ) -> bool {
         let modality = self.keyboard_modality;
-        let changed = self.focus(Some(target));
+        let changed = self.focus_with(Some(target), dismiss_dropdowns);
         self.keyboard_modality = modality;
         changed
             | schnellui::widgets::set_focus_ring_visible(

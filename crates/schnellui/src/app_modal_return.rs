@@ -79,15 +79,17 @@ impl App {
                 && crate::app_inherit::takes_focus(&self.scene, last))
             .then_some(last)
         });
-        let stops = |id: &WidgetId| {
-            crate::app_inherit::takes_focus(&self.scene, *id)
-                && crate::app_inherit::is_tab_stop(&self.scene, *id)
-        };
         // The first stop that is no window's control (the one that holds the page); with
         // every control inside a window (an open modal limits the tab order to it), the
         // first of those.
         remembered.or_else(|| {
             schnellui::a11y::with_tab_order(&self.scene, |order| {
+                // The order is borrowed here, so the stop test reads this
+                // slice instead of asking the cache again.
+                let stops = |id: &WidgetId| {
+                    crate::app_inherit::takes_focus(&self.scene, *id)
+                        && crate::app_inherit::is_tab_stop_in(&self.scene, order, *id)
+                };
                 order
                     .iter()
                     .filter(|id| stops(id))

@@ -64,10 +64,16 @@ fn kept_place(
 pub(crate) fn is_tab_stop(scene: &Scene, id: WidgetId) -> bool {
     match crate::app_interaction::roving_group(scene, id) {
         None => true,
-        Some(group) => schnellui::a11y::with_tab_order(scene, |order| {
-            crate::app_interaction::roving_entry(scene, order, group) == Some(id)
-        }),
+        Some(_) => schnellui::a11y::with_tab_order(scene, |order| is_tab_stop_in(scene, order, id)),
     }
+}
+
+/// [`is_tab_stop`] for a caller that already holds `scene`'s tab order as
+/// `order`. Inside `with_tab_order` this is the one to call: the cache is
+/// borrowed there, and reading it again panics.
+pub(crate) fn is_tab_stop_in(scene: &Scene, order: &[WidgetId], id: WidgetId) -> bool {
+    crate::app_interaction::roving_group(scene, id)
+        .is_none_or(|group| crate::app_interaction::roving_entry(scene, order, group) == Some(id))
 }
 
 /// The counterpart in `replacement` of the control nearest to `focused` in
