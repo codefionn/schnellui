@@ -1115,7 +1115,7 @@ impl WindowedApp {
         tail
     }
 
-    fn on_resized(&mut self, size: PhysicalSize<u32>) -> EventTail {
+    pub(super) fn on_resized(&mut self, size: PhysicalSize<u32>) -> EventTail {
         let _ = self.app.dismiss_context_menu();
         let (pw, ph) = (size.width.max(1), size.height.max(1));
         if let Some(r) = &mut self.renderer {

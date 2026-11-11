@@ -125,6 +125,9 @@ schnellui-debug press --button right         # press where the pointer is
 schnellui-debug release 200 80               # move, then release left
 schnellui-debug drag 10 80 300 80 --steps 12 # press, 12 moves, release
 schnellui-debug leave                        # pointer leaves the window
+schnellui-debug wheel 120 80 0 -3             # 3 notches down at 120,80
+schnellui-debug resize 800 600               # headless-windowed surface, logical px
+schnellui-debug ime commit '日本'             # also: ime preedit TEXT --cursor A,B, ime cancel
 ```
 
 `press` and `release` take an optional `X Y` (both or neither) and

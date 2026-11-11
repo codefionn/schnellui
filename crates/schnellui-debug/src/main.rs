@@ -129,6 +129,26 @@ enum Command {
     },
     /// Tell the app the pointer left its window.
     Leave,
+    /// Turn the wheel at X Y, through the window's own wheel handler. A negative DY
+    /// scrolls the content up (reveals what is below), as a wheel turned down does.
+    #[command(allow_negative_numbers = true)]
+    Wheel {
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+        /// DX and DY are logical pixels, as a trackpad reports them, not wheel notches.
+        #[arg(long)]
+        pixels: bool,
+    },
+    /// Resize the headless-windowed surface to a logical WIDTH x HEIGHT, keeping
+    /// open dialogs, focus and hover, as a window-manager resize does.
+    Resize { width: f32, height: f32 },
+    /// Send an input-method event through the window's own IME handler.
+    Ime {
+        #[command(subcommand)]
+        action: ImeAction,
+    },
     /// Send one framework-neutral key press.
     Key {
         key: String,
@@ -156,6 +176,33 @@ enum Command {
     GlobalMenuItem { id: String },
     /// Ask the application to close cleanly.
     Quit,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImeAction {
+    /// Show composition text that is not committed yet.
+    Preedit {
+        text: String,
+        /// Caret or selection inside TEXT as a byte range A,B on character boundaries.
+        #[arg(long, value_name = "A,B", value_parser = parse_cursor_range)]
+        cursor: Option<(usize, usize)>,
+    },
+    /// Commit text, as the input method does when the user accepts a composition.
+    Commit { text: String },
+    /// Clear the composition (an empty preedit), then turn the input method off.
+    Cancel,
+}
+
+fn parse_cursor_range(text: &str) -> Result<(usize, usize), String> {
+    let (start, end) = text
+        .split_once(',')
+        .ok_or_else(|| "expected two byte offsets, A,B".to_string())?;
+    let parse = |part: &str| {
+        part.trim()
+            .parse::<usize>()
+            .map_err(|_| format!("{part:?} is not a byte offset"))
+    };
+    Ok((parse(start)?, parse(end)?))
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -386,6 +433,45 @@ fn run_connected(
             "POST",
             "/v1/pointer/leave",
             Some("{}".into()),
+            Output::Stdout,
+        ),
+        Command::Wheel {
+            x,
+            y,
+            dx,
+            dy,
+            pixels,
+        } => (
+            "POST",
+            "/v1/pointer/wheel",
+            Some(
+                json!({
+                    "x": x, "y": y, "dx": dx, "dy": dy,
+                    "unit": if pixels { "pixels" } else { "lines" },
+                })
+                .to_string(),
+            ),
+            Output::Stdout,
+        ),
+        Command::Resize { width, height } => (
+            "POST",
+            "/v1/resize",
+            Some(json!({ "width": width, "height": height }).to_string()),
+            Output::Stdout,
+        ),
+        Command::Ime { action } => (
+            "POST",
+            "/v1/ime",
+            Some(
+                match action {
+                    ImeAction::Preedit { text, cursor } => {
+                        json!({ "action": "preedit", "text": text, "cursor": cursor })
+                    }
+                    ImeAction::Commit { text } => json!({ "action": "commit", "text": text }),
+                    ImeAction::Cancel => json!({ "action": "cancel" }),
+                }
+                .to_string(),
+            ),
             Output::Stdout,
         ),
         Command::Key {
@@ -1505,6 +1591,42 @@ mod tests {
             Command::Drag { steps: Some(5), .. }
         ));
         assert!(matches!(parse("leave").command, Command::Leave));
+        assert!(matches!(
+            parse("wheel 10 20 0 -3").command,
+            Command::Wheel { dy, pixels: false, .. } if dy == -3.0
+        ));
+        assert!(matches!(
+            parse("wheel 10 20 0 -48 --pixels").command,
+            Command::Wheel { pixels: true, .. }
+        ));
+        assert!(matches!(
+            parse("resize 800 600").command,
+            Command::Resize { width, height } if width == 800.0 && height == 600.0
+        ));
+        assert!(matches!(
+            parse("ime preedit にほん --cursor 0,9").command,
+            Command::Ime {
+                action: ImeAction::Preedit {
+                    cursor: Some((0, 9)),
+                    ..
+                }
+            }
+        ));
+        assert!(matches!(
+            parse("ime commit 日本").command,
+            Command::Ime {
+                action: ImeAction::Commit { .. }
+            }
+        ));
+        assert!(matches!(
+            parse("ime cancel").command,
+            Command::Ime {
+                action: ImeAction::Cancel
+            }
+        ));
+        assert!(
+            ScriptInvocation::try_parse_from(["ime", "preedit", "x", "--cursor", "1"]).is_err()
+        );
         assert!(matches!(
             parse("global-shortcuts").command,
             Command::GlobalShortcuts

@@ -9,7 +9,7 @@ use accesskit_winit::{
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
@@ -30,7 +30,8 @@ use super::{
 };
 use crate::debug_server::{
     DebugAction, DebugButton, DebugCommand, DebugDrag, DebugGlobalMenuItem, DebugGlobalShortcut,
-    DebugKey, DebugPoint, DebugPress, DebugReply, DebugRequest, DebugServer, DebugTarget,
+    DebugIme, DebugKey, DebugPoint, DebugPress, DebugReply, DebugRequest, DebugResize, DebugServer,
+    DebugTarget, DebugWheel, DebugWheelUnit,
 };
 use crate::interaction_debug::InteractionRecorder;
 use crate::{Remount, SubtreeReplacement, WindowUpdate};

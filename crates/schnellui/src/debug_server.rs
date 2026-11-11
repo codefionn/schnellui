@@ -89,6 +89,55 @@ pub(crate) struct DebugDrag {
     pub(crate) button: DebugButton,
 }
 
+/// Whether a wheel delta counts notches or pixels, as a window reports them.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DebugWheelUnit {
+    /// Notches of the wheel: each scrolls one step.
+    #[default]
+    Lines,
+    /// Logical pixels, as a trackpad reports them (scaled to physical pixels
+    /// before the window's handler sees them).
+    Pixels,
+}
+
+/// A wheel turn at `x, y`: the pointer moves there first, as a real one would
+/// already be. Like the window, a negative `dy` scrolls the content up.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugWheel {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    #[serde(default)]
+    pub(crate) dx: f32,
+    #[serde(default)]
+    pub(crate) dy: f32,
+    #[serde(default)]
+    pub(crate) unit: DebugWheelUnit,
+}
+
+/// Resizes the surface to a logical size.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DebugResize {
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}
+
+/// One input-method event. `cursor` is a byte range into the preedit text.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub(crate) enum DebugIme {
+    Preedit {
+        text: String,
+        #[serde(default)]
+        cursor: Option<(usize, usize)>,
+    },
+    Commit {
+        text: String,
+    },
+    /// An empty preedit, then the input method turning off.
+    Cancel,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct DebugKey {
     pub(crate) key: String,
@@ -127,6 +176,9 @@ pub(crate) enum DebugCommand {
     PointerRelease(DebugPress),
     PointerDrag(DebugDrag),
     PointerLeave,
+    PointerWheel(DebugWheel),
+    Resize(DebugResize),
+    Ime(DebugIme),
     Key(DebugKey),
     GlobalShortcuts,
     GlobalShortcutTrigger(DebugGlobalShortcut),
@@ -477,6 +529,9 @@ fn handle_connection(
                     "pointer_release": "POST /v1/pointer/release",
                     "pointer_drag": "POST /v1/pointer/drag",
                     "pointer_leave": "POST /v1/pointer/leave",
+                    "pointer_wheel": "POST /v1/pointer/wheel",
+                    "resize": "POST /v1/resize",
+                    "ime": "POST /v1/ime",
                     "key": "POST /v1/key",
                     "quit": "POST /v1/quit"
                 }
@@ -594,6 +649,9 @@ fn route_request(request: HttpRequest) -> Result<Option<DebugCommand>, DebugRepl
         ("POST", "/v1/pointer/release") => DebugCommand::PointerRelease(parse_json(&request.body)?),
         ("POST", "/v1/pointer/drag") => DebugCommand::PointerDrag(parse_json(&request.body)?),
         ("POST", "/v1/pointer/leave") => DebugCommand::PointerLeave,
+        ("POST", "/v1/pointer/wheel") => DebugCommand::PointerWheel(parse_json(&request.body)?),
+        ("POST", "/v1/resize") => DebugCommand::Resize(parse_json(&request.body)?),
+        ("POST", "/v1/ime") => DebugCommand::Ime(parse_json(&request.body)?),
         ("POST", "/v1/key") => DebugCommand::Key(parse_json(&request.body)?),
         ("GET", "/v1/global-shortcuts") => DebugCommand::GlobalShortcuts,
         ("POST", "/v1/global-shortcut/trigger") => {
@@ -673,6 +731,47 @@ mod tests {
         };
         assert_eq!(request.id, "toggle");
         assert_eq!(request.phase.as_deref(), Some("press"));
+    }
+
+    #[test]
+    fn routes_wheel_resize_and_ime_requests() {
+        let post = |path: &str, body: &str| HttpRequest {
+            method: "POST".into(),
+            path: path.into(),
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        };
+        let Some(DebugCommand::PointerWheel(wheel)) = route_request(post(
+            "/v1/pointer/wheel",
+            r#"{"x":1,"y":2,"dy":-3,"unit":"pixels"}"#,
+        ))
+        .unwrap() else {
+            panic!("wrong command");
+        };
+        assert_eq!(
+            (wheel.x, wheel.y, wheel.dx, wheel.dy),
+            (1.0, 2.0, 0.0, -3.0)
+        );
+        assert_eq!(wheel.unit, DebugWheelUnit::Pixels);
+        let Some(DebugCommand::Resize(resize)) =
+            route_request(post("/v1/resize", r#"{"width":800,"height":600}"#)).unwrap()
+        else {
+            panic!("wrong command");
+        };
+        assert_eq!((resize.width, resize.height), (800.0, 600.0));
+        let Some(DebugCommand::Ime(DebugIme::Preedit { text, cursor })) = route_request(post(
+            "/v1/ime",
+            r#"{"action":"preedit","text":"ab","cursor":[0,1]}"#,
+        ))
+        .unwrap() else {
+            panic!("wrong command");
+        };
+        assert_eq!((text.as_str(), cursor), ("ab", Some((0, 1))));
+        assert!(matches!(
+            route_request(post("/v1/ime", r#"{"action":"cancel"}"#)).unwrap(),
+            Some(DebugCommand::Ime(DebugIme::Cancel))
+        ));
+        assert!(route_request(post("/v1/ime", r#"{"action":"nope"}"#)).is_err());
     }
 
     #[test]

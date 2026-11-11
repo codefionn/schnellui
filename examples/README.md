@@ -100,6 +100,10 @@ Pointer input goes through the window's own handlers. Besides `move X Y` and
 `leave` send a press, a release, a whole drag or a pointer exit, so slider
 scrubs, text selection, dialog moves and press-leave-release orders can be
 checked live. Each prints the status JSON `move` prints.
+`wheel X Y DX DY [--pixels]` turns the wheel at a point (a negative DY scrolls
+content up), `resize WIDTH HEIGHT` resizes the surface live, keeping dialogs and
+focus, and `ime preedit TEXT [--cursor A,B]`, `ime commit TEXT` and `ime cancel`
+send input-method events, all through the window's own handlers.
 
 The viewport stays at `--width` and `--height`; `--scale` sets PNG pixel size.
 The process exits on `schnellui-debug quit` or `SCHNELLUI_AUTOCLOSE_MS`.

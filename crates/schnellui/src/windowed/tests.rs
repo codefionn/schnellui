@@ -2963,3 +2963,368 @@ mod debug_input_trace {
         assert!(host.interaction_trace.is_none());
     }
 }
+
+/// `wheel`, `resize` and `ime` run the window's own event handlers, so each
+/// leaves the app where the equivalent window event would.
+mod debug_wheel_resize_ime {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use serde_json::Value;
+    use winit::dpi::{PhysicalPosition, PhysicalSize};
+    use winit::event::{Ime, MouseScrollDelta};
+
+    use super::super::WindowedApp;
+    use super::windowed_host;
+    use crate::a11y::Role;
+    use crate::debug_server::{DebugCommand, DebugIme, DebugResize, DebugWheel, DebugWheelUnit};
+    use crate::scene::{Point, WidgetKind};
+    use crate::widgets::probes::hover_disagrees;
+    use crate::widgets::{Button, Column, Dialog, List, ListItem, Scroll, Stack, TextInput};
+    use crate::{theme, App, FocusedInputEvent, FocusedInputResult, ThemeMode};
+
+    fn rows(scale: f32) -> WindowedApp {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                let mut list = List::new();
+                for i in 0..20 {
+                    list = list.child(ListItem::new(format!("Row {i}")));
+                }
+                Scroll::new().size(240.0, 100.0).child(list)
+            },
+            300,
+            200,
+            scale,
+        );
+        app.frame();
+        windowed_host(app, None)
+    }
+
+    fn run(host: &mut WindowedApp, command: DebugCommand) -> Value {
+        let reply = host.handle_debug_command(None, command);
+        assert_eq!(
+            reply.status,
+            200,
+            "{}",
+            String::from_utf8_lossy(&reply.body)
+        );
+        serde_json::from_slice(&reply.body).unwrap()
+    }
+
+    fn refuse(host: &mut WindowedApp, command: DebugCommand) {
+        assert_eq!(host.handle_debug_command(None, command).status, 422);
+    }
+
+    fn scroll_offset(host: &WindowedApp) -> Point {
+        let scene = host.app.scene();
+        let id = scene
+            .preorder()
+            .find(|id| scene.node(*id).map(|n| n.kind) == Some(WidgetKind::Scroll))
+            .unwrap();
+        scene.scroll_offset(id)
+    }
+
+    fn row_centre(host: &WindowedApp, name: &str) -> (f32, f32) {
+        let row = host.app.find_widget(Role::ListItem, Some(name)).unwrap();
+        let r = host.app.scene().layout(row).unwrap().rect;
+        (r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    /// What a real window does for a wheel at a point: the pointer arrives,
+    /// then the wheel.
+    fn real_wheel(host: &mut WindowedApp, x: f32, y: f32, delta: MouseScrollDelta) {
+        let scale = f64::from(host.app.scale());
+        host.on_cursor_moved(PhysicalPosition::new(
+            f64::from(x) * scale,
+            f64::from(y) * scale,
+        ));
+        host.on_redraw_requested();
+        host.on_mouse_wheel(delta);
+        host.on_redraw_requested();
+    }
+
+    fn wheel(x: f32, y: f32, dx: f32, dy: f32, unit: DebugWheelUnit) -> DebugCommand {
+        DebugCommand::PointerWheel(DebugWheel { x, y, dx, dy, unit })
+    }
+
+    #[test]
+    fn a_line_wheel_scrolls_like_a_window_wheel_event() {
+        let (mut debug, mut real) = (rows(1.0), rows(1.0));
+        let (x, y) = row_centre(&debug, "Row 1");
+        run(&mut debug, wheel(x, y, 0.0, -2.0, DebugWheelUnit::Lines));
+        real_wheel(&mut real, x, y, MouseScrollDelta::LineDelta(0.0, -2.0));
+        let moved = scroll_offset(&debug);
+        assert!(moved.y > 0.0, "the wheel scrolled the list");
+        assert_eq!(moved, scroll_offset(&real));
+        assert_eq!(
+            debug.debug_status()["hit_path"],
+            real.debug_status()["hit_path"]
+        );
+    }
+
+    #[test]
+    fn a_pixel_wheel_is_logical_px_and_follows_the_scale() {
+        let (mut debug, mut real) = (rows(2.0), rows(2.0));
+        let (x, y) = row_centre(&debug, "Row 1");
+        run(&mut debug, wheel(x, y, 0.0, -48.0, DebugWheelUnit::Pixels));
+        // Winit reports physical pixels: 48 logical at scale 2 is 96.
+        real_wheel(
+            &mut real,
+            x,
+            y,
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, -96.0)),
+        );
+        assert_eq!(scroll_offset(&debug).y, 48.0);
+        assert_eq!(scroll_offset(&debug), scroll_offset(&real));
+    }
+
+    #[test]
+    fn hover_follows_the_row_a_debug_wheel_brought_under_the_pointer() {
+        let mut host = rows(1.0);
+        let (x, y) = row_centre(&host, "Row 1");
+        run(&mut host, wheel(x, y, 0.0, -2.0, DebugWheelUnit::Lines));
+        let pointer = Point { x, y };
+        assert_eq!(
+            hover_disagrees(&host.app.widgets, host.app.scene(), pointer, false),
+            None
+        );
+        assert_eq!(host.debug_status()["cursor_inside"], true);
+    }
+
+    #[test]
+    fn a_wheel_outside_the_viewport_or_with_a_bad_delta_is_refused() {
+        let mut host = rows(1.0);
+        refuse(
+            &mut host,
+            wheel(5000.0, 5.0, 0.0, -1.0, DebugWheelUnit::Lines),
+        );
+        refuse(
+            &mut host,
+            wheel(5.0, 5.0, f32::NAN, -1.0, DebugWheelUnit::Lines),
+        );
+        assert_eq!(scroll_offset(&host).y, 0.0);
+    }
+
+    type Seen = Rc<RefCell<Vec<String>>>;
+
+    /// A focused raw surface that records the events it is sent.
+    fn surface() -> (WindowedApp, Seen) {
+        let seen: Seen = Rc::default();
+        let log = seen.clone();
+        let mut app = App::mount_with_size(
+            Column::new()
+                .child(Button::new("Surface"))
+                .child(TextInput::new("").label("Name")),
+            300,
+            200,
+        );
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Surface")).unwrap();
+        app.focus(Some(button));
+        app.register_focused_input_handler(Role::Button, Some("Surface"), move |event| {
+            if let FocusedInputEvent::Ime(_) | FocusedInputEvent::Pointer(_) = &event {
+                log.borrow_mut().push(format!("{event:?}"));
+            }
+            FocusedInputResult::Handled
+        });
+        (windowed_host(app, None), seen)
+    }
+
+    #[test]
+    fn a_wheel_reaches_a_raw_surface_as_the_window_sends_it() {
+        let ((mut debug, debug_seen), (mut real, real_seen)) = (surface(), surface());
+        run(
+            &mut debug,
+            wheel(20.0, 15.0, 1.0, -3.0, DebugWheelUnit::Lines),
+        );
+        real_wheel(
+            &mut real,
+            20.0,
+            15.0,
+            MouseScrollDelta::LineDelta(1.0, -3.0),
+        );
+        let wheels = |seen: &Seen| -> Vec<String> {
+            seen.borrow()
+                .iter()
+                .filter(|e| e.contains("Wheel"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(wheels(&debug_seen).len(), 1);
+        assert_eq!(wheels(&debug_seen), wheels(&real_seen));
+    }
+
+    #[test]
+    fn ime_preedit_commit_and_cancel_reach_the_surface_like_window_ime_events() {
+        let ((mut debug, debug_seen), (mut real, real_seen)) = (surface(), surface());
+        run(
+            &mut debug,
+            DebugCommand::Ime(DebugIme::Preedit {
+                text: "にほん".into(),
+                cursor: Some((0, 9)),
+            }),
+        );
+        real.on_ime(Ime::Preedit("にほん".into(), Some((0, 9))));
+        run(
+            &mut debug,
+            DebugCommand::Ime(DebugIme::Commit {
+                text: "日本".into(),
+            }),
+        );
+        real.on_ime(Ime::Commit("日本".into()));
+        run(&mut debug, DebugCommand::Ime(DebugIme::Cancel));
+        real.on_ime(Ime::Preedit(String::new(), None));
+        real.on_ime(Ime::Disabled);
+        let events = debug_seen.borrow().clone();
+        assert_eq!(events.len(), 4, "{events:?}");
+        assert_eq!(events, *real_seen.borrow());
+    }
+
+    #[test]
+    fn an_ime_commit_types_into_a_focused_field_like_a_window_commit() {
+        let make = || {
+            let (mut host, seen) = surface();
+            let field = host.app.find_widget(Role::TextInput, Some("Name")).unwrap();
+            host.app.focus(Some(field));
+            host.sync_ime();
+            (host, seen)
+        };
+        let ((mut debug, _), (mut real, _)) = (make(), make());
+        run(
+            &mut debug,
+            DebugCommand::Ime(DebugIme::Preedit {
+                text: "にほん".into(),
+                cursor: None,
+            }),
+        );
+        let value = |host: &WindowedApp| {
+            let field = host.app.find_widget(Role::TextInput, Some("Name")).unwrap();
+            host.app.scene().a11y(field).and_then(|a| a.value.clone())
+        };
+        assert_eq!(
+            value(&debug),
+            None.or(value(&real)),
+            "a preedit types nothing"
+        );
+        run(
+            &mut debug,
+            DebugCommand::Ime(DebugIme::Commit {
+                text: "日本".into(),
+            }),
+        );
+        real.on_ime(Ime::Commit("日本".into()));
+        assert_eq!(value(&debug).as_deref(), Some("日本"));
+        assert_eq!(value(&debug), value(&real));
+    }
+
+    #[test]
+    fn a_preedit_cursor_off_a_character_boundary_is_refused() {
+        let (mut host, seen) = surface();
+        refuse(
+            &mut host,
+            DebugCommand::Ime(DebugIme::Preedit {
+                text: "にほん".into(),
+                cursor: Some((1, 9)),
+            }),
+        );
+        refuse(
+            &mut host,
+            DebugCommand::Ime(DebugIme::Preedit {
+                text: "ab".into(),
+                cursor: Some((0, 9)),
+            }),
+        );
+        assert!(seen.borrow().is_empty());
+    }
+
+    fn dialog_host(scale: f32) -> WindowedApp {
+        let mut app = App::mount_themed_with_size_scaled(
+            ThemeMode::Fixed(theme::LIGHT),
+            || {
+                Stack::new().fill().child(
+                    Dialog::new("Approval")
+                        .size(240.0, 160.0)
+                        .child(TextInput::new("hi").label("Name")),
+                )
+            },
+            400,
+            300,
+            scale,
+        );
+        app.frame();
+        let mut host = windowed_host(app, None);
+        let field = host.app.find_widget(Role::TextInput, Some("Name")).unwrap();
+        host.app.focus(Some(field));
+        host
+    }
+
+    #[test]
+    fn resize_runs_the_window_resize_path_and_keeps_live_state() {
+        let (mut debug, mut real) = (dialog_host(1.0), dialog_host(1.0));
+        let r = run(
+            &mut debug,
+            DebugCommand::Resize(DebugResize {
+                width: 520.0,
+                height: 380.0,
+            }),
+        );
+        assert_eq!(r["status"]["viewport"]["width"], 520.0);
+        assert_eq!(r["status"]["viewport"]["height"], 380.0);
+        real.on_resized(PhysicalSize::new(520, 380));
+        real.on_redraw_requested();
+        let (d, w) = (debug.debug_status(), real.debug_status());
+        assert_eq!(d["viewport"], w["viewport"]);
+        assert_eq!(d["focused"], w["focused"]);
+        assert!(
+            debug
+                .app
+                .find_widget(Role::Dialog, Some("Approval"))
+                .is_some(),
+            "the dialog stays open"
+        );
+        let field = debug
+            .app
+            .find_widget(Role::TextInput, Some("Name"))
+            .unwrap();
+        assert_eq!(debug.app.focused_widget(), Some(field), "focus is kept");
+        let dialog = |h: &WindowedApp| {
+            let id = h.app.find_widget(Role::Dialog, Some("Approval")).unwrap();
+            h.app.scene().layout(id).unwrap().rect
+        };
+        assert_eq!(dialog(&debug), dialog(&real));
+    }
+
+    #[test]
+    fn resize_takes_logical_size_and_converts_by_the_scale() {
+        let mut host = dialog_host(2.0);
+        let r = run(
+            &mut host,
+            DebugCommand::Resize(DebugResize {
+                width: 300.0,
+                height: 200.0,
+            }),
+        );
+        assert_eq!(r["status"]["viewport"]["width"], 300.0);
+        assert_eq!(r["status"]["viewport"]["height"], 200.0);
+        assert_eq!(r["status"]["scale"], 2.0);
+    }
+
+    #[test]
+    fn resize_refuses_empty_non_finite_and_huge_sizes() {
+        let mut host = dialog_host(1.0);
+        for (width, height) in [
+            (0.0, 100.0),
+            (100.0, -1.0),
+            (f32::NAN, 100.0),
+            (100.0, f32::INFINITY),
+            (1.0e6, 100.0),
+        ] {
+            refuse(
+                &mut host,
+                DebugCommand::Resize(DebugResize { width, height }),
+            );
+        }
+        assert_eq!(host.debug_status()["viewport"]["width"], 400.0);
+    }
+}

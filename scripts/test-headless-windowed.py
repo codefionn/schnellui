@@ -136,6 +136,15 @@ def run(binaries, directory):
         counter.command("wait", "--role", "status", "--value", "4")
         counter.screenshot("counter.png", (400, 200))
         other.screenshot("scaled-counter.png", (800, 400))
+        # Wheel, resize and IME go through the window's own handlers too.
+        wheeled = counter.command("wheel", str(x), str(y), "0", "-3")
+        assert wheeled["status"]["cursor_inside"] is True, wheeled
+        resized = counter.command("resize", "300", "180")
+        assert resized["status"]["viewport"] == {"width": 300.0, "height": 180.0}, resized
+        counter.command("ime", "preedit", "ab", "--cursor", "0,1")
+        counter.command("ime", "cancel")
+        counter.command("resize", "400", "200")
+        counter.screenshot("counter-resized-back.png", (400, 200))
 
         todo = Session(binaries, directory, "todo", "todo", "day_plan")
         sessions.append(todo)

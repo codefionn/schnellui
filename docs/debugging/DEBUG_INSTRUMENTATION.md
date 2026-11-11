@@ -57,6 +57,12 @@ cargo run -p schnellui-debug -- press 120 80 --button left
 cargo run -p schnellui-debug -- release
 cargo run -p schnellui-debug -- drag 10 80 300 80 --steps 12
 cargo run -p schnellui-debug -- leave
+cargo run -p schnellui-debug -- wheel 120 80 0 -3          # 3 notches down at 120,80 (negative dy scrolls content up)
+cargo run -p schnellui-debug -- wheel 120 80 0 -48 --pixels # logical px, as a trackpad reports them
+cargo run -p schnellui-debug -- resize 800 600              # headless-windowed only: logical size
+cargo run -p schnellui-debug -- ime preedit 'にほん' --cursor 0,9
+cargo run -p schnellui-debug -- ime commit '日本'
+cargo run -p schnellui-debug -- ime cancel                  # empty preedit, then the IME turns off
 cargo run -p schnellui-debug -- key tab
 cargo run -p schnellui-debug -- type 'typed into the focused input'
 cargo run -p schnellui-debug -- key text --text x --ctrl   # Ctrl+X: cuts, as a keyboard would
@@ -101,7 +107,18 @@ page can reach the endpoint.
 The endpoints are `GET /v1/status`, `GET /v1/tree`, `GET /v1/snapshot`,
 `GET /v1/screenshot`, and
 `POST /v1/action`, `/v1/pointer/move`, `/v1/pointer/click`, `/v1/pointer/press`,
-`/v1/pointer/release`, `/v1/pointer/drag`, `/v1/pointer/leave`, `/v1/key`, `/v1/quit`.
+`/v1/pointer/release`, `/v1/pointer/drag`, `/v1/pointer/leave`, `/v1/pointer/wheel`,
+`/v1/resize`, `/v1/ime`, `/v1/key`, `/v1/quit`.
+`wheel`, `resize` and `ime` run the window's own `CursorMoved` plus `MouseWheel`,
+`Resized` and `Ime` handlers. A wheel moves the pointer to its X Y first, so hover
+updates; `{"unit": "pixels"}` deltas are logical px and reach the handler as physical
+px at the window's scale. `resize` takes a logical size (1 to 16384 physical px) and
+keeps dialogs, focus and hover, but a context menu closes, as it does on a real
+resize; a native window answers 422, because the window system resizes it. `ime`
+bodies are `{"action": "preedit", "text": ..., "cursor": [a, b]}`, `{"action": "commit",
+"text": ...}` and `{"action": "cancel"}`. A preedit changes a text field not at all and
+reaches a focused raw surface; `key ime_commit --text X` still commits without going
+through the window handler.
 With an interaction trace on (`SCHNELLUI_INTERACTION_TRACE`, see
 `INTERACTION_DEBUGGING.md`), `/v1/key` (`key` and `type`) and `/v1/action` are
 recorded as `key_input` and `a11y_action` records in order with the pointer

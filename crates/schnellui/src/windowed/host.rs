@@ -1148,6 +1148,101 @@ impl WindowedApp {
         self.debug_pointer_reply()
     }
 
+    /// A wheel turn through the window's own `CursorMoved` and `MouseWheel`
+    /// handlers: hover, raw surfaces, context menus and scroll routing see
+    /// what a real wheel sends.
+    fn handle_debug_wheel(&mut self, request: &DebugWheel) -> DebugReply {
+        if !request.dx.is_finite() || !request.dy.is_finite() {
+            return DebugReply::error(422, "wheel deltas must be finite");
+        }
+        let tail = match self.debug_cursor_moved(Point {
+            x: request.x,
+            y: request.y,
+        }) {
+            Ok(tail) => tail,
+            Err(error) => return DebugReply::error(422, error),
+        };
+        self.finish_debug_pointer(tail);
+        let scale = f64::from(self.app.scale());
+        let delta = match request.unit {
+            DebugWheelUnit::Lines => MouseScrollDelta::LineDelta(request.dx, request.dy),
+            // Winit reports physical pixels.
+            DebugWheelUnit::Pixels => MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                f64::from(request.dx) * scale,
+                f64::from(request.dy) * scale,
+            )),
+        };
+        self.remount_trigger = "mouse_wheel";
+        let tail = self.on_mouse_wheel(delta);
+        self.finish_debug_pointer(tail);
+        self.debug_pointer_reply()
+    }
+
+    /// Resizes the headless surface through `WindowEvent::Resized`'s handler,
+    /// so open dialogs, focus and hover stay and the tree is laid out again.
+    fn handle_debug_resize(&mut self, request: &DebugResize) -> DebugReply {
+        const MAX_PHYSICAL: f64 = 16384.0;
+        if !self.headless {
+            return DebugReply::error(
+                422,
+                "resize drives headless-windowed sessions; a native window is resized by the window system",
+            );
+        }
+        let scale = f64::from(self.app.scale());
+        let (width, height) = (
+            f64::from(request.width) * scale,
+            f64::from(request.height) * scale,
+        );
+        if !width.is_finite()
+            || !height.is_finite()
+            || width.round() < 1.0
+            || height.round() < 1.0
+            || width.round() > MAX_PHYSICAL
+            || height.round() > MAX_PHYSICAL
+        {
+            return DebugReply::error(
+                422,
+                format!(
+                    "size {}x{} is outside 1..={MAX_PHYSICAL} physical px at scale {scale}",
+                    request.width, request.height
+                ),
+            );
+        }
+        self.remount_trigger = "resize";
+        let tail = self.on_resized(PhysicalSize::new(
+            width.round() as u32,
+            height.round() as u32,
+        ));
+        self.finish_debug_pointer(tail);
+        self.debug_pointer_reply()
+    }
+
+    /// Input-method events through the window's `Ime` handler.
+    fn handle_debug_ime(&mut self, request: &DebugIme) -> DebugReply {
+        self.remount_trigger = "ime";
+        let events = match request {
+            DebugIme::Preedit { text, cursor } => {
+                if let Some((start, end)) = *cursor {
+                    let on_boundary = |at: usize| text.is_char_boundary(at);
+                    if start > end || end > text.len() || !on_boundary(start) || !on_boundary(end) {
+                        return DebugReply::error(
+                            422,
+                            "preedit cursor must be a byte range on character boundaries of the text",
+                        );
+                    }
+                }
+                vec![Ime::Preedit(text.clone(), *cursor)]
+            }
+            DebugIme::Commit { text } => vec![Ime::Commit(text.clone())],
+            DebugIme::Cancel => vec![Ime::Preedit(String::new(), None), Ime::Disabled],
+        };
+        for event in events {
+            let tail = self.on_ime(event);
+            self.finish_debug_pointer(tail);
+        }
+        self.debug_pointer_reply()
+    }
+
     fn debug_pointer_reply(&self) -> DebugReply {
         DebugReply::json(
             200,
@@ -1549,6 +1644,9 @@ impl WindowedApp {
             }
             DebugCommand::PointerDrag(request) => self.handle_debug_drag(&request),
             DebugCommand::PointerLeave => self.handle_debug_leave(),
+            DebugCommand::PointerWheel(request) => self.handle_debug_wheel(&request),
+            DebugCommand::Resize(request) => self.handle_debug_resize(&request),
+            DebugCommand::Ime(request) => self.handle_debug_ime(&request),
             DebugCommand::PointerClick(point) => {
                 if let Err(error) = self.move_debug_pointer(&point) {
                     return DebugReply::error(422, error);
