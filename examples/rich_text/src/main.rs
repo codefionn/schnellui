@@ -362,12 +362,13 @@ fn stage(content: impl View) -> impl View {
     Stack::new().fill().child(Pad::all(24.0).child(content))
 }
 
-fn document_view(width: f32) -> impl View {
+fn document_view() -> impl View {
     let status = create_signal(NO_LINK.to_string());
     stage(
-        Scroll::new().fill().scrollbar(true).child(
+        // The column takes the viewport's width: all of it while the page fits,
+        // and what the scrollbar's gutter leaves once it overflows.
+        Scroll::new().fill().scrollbar(true).fit_width().child(
             Column::new()
-                .width(width - 48.0)
                 .gap(16.0)
                 .child(
                     RichText::new(showcase_doc())
@@ -457,12 +458,9 @@ fn preview_view(width: f32) -> impl View {
 /// reachable, not merely constructible.
 fn scenario_app(scenario: Scenario, width: u32, height: u32, scale: f32) -> App {
     match scenario {
-        Scenario::Document => {
-            App::mount_with_size_scaled(document_view(width as f32), width, height, scale)
-        }
+        Scenario::Document => App::mount_with_size_scaled(document_view(), width, height, scale),
         Scenario::Link => {
-            let mut app =
-                App::mount_with_size_scaled(document_view(width as f32), width, height, scale);
+            let mut app = App::mount_with_size_scaled(document_view(), width, height, scale);
             app.frame();
             // click the link by role + name, through the inbound AccessKit path
             if let Some(id) = app.find_widget(Role::Link, Some("hyperlink")) {
@@ -789,6 +787,31 @@ mod tests {
             .expect("the editor's value");
         let line = value.lines().nth(4).unwrap_or_default();
         assert!(line.contains('Q') && line.contains("edited"), "{value:?}");
+    }
+
+    /// The viewer's column is as wide as its page, so once the page scrolls
+    /// the column ends at the scrollbar's gutter instead of running under it
+    /// (the code block's frame reached 12px under the bar).
+    #[test]
+    fn the_document_column_ends_at_the_scrollbar_gutter() {
+        let mut app = scenario_app(Scenario::Document, 640, 400, 1.0);
+        app.frame();
+        let viewport = app
+            .find_widget(Role::ScrollView, None)
+            .expect("the page scroll");
+        let content = app.scene().node(viewport).unwrap().children[0];
+        let bar = schnellui::testing::fuzz::scrollbars(&app)
+            .into_iter()
+            .find(|bar| bar.viewport == viewport)
+            .expect("the page overflows, so it has a bar")
+            .track;
+        let column = app.scene().layout(content).unwrap().rect;
+        assert!(
+            column.right() <= bar.x + 0.5,
+            "column ends at {}, the bar starts at {}",
+            column.right(),
+            bar.x
+        );
     }
 
     /// The editor and the markup source keep their top border on the viewport

@@ -241,13 +241,14 @@ pub enum WrapMode {
     /// Never wrap: a single line regardless of `max_width` (parley
     /// `TextWrapMode::NoWrap`; no soft-break opportunities are taken).
     NoWrap,
-    /// Wrap at soft-break opportunities (spaces / word boundaries) only, never
-    /// mid-word. This is parley's default (`TextWrapMode::Wrap` +
-    /// `OverflowWrap::Normal`) and matches the legacy [`TextShaper::shape`].
+    /// Wrap at soft-break opportunities (spaces / word boundaries). A word
+    /// wider than the line breaks inside the word rather than overflowing,
+    /// parley `OverflowWrap::BreakWord` (CSS `overflow-wrap: break-word`).
     #[default]
     Word,
-    /// Word wrap plus emergency char-level breaks inside otherwise unbreakable
-    /// runs (CJK, long URLs) — parley `OverflowWrap::Anywhere`.
+    /// Like [`WrapMode::Word`], but the char-level breaks also count when the
+    /// text is sized to its minimum content width (CSS `overflow-wrap:
+    /// anywhere`, parley `OverflowWrap::Anywhere`).
     Anywhere,
 }
 

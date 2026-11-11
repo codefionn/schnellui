@@ -2404,6 +2404,67 @@ mod tests {
         assert_eq!(w.caret(), 0);
     }
 
+    /// Sequence (rich_text editor): 90 `W` typed with no space ran past the
+    /// frame. The token breaks inside the word: several rows, each inside the
+    /// text column, and Home, End, Up and Down move by those rows.
+    #[test]
+    fn an_unbroken_token_wraps_inside_the_column_and_the_caret_follows() {
+        let token = "W".repeat(90);
+        let value = format!("{token}\nab");
+        for wrap in [WrapMode::Word, WrapMode::Anywhere] {
+            let mut w = Wrapped::new(&value, wrap);
+            let rows = w.row_starts(0);
+            assert!(rows.len() >= 3, "{wrap:?}: {rows:?}");
+            let column = w.rect.width - 2.0 * AREA_PAD;
+            w.runtime.with(|rt| {
+                let rt = rt.borrow();
+                let c = &rt.areas.get(w.id).unwrap().cache;
+                let shaped = c.lines[0].shape.as_deref().unwrap();
+                for l in &shaped.lines {
+                    let g = &shaped.glyphs
+                        [l.glyph_start as usize..(l.glyph_start + l.glyph_count) as usize];
+                    let right = l.x + g.iter().map(|g| g.x_advance).sum::<f32>();
+                    assert!(
+                        right <= column + 0.01,
+                        "{wrap:?}: row to {right} > {column}"
+                    );
+                }
+            });
+            // every byte is in exactly one row, rows are in order
+            assert_eq!(rows[0], 0);
+            assert!(rows.windows(2).all(|p| p[0] < p[1]), "{rows:?}");
+            // Home and End stop at the forced break
+            w.set_caret(rows[1] + 2);
+            w.press(EditKey::Home { select: false });
+            assert_eq!(w.caret(), rows[1], "{wrap:?} Home");
+            w.set_caret(rows[1] + 2);
+            w.press(EditKey::End { select: false });
+            let end = w.caret();
+            assert!(
+                end > rows[1] + 2 && end <= rows[2],
+                "{wrap:?} End stays on row 1: {end} in {}..={}",
+                rows[1] + 2,
+                rows[2]
+            );
+            w.set_caret(*rows.last().unwrap() + 1);
+            w.press(EditKey::End { select: false });
+            assert_eq!(w.caret(), token.len(), "{wrap:?} End on the last row");
+            // Down / Up step one row at the same column
+            w.set_caret(3);
+            w.down();
+            assert_eq!(w.caret(), rows[1] + 3, "{wrap:?} Down");
+            w.up();
+            assert_eq!(w.caret(), 3, "{wrap:?} Up");
+            // the a11y value is the unbroken text
+            let a11y = w
+                .scene
+                .a11y(w.id)
+                .and_then(|a| a.value.as_deref().map(str::to_owned))
+                .unwrap();
+            assert_eq!(a11y, value, "{wrap:?} a11y value");
+        }
+    }
+
     #[test]
     fn nowrap_home_and_end_still_cover_the_whole_line() {
         let value = format!("{PARA}\nab");
@@ -3762,14 +3823,15 @@ mod tests {
         }
     }
 
-    /// An unbreakable token spills out of the box for good; caret moves and
-    /// typing elsewhere must not re-fit the focus ring each time.
+    /// An unbreakable token spills out of the box for good (a NoWrap line; a
+    /// wrapping area breaks the token instead); caret moves and typing
+    /// elsewhere must not re-fit the focus ring each time.
     #[test]
     fn steady_overflow_does_not_refit_the_ring_per_edit() {
         let runtime = crate::widgets::Runtime::new();
         let source = format!("{}\n{}", "=".repeat(160), numbered_source(200));
         let (mut scene, _l, mut text, mut atlas, id) =
-            build_area(&runtime, TextArea::new(source).wrap(WrapMode::Word));
+            build_area(&runtime, TextArea::new(source).wrap(WrapMode::NoWrap));
         let rect = Rect::new(10.0, 10.0, 170.0, 4000.0);
         scene.set_layout(
             id,

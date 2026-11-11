@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn word_wrap_breaks_at_spaces_not_midword() {
+    fn word_wrap_breaks_at_spaces_before_midword() {
         let mut shaper = TextShaper::new();
         let one = shaper.measure("wwww", 20.0, None).0;
         // Width fits exactly one word (+slack), never two.
@@ -255,14 +255,25 @@ mod tests {
             "three words wrap to three lines at spaces"
         );
 
-        // A single unbroken word never splits under Word wrap, even at tiny width.
+        // A single word wider than the line breaks inside the word, and stays
+        // whole when it fits.
         let long = shaper.shape_with(
             "wwwwwwwwww",
             &ShapeOptions::new(20.0)
                 .max_width(Some(one / 2.0))
                 .wrap(WrapMode::Word),
         );
-        assert_eq!(long.line_count(), 1, "Word wrap never breaks mid-word");
+        assert!(
+            long.line_count() > 1,
+            "Word wrap breaks a word wider than the line"
+        );
+        let fits = shaper.shape_with(
+            "wwww",
+            &ShapeOptions::new(20.0)
+                .max_width(Some(one + 4.0))
+                .wrap(WrapMode::Word),
+        );
+        assert_eq!(fits.line_count(), 1);
     }
 
     #[test]
@@ -281,18 +292,6 @@ mod tests {
             "Anywhere breaks a long unbroken string (got {} lines)",
             s.line_count()
         );
-        // The same input under Word wrap stays a single (overflowing) line.
-        let w = shaper.shape_with(
-            word,
-            &ShapeOptions::new(18.0)
-                .max_width(Some(full / 2.0))
-                .wrap(WrapMode::Word),
-        );
-        assert_eq!(
-            w.line_count(),
-            1,
-            "Word wrap keeps an unbroken run on one line"
-        );
     }
 
     #[test]
@@ -308,6 +307,38 @@ mod tests {
             );
             assert_eq!(s.line_count(), 1, "NoWrap stays one line at width {w}");
         }
+    }
+
+    /// Sequence (rich_text editor): type 90 `W` with no space into a wrapping
+    /// area. Word wrap kept the token whole, so the row ran past the column.
+    /// A word wider than the line breaks inside the word instead, as
+    /// `overflow-wrap: break-word` does, and every row fits.
+    #[test]
+    fn word_wrap_breaks_a_token_wider_than_the_line() {
+        let mut shaper = TextShaper::new();
+        let token = "W".repeat(90);
+        let width = 120.0;
+        let s = shaper.shape_with(
+            &token,
+            &ShapeOptions::new(15.0)
+                .max_width(Some(width))
+                .wrap(WrapMode::Word),
+        );
+        assert!(s.line_count() >= 3, "broke into {} rows", s.line_count());
+        assert!(s.width <= width + 0.01, "widest row {} > {width}", s.width);
+        for l in &s.lines {
+            let g = &s.glyphs[l.glyph_start as usize..(l.glyph_start + l.glyph_count) as usize];
+            let w: f32 = g.iter().map(|g| g.x_advance).sum();
+            assert!(l.x + w <= width + 0.01, "row ends at {} > {width}", l.x + w);
+        }
+        // A token that fits, and ordinary words, still wrap only at spaces.
+        let s = shaper.shape_with(
+            "ab cd",
+            &ShapeOptions::new(15.0)
+                .max_width(Some(30.0))
+                .wrap(WrapMode::Word),
+        );
+        assert_eq!(s.line_count(), 2);
     }
 
     #[test]

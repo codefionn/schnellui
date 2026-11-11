@@ -243,7 +243,7 @@ impl TextShaper {
     /// zero-alloc). `max_width` (if given) is the wrap width in logical px.
     ///
     /// Back-compat thin wrapper: equivalent to [`TextShaper::shape_with`] with
-    /// [`WrapMode::Word`] + [`TextAlign::Start`] (parley's default word wrap), so
+    /// [`WrapMode::Word`] + [`TextAlign::Start`] (word wrap, long words broken), so
     /// existing callers (e.g. the widgets/chart glyph path) keep their behavior.
     pub fn shape(&mut self, text: &str, size_px: f32, max_width: Option<f32>) -> ShapedText {
         let mut out = ShapedText::default();
@@ -310,13 +310,17 @@ impl TextShaper {
             // quantize = true rounds advances for stable, diffable output.
             let mut builder = layout_cx.ranged_builder(font_cx, text, 1.0, true);
             builder.push_default(StyleProperty::FontSize(opts.size_px));
-            // parley defaults are `TextWrapMode::Wrap` + `OverflowWrap::Normal`,
-            // i.e. `WrapMode::Word` — so that variant pushes nothing extra.
+            // `Word` is `overflow-wrap: break-word`: a word wider than the line
+            // breaks inside the word instead of running past the edge, the way
+            // a browser textarea does. `Anywhere` is the same break rule that
+            // also counts for min-content sizing.
             match opts.wrap {
                 WrapMode::NoWrap => {
                     builder.push_default(StyleProperty::TextWrapMode(TextWrapMode::NoWrap));
                 }
-                WrapMode::Word => {}
+                WrapMode::Word => {
+                    builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
+                }
                 WrapMode::Anywhere => {
                     builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::Anywhere));
                 }

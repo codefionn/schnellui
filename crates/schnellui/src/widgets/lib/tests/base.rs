@@ -1602,6 +1602,35 @@ fn wrapped_text_is_shaped_once_per_width_across_measure_and_paint() {
     assert_eq!(shapes() - before, 1, "measure + paint after a resize");
 }
 
+/// A wrapped Text holding one token wider than the line breaks inside the
+/// token: it is measured no wider than the room it was given and takes
+/// several lines.
+#[test]
+fn wrapped_text_breaks_a_token_wider_than_its_width() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, mut text, _atlas, id) =
+        build_one(runtime, Text::new("W".repeat(90)).wrap(WrapMode::Word));
+    layout.sync_tree(&scene, id);
+    layout.compute_with(
+        &mut scene,
+        id,
+        Size {
+            width: 150.0,
+            height: 600.0,
+        },
+        &mut |wid, available| measure_text(runtime, wid, available, &mut text),
+    );
+    let r = scene.layout(id).unwrap().rect;
+    assert!(r.width <= 150.01, "measured {} wide in 150", r.width);
+    let one_line = text.measure("W", 16.0, None).1;
+    assert!(
+        r.height > 2.0 * one_line,
+        "height {} is several lines",
+        r.height
+    );
+}
+
 /// In a plain (non-stretch) Column layout hands a text leaf its content width,
 /// which is narrower than the width it was measured at. Start-aligned wrapping
 /// and ellipsis text still share the one shape between measure and paint.
