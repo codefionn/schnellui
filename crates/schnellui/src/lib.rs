@@ -607,6 +607,9 @@ pub struct App {
     /// the fixed background clear color the renderer paints under the scene
     /// (SOUL §7.3). Defaults to opaque white so black text is legible.
     clear: Color,
+    /// Whether [`App::set_clear_color`] chose `clear`. A remount hook that never
+    /// chose one keeps the running app's.
+    clear_explicit: bool,
     /// injected logical clock; always 0 for deterministic shots (SOUL §7.3).
     now: u64,
     /// whether a layout pass has run at least once (so `frame` lays out on first

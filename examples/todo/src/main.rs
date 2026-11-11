@@ -839,6 +839,43 @@ mod tests {
         }
     }
 
+    /// Escape exits the window, before and after the board remounts: the
+    /// replacement the hook builds does not repeat `set_escape_exits`.
+    #[test]
+    fn escape_still_exits_after_adding_a_task() {
+        use schnellui::scene::Size;
+        use schnellui::testing::fuzz::{HeadlessHost, HostKey};
+        use schnellui::{Remount, WindowUpdate};
+        let (runtime, mut app) = scenario_app(Scenario::DayPlan, 880, 640, 1.0);
+        app.set_escape_exits(true);
+        app.frame();
+        let mut host = HeadlessHost::new(app);
+        let mut hook = remount_hook(runtime, 1.0);
+        host.set_remount(move |size: Size, _| {
+            hook(size).map(|app| WindowUpdate::Remount(Remount::new(app, "test")))
+        });
+        let input = host
+            .app()
+            .find_widget(Role::TextInput, Some("Add a next step…"))
+            .expect("the task input");
+        assert!(host.dispatch_action(&ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: to_access_id(input),
+            data: None,
+        }));
+        host.key(&HostKey::Text("Water the ferns".into()), false, false);
+        host.key(&HostKey::Enter, false, false);
+        assert_eq!(host.remounts(), 1, "adding a task remounts");
+        assert!(
+            host.app()
+                .find_widget(Role::CheckBox, Some("Complete Water the ferns"))
+                .is_some(),
+            "the task was added"
+        );
+        assert!(host.press_escape(), "Escape exits after the remount");
+    }
+
     /// At a phone width no text or control is cut at a side with nothing to
     /// scroll it in: prose wraps and fixed-width content reflows or scrolls.
     #[ignore = "the board is a fixed size that cannot reflow, and a Scroll scrolls only down: open design item #12"]

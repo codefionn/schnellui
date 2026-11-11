@@ -487,6 +487,50 @@ impl App {
         self.interaction_trace = previous.interaction_trace.take();
     }
 
+    /// Fills in the host-level settings a remount hook did not set on the app
+    /// it built, from the running app. A hook rebuilds the view, not the host
+    /// configuration, so a setting made once at startup (Escape exits, the clear
+    /// color, shortcuts, the global menu, redraw pacing, the title provider)
+    /// must not vanish with the first remount. Whatever the hook set itself
+    /// wins; shortcuts merge per chord.
+    ///
+    /// Not carried, on purpose: the test registry, focused key, input and
+    /// cursor bindings and paint bindings (scoped to mounted widgets, so the
+    /// hook registers them against its own tree), and the interaction trace
+    /// (read once when the window starts).
+    pub(crate) fn inherit_missing_host_settings(&mut self, previous: &mut App) {
+        self.escape_exits |= previous.escape_exits;
+        self.continuous_redraw |= previous.continuous_redraw;
+        if !self.clear_explicit && previous.clear_explicit {
+            self.clear = previous.clear;
+            self.clear_explicit = true;
+        }
+        if self.redraw_interval.is_none() {
+            self.redraw_interval = previous.redraw_interval;
+        }
+        if self.hot_reload.is_none() {
+            self.hot_reload = previous.hot_reload.take();
+        }
+        if self.input_observer.is_none() {
+            self.input_observer = previous.input_observer.take();
+        }
+        if self.window_title_provider.is_none() {
+            self.window_title_provider = previous.window_title_provider.take();
+        }
+        if self.navigation_handler.is_none() {
+            self.navigation_handler = previous.navigation_handler.take();
+        }
+        for (chord, handler) in std::mem::take(&mut previous.shortcut_registry) {
+            self.shortcut_registry.entry(chord).or_insert(handler);
+        }
+        if self.global_shortcuts.is_unused() {
+            self.inherit_global_shortcuts(previous);
+        }
+        if self.global_menu.is_unused() {
+            self.inherit_global_menu(previous);
+        }
+    }
+
     /// Carries user-adjusted dialog geometry across a structural remount,
     /// and a move or resize still in progress.
     ///

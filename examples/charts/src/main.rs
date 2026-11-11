@@ -483,9 +483,7 @@ fn main() -> ExitCode {
 fn resize_hook(scenario: Scenario, cli: &Cli) -> impl FnMut(schnellui::scene::Size) -> Option<App> {
     let scale = cli.scale;
     App::rebuild_on_resize((cli.width, cli.height), move |width, height| {
-        let mut app = scenario_app(scenario, width, height, scale);
-        app.set_escape_exits(true);
-        app
+        scenario_app(scenario, width, height, scale)
     })
 }
 

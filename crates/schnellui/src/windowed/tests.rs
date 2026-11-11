@@ -3328,3 +3328,169 @@ mod debug_wheel_resize_ime {
         assert_eq!(host.debug_status()["viewport"]["width"], 400.0);
     }
 }
+
+/// Host-level settings a remount hook builds its replacement without: the
+/// running app's carry over, and what the hook sets itself wins.
+mod remount_host_settings {
+    use super::windowed_host;
+    use crate::platform::{GlobalShortcut, GlobalShortcutPhase, Menu, MenuAction, MenuBar};
+    use crate::scene::{Color, Size};
+    use crate::{App, Navigation, Remount, Shortcut, WindowUpdate};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    fn plain() -> App {
+        let mut app = App::mount_with_size(crate::widgets::Button::new("Go"), 200, 80);
+        app.frame();
+        app
+    }
+
+    /// A host running `first`, whose hook delivers `replacement` once.
+    fn remounted(first: App, replacement: App) -> super::super::WindowedApp {
+        let mut slot = Some(replacement);
+        let hook: Box<dyn FnMut(Size) -> Option<WindowUpdate>> = Box::new(move |_| {
+            slot.take()
+                .map(|app| WindowUpdate::Remount(Remount::new(app, "t")))
+        });
+        let mut host = windowed_host(first, Some(hook));
+        host.poll_remount();
+        assert_eq!(host.remount_count, 1);
+        host
+    }
+
+    /// What Escape does with no overlay open: exit when the app asked.
+    fn escape_exits(host: &mut super::super::WindowedApp) -> bool {
+        matches!(
+            host.dispatch_escape_key(),
+            super::super::host::EscapeKey::Exit
+        )
+    }
+
+    #[test]
+    fn escape_exits_survives_a_hook_that_does_not_set_it() {
+        let mut first = plain();
+        first.set_escape_exits(true);
+        let mut host = remounted(first, plain());
+        assert!(escape_exits(&mut host));
+    }
+
+    #[test]
+    fn escape_stays_off_across_a_remount() {
+        let mut host = remounted(plain(), plain());
+        assert!(!escape_exits(&mut host));
+    }
+
+    #[test]
+    fn a_hook_can_turn_escape_exits_on_itself() {
+        let mut next = plain();
+        next.set_escape_exits(true);
+        let mut host = remounted(plain(), next);
+        assert!(escape_exits(&mut host));
+    }
+
+    #[test]
+    fn the_clear_color_survives_a_hook_that_does_not_set_it() {
+        let mut first = plain();
+        first.set_clear_color(Color::rgb(10, 20, 30));
+        let host = remounted(first, plain());
+        assert_eq!(host.app.clear_color(), Color::rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn a_clear_color_the_hook_sets_wins() {
+        let mut first = plain();
+        first.set_clear_color(Color::rgb(10, 20, 30));
+        let mut next = plain();
+        next.set_clear_color(Color::rgb(1, 2, 3));
+        let host = remounted(first, next);
+        assert_eq!(host.app.clear_color(), Color::rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn shortcuts_carry_and_the_hooks_own_win_per_chord() {
+        let hits = Rc::new(Cell::new((0, 0, 0)));
+        let a = Shortcut::new('a', true, false, false);
+        let b = Shortcut::new('b', true, false, false);
+        let mut first = plain();
+        let h = hits.clone();
+        first.register_shortcut(a, move || h.set((h.get().0 + 1, h.get().1, h.get().2)));
+        let h = hits.clone();
+        first.register_shortcut(b, move || h.set((h.get().0, h.get().1 + 1, h.get().2)));
+        let mut next = plain();
+        let h = hits.clone();
+        next.register_shortcut(b, move || h.set((h.get().0, h.get().1, h.get().2 + 1)));
+        let mut host = remounted(first, next);
+        assert!(host.app.dispatch_shortcut(a));
+        assert!(host.app.dispatch_shortcut(b));
+        assert_eq!(hits.get(), (1, 0, 1));
+    }
+
+    #[test]
+    fn the_navigation_handler_survives() {
+        let seen = Rc::new(Cell::new(0));
+        let mut first = plain();
+        let s = seen.clone();
+        first.register_navigation_handler(move |_| {
+            s.set(s.get() + 1);
+            true
+        });
+        let mut host = remounted(first, plain());
+        assert!(host.app.dispatch_navigation(Navigation::Back));
+        assert_eq!(seen.get(), 1);
+    }
+
+    #[test]
+    fn global_shortcuts_survive_a_hook_that_does_not_register_them() {
+        let seen = Rc::new(Cell::new(0));
+        let mut first = plain();
+        let s = seen.clone();
+        first.register_global_shortcut(GlobalShortcut::new("go", "Go"), move |phase| {
+            if phase == GlobalShortcutPhase::Pressed {
+                s.set(s.get() + 1);
+            }
+        });
+        let mut host = remounted(first, plain());
+        assert!(host
+            .app
+            .dispatch_global_shortcut("go", GlobalShortcutPhase::Pressed));
+        assert_eq!(seen.get(), 1);
+        assert_eq!(host.app.registered_global_shortcuts().count(), 1);
+    }
+
+    #[test]
+    fn the_global_menu_survives() {
+        let seen = Rc::new(Cell::new(0));
+        let mut first = plain();
+        first
+            .set_global_menu(
+                MenuBar::new().menu(Menu::new("File").item(MenuAction::new("open", "Open"))),
+            )
+            .unwrap();
+        let s = seen.clone();
+        first.on_global_menu_item("open", move || s.set(s.get() + 1));
+        let mut host = remounted(first, plain());
+        assert!(host.app.dispatch_global_menu_item("open"));
+        assert_eq!(seen.get(), 1);
+    }
+
+    #[test]
+    fn redraw_pacing_title_and_input_observer_survive() {
+        let touched = Rc::new(Cell::new(0));
+        let mut first = plain();
+        first.set_continuous_redraw(true);
+        first.set_redraw_interval(Some(Duration::from_millis(40)));
+        first.set_window_title_provider(|| "Live".to_owned());
+        let t = touched.clone();
+        first.set_input_observer(move || t.set(t.get() + 1));
+        let mut host = remounted(first, plain());
+        assert!(host.app.continuous_redraw);
+        assert_eq!(host.app.redraw_interval, Some(Duration::from_millis(40)));
+        assert_eq!(
+            host.app.window_title_provider.as_mut().map(|p| p()),
+            Some("Live".to_owned())
+        );
+        host.app.note_input();
+        assert_eq!(touched.get(), 1);
+    }
+}

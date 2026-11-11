@@ -1,3 +1,4 @@
+use super::host::EscapeKey;
 use super::*;
 
 impl ApplicationHandler<PlatformEvent> for WindowedApp {
@@ -510,8 +511,8 @@ impl WindowedApp {
             // (`App::set_escape_exits`); otherwise it goes on to the
             // focused widget like any other key.
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
-                match self.app.dispatch_escape() {
-                    Some(changed) => {
+                match self.dispatch_escape_key() {
+                    EscapeKey::Handled(changed) => {
                         if changed {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -524,11 +525,11 @@ impl WindowedApp {
                         self.sync_cursor();
                         return EventTail::Skip;
                     }
-                    None if self.app.escape_exits() => {
+                    EscapeKey::Exit => {
                         event_loop.exit();
                         return EventTail::Skip;
                     }
-                    None => {}
+                    EscapeKey::Pass => {}
                 }
             }
             let context_key = matches!(&event.logical_key, Key::Named(NamedKey::ContextMenu))

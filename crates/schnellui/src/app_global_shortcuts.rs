@@ -37,6 +37,11 @@ pub(crate) struct GlobalShortcutRegistry {
 }
 
 impl GlobalShortcutRegistry {
+    /// Whether nothing was ever registered or observed here.
+    pub(crate) fn is_unused(&self) -> bool {
+        self.entries.is_empty() && self.observer.is_none()
+    }
+
     fn touch(&mut self) {
         self.revision = NEXT_REVISION.fetch_add(1, Ordering::Relaxed);
     }

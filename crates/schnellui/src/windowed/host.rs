@@ -89,7 +89,28 @@ pub(super) fn carry_redraw_signal(previous: &App, replacement: &mut App) {
     replacement.redraw_signal = previous.redraw_signal.clone();
 }
 
+/// What Escape did when no widget took it first.
+pub(super) enum EscapeKey {
+    /// An open menu, list or dialog took it; whether the screen changed.
+    Handled(bool),
+    /// Nothing took it and the app asked Escape to close the window.
+    Exit,
+    /// Nothing took it: it goes on to the focused widget.
+    Pass,
+}
+
 impl WindowedApp {
+    /// Escape closes an open menu, then an open list, then the top-most
+    /// dialog; without an overlay it exits only when the app asked for that
+    /// (`App::set_escape_exits`).
+    pub(super) fn dispatch_escape_key(&mut self) -> EscapeKey {
+        match self.app.dispatch_escape() {
+            Some(changed) => EscapeKey::Handled(changed),
+            None if self.app.escape_exits() => EscapeKey::Exit,
+            None => EscapeKey::Pass,
+        }
+    }
+
     pub(super) fn apply_focused_input_result(&mut self, result: FocusedInputResult) -> bool {
         match result {
             FocusedInputResult::Ignored => false,
@@ -616,6 +637,7 @@ impl WindowedApp {
         // different texels and the reconcile below must run.
         new_app.atlas.resolve_fork(&self.app.atlas);
         new_app.inherit_remount_state(&self.app);
+        new_app.inherit_missing_host_settings(&mut self.app);
         // Content drag, dialog move/resize and scrollbar thumb ride along to
         // the replacement (inherit_remount_state above); list only the ones
         // it did not take.

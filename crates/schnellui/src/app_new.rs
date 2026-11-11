@@ -118,6 +118,7 @@ impl App {
             },
             scale: 1.0,
             clear: Color::WHITE,
+            clear_explicit: false,
             now: 0,
             laid_out: false,
             layout_consumed_epoch: 0,

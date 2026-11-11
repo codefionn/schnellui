@@ -23,6 +23,7 @@ impl App {
     /// Sets the fixed background clear color (SOUL §7.3).
     pub fn set_clear_color(&mut self, color: Color) {
         self.clear = color;
+        self.clear_explicit = true;
     }
 
     /// The fixed background clear color (SOUL §7.3). Read by windowed mode to paint

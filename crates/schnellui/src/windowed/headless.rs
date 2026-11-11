@@ -518,6 +518,23 @@ impl HeadlessHost {
         self.settle();
     }
 
+    /// Presses Escape as the native window host does and returns whether it
+    /// asked the window to close: no menu, list or dialog took the key and
+    /// the app turned on [`App::set_escape_exits`]. An overlay that took it
+    /// may remount, which is polled before this returns.
+    pub fn press_escape(&mut self) -> bool {
+        let exit = match self.host.dispatch_escape_key() {
+            super::host::EscapeKey::Handled(_) => {
+                self.host.poll_remount();
+                false
+            }
+            super::host::EscapeKey::Exit => true,
+            super::host::EscapeKey::Pass => false,
+        };
+        self.settle();
+        exit
+    }
+
     /// One wheel event of `delta_y` logical pixels at the pointer, positive
     /// scrolling down. It takes the window host's own wheel path: a focused
     /// raw surface and an open context menu see it first, then the deepest

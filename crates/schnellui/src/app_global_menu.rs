@@ -33,6 +33,11 @@ pub(crate) struct GlobalMenuRegistry {
 }
 
 impl GlobalMenuRegistry {
+    /// Whether no menu or handler was ever set here.
+    pub(crate) fn is_unused(&self) -> bool {
+        self.bar.is_empty() && self.handlers.is_empty()
+    }
+
     fn touch(&mut self) {
         self.revision = NEXT_REVISION.fetch_add(1, Ordering::Relaxed);
     }
