@@ -1067,14 +1067,12 @@ fn dynamic_text_updates_retained_content_on_signal_set_and_flush() {
     // paint re-shaped to new glyph quads + both dirty channels flagged (§6.2)
     assert_ne!(scene.paint(id).unwrap().primitives, paint_before);
     // the re-emitted primitives are real glyph quads, not solid placeholder blocks
-    assert!(
-        scene
-            .paint(id)
-            .unwrap()
-            .primitives
-            .iter()
-            .all(|p| matches!(p, Primitive::GlyphQuad { .. }))
-    );
+    assert!(scene
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .all(|p| matches!(p, Primitive::GlyphQuad { .. })));
     assert!(scene.dirty_flags(id).contains(DirtyFlags::PAINT));
     assert!(scene.dirty_flags(id).contains(DirtyFlags::A11Y));
     // width changed ("0" → "42") ⇒ the layout channel is flagged too (§8.1)
