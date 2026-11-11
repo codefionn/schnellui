@@ -2240,3 +2240,27 @@ mod window_activation {
         assert_eq!(focused_name(&host).as_deref(), Some("Assign"));
     }
 }
+
+#[test]
+fn debug_status_hit_path_is_empty_once_the_pointer_has_left() {
+    use winit::dpi::PhysicalPosition;
+
+    let mut app = App::mount_with_size(Button::new("Save"), 200, 80);
+    app.frame();
+    let root = app.scene().root().expect("button root");
+    let rect = app.scene().layout(root).expect("button layout").rect;
+    let mut host = windowed_host(app, None);
+    host.on_cursor_moved(PhysicalPosition::new(
+        f64::from(rect.x + rect.width / 2.0),
+        f64::from(rect.y + rect.height / 2.0),
+    ));
+    let inside = host.debug_status();
+    assert_eq!(inside["hit_path"][0]["name"], "Save");
+
+    host.on_cursor_left();
+    let outside = host.debug_status();
+    assert_eq!(outside["cursor_inside"], false);
+    assert!(outside["hit_path"].as_array().unwrap().is_empty());
+    let snapshot = host.build_interaction_snapshot(host.cursor_logical());
+    assert!(snapshot["hit_path"].as_array().unwrap().is_empty());
+}

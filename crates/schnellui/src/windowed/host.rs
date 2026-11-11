@@ -297,6 +297,18 @@ impl WindowedApp {
         self.deadline.map(|d| Instant::now() >= d).unwrap_or(false)
     }
 
+    /// The widgets under the pointer. Empty once the pointer has left the
+    /// window: the last position is kept for the cursor report, but nothing is
+    /// under it any more (hover is gone). A key that merely hides hover keeps
+    /// the pointer inside, so its hit path stays.
+    fn hit_path_now(&self, point: Point) -> Value {
+        if self.cursor_inside {
+            hit_path_json(&self.app, point)
+        } else {
+            json!([])
+        }
+    }
+
     /// The pointer/hit/focus/capture state recorded with trace events. Building it
     /// walks the hit path and serializes JSON, so it is skipped (`Null`) unless a
     /// trace recorder is open; the value is only ever consumed by `trace`.
@@ -316,7 +328,7 @@ impl WindowedApp {
                 "physical": { "x": self.cursor.x, "y": self.cursor.y },
                 "logical": point_json(point),
             },
-            "hit_path": hit_path_json(&self.app, point),
+            "hit_path": self.hit_path_now(point),
             "focus": focused_json(&self.app),
             "cursor": {
                 "resolved": debug_label(self.app.cursor_at(point)),
@@ -828,7 +840,7 @@ impl WindowedApp {
                 "width": rect.width,
                 "height": rect.height,
             })),
-            "hit_path": hit_path_json(&self.app, point),
+            "hit_path": self.hit_path_now(point),
             "remounts": {
                 "total": self.remount_count,
                 "by_reason": self.remount_counts_by_reason,
