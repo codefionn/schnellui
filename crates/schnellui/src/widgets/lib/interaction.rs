@@ -1905,6 +1905,12 @@ fn show_tooltip(
             };
         }
     }
+    // A tooltip that flipped below its host lies over the control below, which
+    // is often a tooltip host too, at the same overlay level and later in order.
+    // Raising the shown one keeps its label on top of every peer.
+    if visible {
+        scene.bring_overlay_to_front(id);
+    }
     // Only the tooltip's host is repainted: it is an overlay whose
     // retained instances already cover the label past its layout box.
     scene.mark_dirty(id, DirtyFlags::PAINT);

@@ -1591,10 +1591,14 @@ impl GpuCore {
                 image_end: self.image_scratch.len() as u32,
                 ..start
             });
-            // Nested roots were found last-drawn-first; put them in tree order
-            // directly after this layer, without allocating.
+            // Nested roots were found last-drawn-first. Order them by the same
+            // `(level, order)` as the top-level roots, so a raised one (a shown
+            // tooltip, a popup) paints over its peers in the parent, and put
+            // them directly after this layer, without allocating.
             let nested = self.overlay_roots.len() - found;
             self.overlay_roots[found..].reverse();
+            self.overlay_roots[found..]
+                .sort_by_key(|(id, _, _)| (scene.overlay_level(*id), scene.overlay_order(*id)));
             self.overlay_roots[i + 1..].rotate_right(nested);
             i += 1;
         }

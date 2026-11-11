@@ -1292,3 +1292,56 @@ fn an_overlay_below_a_sparing_frame_clip_is_not_clipped_by_it() {
         Rect::new(40.0, 12.0, 8.0, 8.0)
     );
 }
+
+/// Overlays nested in another layer follow the same `(level, order)` as
+/// top-level ones: a raised peer (a shown tooltip host) draws after the
+/// peers that come later in tree order.
+#[test]
+fn a_raised_nested_overlay_draws_after_its_later_peers() {
+    let mut r = match Renderer::try_new(64, 64, Backend::Auto) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipping GPU render test: {e}");
+            return;
+        }
+    };
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Column, None);
+    scene.set_root(root);
+    let layer = scene.insert(WidgetKind::Column, Some(root));
+    scene.set_overlay_level(layer, 10);
+    let solid = |y: f32| Primitive::SolidRect {
+        rect: Rect::new(4.0, y, 20.0, 20.0),
+        color: Color::WHITE,
+        corner_radius: 0.0,
+    };
+    let first = scene.insert(WidgetKind::Chart, Some(layer));
+    let second = scene.insert(WidgetKind::Chart, Some(layer));
+    for (id, y) in [(first, 4.0), (second, 14.0)] {
+        scene.set_overlay_level(id, 5);
+        scene.paint_mut(id).primitives.push(solid(y));
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+    }
+    let position = |r: &Renderer, id| {
+        r.core
+            .overlay_roots
+            .iter()
+            .position(|(root, _, _)| *root == id)
+            .unwrap()
+    };
+    r.core.gather(&scene);
+    assert!(
+        position(&r, first) < position(&r, second),
+        "tree order first"
+    );
+    scene.bring_overlay_to_front(first);
+    r.core.gather(&scene);
+    assert!(
+        position(&r, first) > position(&r, second),
+        "the raised overlay draws last"
+    );
+    assert!(
+        position(&r, layer) < position(&r, second),
+        "after its parent"
+    );
+}
