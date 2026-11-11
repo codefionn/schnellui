@@ -59,6 +59,53 @@ pub(super) fn plan_accessibility_update(
     }
 }
 
+/// Input that arrived while a pointer button was held and a structural update
+/// was already waiting for its release.
+#[derive(Default)]
+pub(super) struct HeldInput {
+    pub(super) parked: Option<WindowUpdate>,
+    pub(super) keys: Vec<HeldKey>,
+}
+
+/// A [`UiKey`] kept past the event that carried it: typed text is copied.
+pub(super) enum HeldKey {
+    Plain(UiKey<'static>),
+    Text(String),
+}
+
+impl HeldKey {
+    fn of(key: UiKey<'_>) -> Self {
+        match key {
+            UiKey::Tab { shift } => Self::Plain(UiKey::Tab { shift }),
+            UiKey::Enter => Self::Plain(UiKey::Enter),
+            UiKey::Space { shift } => Self::Plain(UiKey::Space { shift }),
+            UiKey::Backspace => Self::Plain(UiKey::Backspace),
+            UiKey::Delete => Self::Plain(UiKey::Delete),
+            UiKey::Left { shift, ctrl } => Self::Plain(UiKey::Left { shift, ctrl }),
+            UiKey::Right { shift, ctrl } => Self::Plain(UiKey::Right { shift, ctrl }),
+            UiKey::Up { shift } => Self::Plain(UiKey::Up { shift }),
+            UiKey::Down { shift } => Self::Plain(UiKey::Down { shift }),
+            UiKey::Home { shift, ctrl } => Self::Plain(UiKey::Home { shift, ctrl }),
+            UiKey::End { shift, ctrl } => Self::Plain(UiKey::End { shift, ctrl }),
+            UiKey::PageUp => Self::Plain(UiKey::PageUp),
+            UiKey::PageDown => Self::Plain(UiKey::PageDown),
+            UiKey::Escape => Self::Plain(UiKey::Escape),
+            UiKey::SelectAll => Self::Plain(UiKey::SelectAll),
+            UiKey::Undo => Self::Plain(UiKey::Undo),
+            UiKey::Redo => Self::Plain(UiKey::Redo),
+            UiKey::Control(c) => Self::Plain(UiKey::Control(c)),
+            UiKey::Char(text) => Self::Text(text.to_owned()),
+        }
+    }
+
+    fn as_key(&self) -> UiKey<'_> {
+        match self {
+            Self::Plain(key) => *key,
+            Self::Text(text) => UiKey::Char(text),
+        }
+    }
+}
+
 /// Deduplicates replacements addressed to the same component within one host
 /// update. The first occurrence fixes the relative order among distinct
 /// branches; every later occurrence replaces its payload, so the newest view
@@ -204,8 +251,33 @@ impl WindowedApp {
     /// Dispatches a key to the app, then performs any clipboard command a
     /// context-menu row asked for.
     pub(super) fn dispatch_ui_key(&mut self, key: UiKey<'_>) -> bool {
+        // Once a key has produced a structural update that is waiting for the
+        // pointer release, the tree on screen is stale: the next key would act
+        // on a control the update is about to replace. Keep it for after the
+        // update lands, in order.
+        if self.held.parked.is_some() {
+            self.held.keys.push(HeldKey::of(key));
+            return true;
+        }
         let changed = self.app.dispatch_key(key);
-        self.drain_pending_clipboard() | changed
+        let changed = self.drain_pending_clipboard() | changed;
+        if !remount_allowed(self.left_pointer_down) {
+            self.park_remount();
+        }
+        changed
+    }
+
+    /// While a pointer button is held, asks the remount hook whether the key
+    /// that just ran requested a structural update and keeps the answer for
+    /// the release ([`WindowedApp::poll_remount`]).
+    fn park_remount(&mut self) {
+        let viewport = self.app.size();
+        let Some(hook) = self.remount.as_mut() else {
+            return;
+        };
+        let (update, _engine_claimed) =
+            crate::app_new::with_engine_donor(&mut self.app, || hook(viewport));
+        self.held.parked = update;
     }
 
     /// A key pressed while a menu is open: the arrows, Home and End walk its
@@ -480,6 +552,24 @@ impl WindowedApp {
         if !remount_allowed(self.left_pointer_down) {
             return;
         }
+        // An update parked by a key during the press lands first, then the
+        // hook is asked again for whatever the rest of the drag changed.
+        if let Some(parked) = self.held.parked.take() {
+            let viewport = self.app.size();
+            self.apply_update(parked, viewport);
+        }
+        self.poll_remount_hook();
+        // Keys typed behind the parked update replay against the tree it
+        // built. Each may request an update of its own.
+        if !self.held.keys.is_empty() {
+            for key in std::mem::take(&mut self.held.keys) {
+                let _ = self.dispatch_ui_key(key.as_key());
+                self.poll_remount_hook();
+            }
+        }
+    }
+
+    fn poll_remount_hook(&mut self) {
         let viewport = self.app.size();
         let Some(hook) = self.remount.as_mut() else {
             return;
@@ -491,6 +581,10 @@ impl WindowedApp {
         let Some(update) = update else {
             return;
         };
+        self.apply_update(update, viewport);
+    }
+
+    fn apply_update(&mut self, update: WindowUpdate, viewport: Size) {
         let replacement = match update {
             WindowUpdate::Remount(replacement) => replacement,
             WindowUpdate::Subtrees(replacements) => {
@@ -1536,6 +1630,7 @@ pub fn run(
         drag_slider: None,
         backdrop_press: None,
         left_pointer_down: false,
+        held: Default::default(),
         remount,
     };
     event_loop.run_app(&mut handler)?;
@@ -1620,6 +1715,7 @@ pub(crate) fn run_headless(
         drag_slider: None,
         backdrop_press: None,
         left_pointer_down: false,
+        held: Default::default(),
         remount,
     };
     handler.on_redraw_requested();

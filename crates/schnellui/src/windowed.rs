@@ -537,6 +537,9 @@ struct WindowedApp {
     /// The host's structural update hook. Ordinary input polls it immediately;
     /// scroll input defers it to the native redraw so a wheel burst coalesces.
     remount: Option<Box<dyn FnMut(schnellui::scene::Size) -> Option<WindowUpdate>>>,
+    /// A structural update a key produced while a pointer button was held, and
+    /// the keys typed after it. Both wait for the release.
+    held: host::HeldInput,
 }
 
 mod event_handler;

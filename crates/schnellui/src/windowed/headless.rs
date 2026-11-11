@@ -168,6 +168,7 @@ impl HeadlessHost {
                 drag_slider: None,
                 backdrop_press: None,
                 left_pointer_down: false,
+                held: Default::default(),
                 remount: None,
             },
         }
