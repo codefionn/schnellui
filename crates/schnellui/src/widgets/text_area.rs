@@ -33,8 +33,8 @@ use crate::widgets::text_edit::{
     advance_before, apply_pointer_selection, byte_at_x, byte_under_x, insert_kind, map_selections,
     next_boundary, next_word, pointer_selection_index, prev_boundary, prev_word,
     replace_selections, selection_list, selection_text, toggle_additional_caret, Change,
-    EditHistory, EditKey, EditKind, Open, PointerOrigin, ReplaceMode, TextPointerAction,
-    TextSelection, CARET_W, INPUT_BORDER_W,
+    EditHistory, EditKey, EditKind, Open, PointerOrigin, Preedit, ReplaceMode, TextPointerAction,
+    TextSelection, CARET_W, INPUT_BORDER_W, PREEDIT_CURSOR_RULE_W, PREEDIT_RULE_W,
 };
 use crate::widgets::{
     node_rect, norm_scale, phys_size_px, with_handlers, BuildCtx, ContextMenu, ContextMenuItem,
@@ -117,6 +117,37 @@ pub(crate) struct AreaState {
     cache: AreaCache,
     /// Undo/redo steps of this area's edits.
     pub(crate) history: EditHistory,
+    /// The input method's composition. While it shows, `value` holds the text
+    /// as drawn (the composition spliced in over the selection) so the line
+    /// table, wrapping, caret and reveal all see one text; the real text and
+    /// selection wait in here. Everything that reads or edits the value goes
+    /// through [`AreaState::real_value`] or ends the composition first.
+    compose: Option<Compose>,
+    /// Where the composition's cursor was last painted (the input method's
+    /// candidate window belongs there).
+    preedit_box: Option<Rect>,
+}
+
+/// What a composition displaced in an area: enough to put the real value back.
+struct Compose {
+    /// the text of the replaced selection
+    removed: String,
+    /// the selection before the composition
+    caret: usize,
+    anchor: usize,
+    secondary: SmallVec<[TextSelection; 4]>,
+    /// where the composition starts in `value`, and its byte length
+    lo: usize,
+    len: usize,
+    /// the input method's cursor, as a byte range of the composition
+    cursor: Option<(usize, usize)>,
+}
+
+impl Compose {
+    /// The caret shows where the cursor is a point.
+    fn caret_shown(&self) -> bool {
+        matches!(self.cursor, Some((a, b)) if a == b)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +542,80 @@ struct Metrics {
 }
 
 impl AreaState {
+    /// The value as the app knows it: without any composition showing.
+    pub(crate) fn real_value(&self) -> Cow<'_, str> {
+        match &self.compose {
+            None => Cow::Borrowed(&self.value),
+            Some(c) => {
+                let mut real = String::with_capacity(self.value.len());
+                real.push_str(&self.value[..c.lo]);
+                real.push_str(&c.removed);
+                real.push_str(&self.value[c.lo + c.len..]);
+                Cow::Owned(real)
+            }
+        }
+    }
+
+    /// Shows `preedit` over the primary selection. `false` when nothing about
+    /// the composition changed.
+    fn set_preedit(&mut self, preedit: &Preedit) -> bool {
+        let old_len = self.value.len();
+        let (lo, old_end) = match &mut self.compose {
+            Some(c) => {
+                if c.cursor == preedit.cursor && self.value[c.lo..c.lo + c.len] == preedit.text {
+                    return false;
+                }
+                let span = (c.lo, c.lo + c.len);
+                c.len = preedit.text.len();
+                c.cursor = preedit.cursor;
+                span
+            }
+            None => {
+                let (lo, hi) = TextSelection {
+                    caret: self.caret,
+                    anchor: self.anchor,
+                }
+                .range();
+                self.compose = Some(Compose {
+                    removed: self.value[lo..hi].to_owned(),
+                    caret: self.caret,
+                    anchor: self.anchor,
+                    secondary: std::mem::take(&mut self.secondary),
+                    lo,
+                    len: preedit.text.len(),
+                    cursor: preedit.cursor,
+                });
+                (lo, hi)
+            }
+        };
+        self.value.replace_range(lo..old_end, &preedit.text);
+        self.cache.note_edit(&self.value, lo, old_end, old_len);
+        // The caret is the composition's cursor: reveal and the line table
+        // follow it like any caret.
+        let at = lo + preedit.cursor.map_or(preedit.text.len(), |(_, b)| b);
+        self.caret = at;
+        self.anchor = at;
+        self.goal_x = None;
+        true
+    }
+
+    /// Ends the composition: the real value and selection come back. `false`
+    /// when none showed.
+    pub(crate) fn clear_preedit(&mut self) -> bool {
+        let Some(c) = self.compose.take() else {
+            return false;
+        };
+        let old_len = self.value.len();
+        let end = c.lo + c.len;
+        self.value.replace_range(c.lo..end, &c.removed);
+        self.caret = c.caret;
+        self.anchor = c.anchor;
+        self.secondary = c.secondary;
+        self.preedit_box = None;
+        self.cache.note_edit(&self.value, c.lo, end, old_len);
+        true
+    }
+
     /// Runs a value-changing edit and records the lines it touched in the
     /// line table. The changed bytes lie inside the span of the pre-edit
     /// selections (one line of slack on each side is added by the table).
@@ -965,6 +1070,8 @@ pub(crate) fn inherit_area_selection(
 ) -> bool {
     let previous = previous_runtime.with(|rt| {
         rt.borrow_mut().areas.get_mut(previous_id).map(|state| {
+            // The replacement tree starts without a composition.
+            state.clear_preedit();
             (
                 state.value.clone(),
                 state.caret,
@@ -1374,6 +1481,9 @@ pub(crate) fn selected_area_text(
     runtime.with(|rt| {
         let rt = rt.borrow();
         let state = rt.areas.get(id)?;
+        if state.compose.is_some() {
+            return None;
+        }
         selection_text(&state.value, state.caret, state.anchor, &state.secondary)
     })
 }
@@ -1468,8 +1578,11 @@ pub(crate) fn dispatch_area_key(
     if !is_text_area(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    // Any key that reaches the area ends the composition first, so it acts
+    // on the real value. The commit itself arrives as an insert.
+    let ended = end_area_preedit(runtime, scene, shaper, atlas, id);
     let taken = runtime.with(|rt| rt.borrow_mut().areas.remove(id));
-    let Some(mut st) = taken else { return false };
+    let Some(mut st) = taken else { return ended };
     let change = if st.read_only
         && !matches!(
             key,
@@ -1490,7 +1603,7 @@ pub(crate) fn dispatch_area_key(
     runtime.with(|rt| {
         rt.borrow_mut().areas.insert(id, st);
     });
-    let committed = commit_area_change(runtime, scene, shaper, atlas, id, change);
+    let committed = commit_area_change(runtime, scene, shaper, atlas, id, change) | ended;
     // Every key an area takes leaves the caret where the user looks next, so
     // the enclosing viewports follow it. An edit that changes the area's size
     // waits for the layout that gives it that size.
@@ -1565,8 +1678,9 @@ pub(crate) fn dispatch_area_pointer(
     if !is_text_area(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    let ended = end_area_preedit(runtime, scene, shaper, atlas, id);
     let Some(rect) = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty()) else {
-        return false;
+        return ended;
     };
     // `p` is in window space; the layout rect is in content space, so move it
     // to where an enclosing Scroll (or a transform) draws the area.
@@ -1633,8 +1747,8 @@ pub(crate) fn dispatch_area_pointer(
             Change::Caret
         })
     });
-    let Some(change) = change else { return false };
-    commit_area_change(runtime, scene, shaper, atlas, id, change)
+    let Some(change) = change else { return ended };
+    commit_area_change(runtime, scene, shaper, atlas, id, change) | ended
 }
 
 /// Replaces the whole value — the inbound AccessKit `SetValue` path (SOUL
@@ -1650,6 +1764,7 @@ pub(crate) fn dispatch_area_set_value(
     if !is_text_area(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    let ended = end_area_preedit(runtime, scene, shaper, atlas, id);
     let change = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         let Some(st) = rt.areas.get_mut(id) else {
@@ -1671,7 +1786,91 @@ pub(crate) fn dispatch_area_set_value(
         st.history.clear();
         Change::Text
     });
-    commit_area_change(runtime, scene, shaper, atlas, id, change)
+    commit_area_change(runtime, scene, shaper, atlas, id, change) | ended
+}
+
+/// Ends an area's composition without repainting. `true` if one showed.
+pub(crate) fn drop_area_preedit(runtime: &crate::widgets::Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| {
+        rt.borrow_mut()
+            .areas
+            .get_mut(id)
+            .is_some_and(AreaState::clear_preedit)
+    })
+}
+
+/// Ends an area's composition and repaints the real text, so the line table
+/// and paint are current again before the caller acts on them.
+fn end_area_preedit(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+) -> bool {
+    if !drop_area_preedit(runtime, id) {
+        return false;
+    }
+    repaint_composed_area(runtime, scene, shaper, atlas, id);
+    true
+}
+
+/// Repaints an area after its composition changed, and relayouts when that
+/// changed the size the area measures.
+fn repaint_composed_area(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+) {
+    let before = runtime.with(|rt| rt.borrow().areas.get(id).map(|st| st.content));
+    emit_text_area_paint(runtime, scene, shaper, atlas, id);
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+    let after = runtime.with(|rt| rt.borrow().areas.get(id).map(|st| st.content));
+    if before != after {
+        scene.mark_dirty(id, DirtyFlags::LAYOUT);
+    }
+}
+
+/// The area side of [`dispatch_preedit`](crate::widgets::dispatch_preedit).
+pub(crate) fn dispatch_area_preedit(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    preedit: Option<Preedit>,
+) -> bool {
+    let changed = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let Some(st) = rt.areas.get_mut(id) else {
+            return false;
+        };
+        match &preedit {
+            // A read-only area takes no composition.
+            Some(_) if st.read_only => false,
+            Some(preedit) => st.set_preedit(preedit),
+            None => st.clear_preedit(),
+        }
+    });
+    if !changed {
+        return false;
+    }
+    repaint_composed_area(runtime, scene, shaper, atlas, id);
+    // Keep the cursor in view, as a caret move does; a size change waits for
+    // the layout that gives it.
+    if scene.layout_dirty().contains(&id) {
+        crate::widgets::request_reveal(runtime, id);
+    } else {
+        crate::widgets::reveal_widget(runtime, scene, shaper, id);
+    }
+    true
+}
+
+/// The box of a composing area's cursor, in the area's own coordinates.
+pub(crate) fn area_preedit_box(runtime: &crate::widgets::Runtime, id: WidgetId) -> Option<Rect> {
+    runtime.with(|rt| rt.borrow().areas.get(id)?.preedit_box)
 }
 
 #[cfg(test)]

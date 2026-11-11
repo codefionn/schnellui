@@ -116,9 +116,15 @@ px at the window's scale. `resize` takes a logical size (1 to 16384 physical px)
 keeps dialogs, focus and hover, but a context menu closes, as it does on a real
 resize; a native window answers 422, because the window system resizes it. `ime`
 bodies are `{"action": "preedit", "text": ..., "cursor": [a, b]}`, `{"action": "commit",
-"text": ...}` and `{"action": "cancel"}`. A preedit changes a text field not at all and
-reaches a focused raw surface; `key ime_commit --text X` still commits without going
-through the window handler.
+"text": ...}` and `{"action": "cancel"}`. A preedit reaches a focused raw surface as is. A focused text field (`TextInput`,
+`PasswordInput`, `TextArea`, so the rich_text editor too) draws it inline at the caret,
+over the selection if there is one, underlined, with the cursor range as the caret or
+as a thicker segment of the underline. The field's value, its accessible value,
+`on_input` and its undo history do not change until the commit, which types its text as
+a key would. An empty preedit, `cancel`, `Disabled`, focus leaving, a key, a click and a
+remount (a theme switch included) all end the display. While one shows, the IME area the
+window reports is the box of the preedit cursor, not the whole field. `key ime_commit
+--text X` still commits without going through the window handler.
 With an interaction trace on (`SCHNELLUI_INTERACTION_TRACE`, see
 `INTERACTION_DEBUGGING.md`), `/v1/key` (`key` and `type`) and `/v1/action` are
 recorded as `key_input` and `a11y_action` records in order with the pointer

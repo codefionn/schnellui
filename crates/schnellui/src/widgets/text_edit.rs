@@ -12,6 +12,13 @@
 //! dispatch functions here, which mutate the edit state, re-emit the input's paint
 //! in place, update the accessible value, and fire the widget's `on_input` handler.
 //!
+//! **Composition** (IME): an input method's preedit is drawn inline at the caret,
+//! over the selection, underlined, by the field's own paint. The value, the
+//! accessible value, `on_input` and the undo history change only on the commit,
+//! which is an ordinary insert. Any key, click, `SetValue`, blur or remount ends
+//! it. A composition frame allocates (it composes the shown text); a frame without
+//! one costs nothing extra.
+//!
 //! **Budget** (SOUL §4.1): an edit is user-initiated, `text_edit`-class work — it
 //! may re-shape the line and clone the value for a11y. It never runs on the
 //! steady-state re-render path (a clean frame does zero work here), and paint is
@@ -126,6 +133,61 @@ pub(crate) struct EditState {
     pub(crate) hold_scroll: bool,
     /// Undo/redo steps of this field's edits.
     pub(crate) history: EditHistory,
+    /// The input method's composition, drawn at the caret and nowhere else.
+    pub(crate) preedit: Option<Preedit>,
+    /// Where the composition's cursor was last painted (the input method's
+    /// candidate window belongs there); only kept while composing.
+    pub(crate) preedit_box: Option<Rect>,
+}
+
+/// An input method's composition ("preedit"): text the user is still shaping.
+/// It is drawn inline at the caret, in place of the selection, underlined. The
+/// value, the accessible value, `on_input` and the undo history never see it;
+/// only the commit does, as an ordinary insert.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Preedit {
+    pub(crate) text: String,
+    /// The input method's cursor, as a byte range of `text`. `None` hides the
+    /// caret, as the input method asked.
+    pub(crate) cursor: Option<(usize, usize)>,
+}
+
+/// Underline stroke of a composition, logical px.
+pub(crate) const PREEDIT_RULE_W: f32 = 1.0;
+/// Stroke of the segment the input method marks as its cursor range.
+pub(crate) const PREEDIT_CURSOR_RULE_W: f32 = 2.0;
+
+/// The composition an input method reported, made safe to draw: control
+/// characters (a newline would break a line the field does not own) are
+/// dropped, and the cursor is clamped onto character boundaries. `None` when
+/// nothing is left, which ends the composition.
+pub(crate) fn clean_preedit(text: &str, cursor: Option<(usize, usize)>) -> Option<Preedit> {
+    let cleaned: String;
+    let (text, cursor) = if text.chars().any(char::is_control) {
+        cleaned = text.chars().filter(|c| !c.is_control()).collect();
+        // The reported offsets no longer line up: park the caret at the end.
+        (cleaned.as_str(), Some((cleaned.len(), cleaned.len())))
+    } else {
+        (text, cursor)
+    };
+    if text.is_empty() {
+        return None;
+    }
+    let floor = |mut at: usize| {
+        at = at.min(text.len());
+        while !text.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    };
+    let cursor = cursor.map(|(a, b)| {
+        let (a, b) = (floor(a), floor(b));
+        (a.min(b), a.max(b))
+    });
+    Some(Preedit {
+        text: text.to_owned(),
+        cursor,
+    })
 }
 
 /// What a key application changed — selects the re-emit + notify work. Shared
@@ -655,6 +717,8 @@ pub(crate) fn register_edit_state(
             scroll_x: 0.0,
             hold_scroll: false,
             history: EditHistory::default(),
+            preedit: None,
+            preedit_box: None,
         };
         if rt.edits.insert(id, state).is_none() {
             rt.edit_ids.push(id);

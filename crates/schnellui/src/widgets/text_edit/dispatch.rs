@@ -269,6 +269,8 @@ fn dispatch_focus_with_indicator(
     if let Some(o) = old {
         let state = scene.a11y(o).map_or(0, |a| a.state) & !StateFlags::FOCUSED.0;
         scene.set_a11y_state(o, state);
+        // Focus leaving ends a composition; the repaint below shows it gone.
+        drop_preedit_state(runtime, scene, o);
         repaint_editable(runtime, scene, shaper, atlas, o);
         crate::widgets::remove_focus_ring(runtime, scene, o);
     }
@@ -348,6 +350,9 @@ fn dispatch_edit_key_as(
     if !is_text_input(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    // Any key that reaches the field ends the composition first, so it acts
+    // on the real value. The commit itself arrives as an insert.
+    let ended = drop_input_preedit(runtime, id);
     let change = runtime.with(|rt| {
         rt.borrow_mut()
             .edits
@@ -355,6 +360,11 @@ fn dispatch_edit_key_as(
             .map(|e| e.apply(&key, kind))
             .unwrap_or(Change::None)
     });
+    let change = if ended && change == Change::None {
+        Change::Caret
+    } else {
+        change
+    };
     let committed = commit_change(runtime, scene, shaper, atlas, id, change);
     // The field stays put when text changes, but the viewports around it may
     // have been scrolled away from the caret.
@@ -492,6 +502,7 @@ pub fn dispatch_text_pointer_action(
     if !is_text_input(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    let ended = drop_input_preedit(runtime, id);
     let Some((value, size_px, scale, password, scroll_x)) = runtime.with(|rt| {
         let rt = rt.borrow();
         rt.edits
@@ -560,6 +571,11 @@ pub fn dispatch_text_pointer_action(
             Change::Caret
         }
     });
+    let change = if ended && change == Change::None {
+        Change::Caret
+    } else {
+        change
+    };
     commit_change(runtime, scene, shaper, atlas, id, change)
 }
 
@@ -583,6 +599,7 @@ pub fn set_text_value(
     if !is_text_input(scene, id) || is_disabled(scene, id) {
         return false;
     }
+    let ended = drop_input_preedit(runtime, id);
     let change = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         let Some(e) = rt.edits.get_mut(id) else {
@@ -599,5 +616,101 @@ pub fn set_text_value(
         e.history.clear();
         Change::Text
     });
+    let change = if ended && change == Change::None {
+        Change::Caret
+    } else {
+        change
+    };
     commit_change(runtime, scene, shaper, atlas, id, change)
+}
+
+/// Ends a text input's composition without repainting. `true` if one showed.
+fn drop_input_preedit(runtime: &crate::widgets::Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| {
+        rt.borrow_mut().edits.get_mut(id).is_some_and(|e| {
+            e.preedit_box = None;
+            e.preedit.take().is_some()
+        })
+    })
+}
+
+/// Ends the composition `id` shows, whatever kind of field it is, leaving the
+/// repaint to the caller.
+fn drop_preedit_state(runtime: &crate::widgets::Runtime, scene: &Scene, id: WidgetId) -> bool {
+    match editable_kind(scene, id) {
+        Some(WidgetKind::TextInput) => drop_input_preedit(runtime, id),
+        Some(WidgetKind::TextArea) => crate::widgets::text_area::drop_area_preedit(runtime, id),
+        _ => false,
+    }
+}
+
+/// Shows the input method's composition `text` in the focused editable `id`,
+/// at its caret and over its selection, or ends it when `text` is empty. The
+/// value, the accessible value, `on_input` and the undo history stay as they
+/// are until a commit arrives. `cursor` is the input method's cursor as a byte
+/// range of `text`. Returns `true` if the field's look changed.
+pub fn dispatch_preedit(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    text: &str,
+    cursor: Option<(usize, usize)>,
+) -> bool {
+    let Some(kind) = editable_kind(scene, id) else {
+        return false;
+    };
+    let focused = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
+    let preedit = clean_preedit(text, cursor);
+    if is_disabled(scene, id) || (preedit.is_some() && !focused) {
+        return false;
+    }
+    if kind == WidgetKind::TextArea {
+        return crate::widgets::text_area::dispatch_area_preedit(
+            runtime, scene, shaper, atlas, id, preedit,
+        );
+    }
+    let changed = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let Some(e) = rt.edits.get_mut(id) else {
+            return false;
+        };
+        if e.preedit == preedit {
+            return false;
+        }
+        e.preedit = preedit;
+        if e.preedit.is_none() {
+            e.preedit_box = None;
+        }
+        true
+    });
+    if !changed {
+        return false;
+    }
+    emit_text_input_paint(runtime, scene, shaper, atlas, id);
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+    crate::widgets::reveal_widget(runtime, scene, shaper, id);
+    true
+}
+
+/// Where the input method's candidate window belongs while `id` composes: the
+/// box of the composition's cursor, in window space. `None` when it does not.
+pub fn preedit_box(runtime: &crate::widgets::Runtime, scene: &Scene, id: WidgetId) -> Option<Rect> {
+    let local = match editable_kind(scene, id)? {
+        WidgetKind::TextInput => runtime.with(|rt| rt.borrow().edits.get(id)?.preedit_box),
+        _ => crate::widgets::text_area::area_preedit_box(runtime, id),
+    }?;
+    let offset = scene.composited_offset(id);
+    let field = scene.composited_rect(id);
+    let shifted = Rect::new(
+        local.x + offset.x,
+        local.y + offset.y,
+        local.width,
+        local.height,
+    );
+    let inside = shifted.intersect(&field);
+    Some(if inside.is_empty() { field } else { inside })
 }

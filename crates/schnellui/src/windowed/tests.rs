@@ -1247,11 +1247,20 @@ mod ime {
             "IME area {area:?} sits on the field {rect:?}"
         );
 
-        // A preedit changes nothing yet. The commit types the composed text.
+        // A preedit is drawn, not typed, and moves the IME window to its
+        // cursor. The commit types the composed text.
         host.on_ime(Ime::Enabled);
-        host.on_ime(Ime::Preedit("にほん".into(), Some((0, 9))));
+        host.on_ime(Ime::Preedit("にほん".into(), Some((3, 3))));
         assert_eq!(*typed.borrow(), "");
+        host.sync_ime();
+        let cursor = host.ime_area.expect("still on");
+        assert!(
+            cursor.width < area.width && cursor.x > area.x + 4.0,
+            "IME window {cursor:?} follows the preedit cursor, not the field {area:?}"
+        );
         host.on_ime(Ime::Preedit(String::new(), None));
+        host.sync_ime();
+        assert_eq!(host.ime_area, Some(area), "the field again");
         host.on_ime(Ime::Commit("日本".into()));
         assert_eq!(*typed.borrow(), "日本");
         host.on_ime(Ime::Commit("語".into()));

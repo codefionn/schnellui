@@ -219,9 +219,10 @@ impl App {
     }
 
     /// Delivers one input-method event. A raw surface with a full-fidelity
-    /// handler gets it as is. Otherwise a commit types its text into the
-    /// focused text field, as typed keys do, and the other events are left
-    /// to the input method's own window.
+    /// handler gets it as is. A focused text field shows a preedit inline at
+    /// its caret, underlined, and changes nothing else until a commit types
+    /// its text, as typed keys do. `Disabled` and an empty preedit end the
+    /// display.
     pub fn dispatch_ime(&mut self, ime: RawImeEvent) -> FocusedInputResult {
         if self
             .focused_input_semantics()
@@ -229,23 +230,51 @@ impl App {
         {
             return self.dispatch_focused_input(FocusedInputEvent::Ime(ime));
         }
-        let RawImeEvent::Commit(text) = ime else {
-            return FocusedInputResult::Ignored;
+        let handled = |changed: bool| {
+            if changed {
+                FocusedInputResult::Handled
+            } else {
+                FocusedInputResult::Ignored
+            }
         };
-        if self.ime_area().is_none() {
-            return FocusedInputResult::Ignored;
-        }
-        let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
-        if !text.is_empty() && self.dispatch_key(UiKey::Char(&text)) {
-            FocusedInputResult::Handled
-        } else {
-            FocusedInputResult::Ignored
+        match ime {
+            RawImeEvent::Enabled => FocusedInputResult::Ignored,
+            RawImeEvent::Disabled => handled(self.show_preedit("", None)),
+            RawImeEvent::Preedit { text, cursor } => handled(self.show_preedit(&text, cursor)),
+            RawImeEvent::Commit(text) => {
+                if self.ime_area().is_none() {
+                    return FocusedInputResult::Ignored;
+                }
+                // A commit ends the composition even when it types nothing.
+                let ended = self.show_preedit("", None);
+                let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
+                handled((!text.is_empty() && self.dispatch_key(UiKey::Char(&text))) | ended)
+            }
         }
     }
 
+    /// Shows (or, when `text` is empty, ends) the composition of the focused
+    /// text field. `false` when nothing changed or no text field has focus.
+    fn show_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let Some(id) = self.focused_widget() else {
+            return false;
+        };
+        schnellui::widgets::dispatch_preedit(
+            &self.widgets,
+            &mut self.scene,
+            &mut self.text,
+            &mut self.atlas,
+            id,
+            text,
+            cursor,
+        )
+    }
+
     /// Where the input method's window belongs: the focused text field, or
-    /// the focused raw surface that takes input-method events. `None` when
-    /// focus is on anything else, so the host turns the input method off.
+    /// the focused raw surface that takes input-method events. While a text
+    /// field composes, the box of the composition's cursor instead, so the
+    /// candidate list sits under what is being typed. `None` when focus is on
+    /// anything else, so the host turns the input method off.
     pub fn ime_area(&self) -> Option<scene::Rect> {
         let id = self.focused_widget()?;
         let text_field = matches!(
@@ -255,6 +284,11 @@ impl App {
         let raw_surface = self
             .focused_input_semantics()
             .is_some_and(|(role, name)| self.has_focused_input_binding(role, name.as_deref()));
+        if text_field {
+            if let Some(cursor) = schnellui::widgets::preedit_box(&self.widgets, &self.scene, id) {
+                return Some(cursor);
+            }
+        }
         (text_field || raw_surface).then(|| self.scene.composited_rect(id))
     }
 

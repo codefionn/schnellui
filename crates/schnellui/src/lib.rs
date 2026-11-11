@@ -810,6 +810,8 @@ mod tests_navigation;
 #[cfg(test)]
 mod tests_pointer_handoff;
 #[cfg(test)]
+mod tests_preedit;
+#[cfg(test)]
 mod tests_remount;
 #[cfg(test)]
 mod tests_remount_viewport;

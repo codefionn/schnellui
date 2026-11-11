@@ -56,6 +56,8 @@ impl View for TextArea {
                     secondary: SmallVec::new(),
                     cache,
                     history: EditHistory::default(),
+                    compose: None,
+                    preedit_box: None,
                 },
             );
         });
@@ -555,6 +557,72 @@ fn build_carets(
     }
 }
 
+/// A composition's marks: an underline along the composed text on every row it
+/// covers, a thicker segment under the input method's cursor range, and the
+/// box of the cursor (where the input method's candidate window belongs).
+/// Composition frames allocate scratch; frames without one never get here.
+#[allow(clippy::too_many_arguments)]
+fn build_preedit_marks(
+    out: &mut SmallVec<[Primitive; 5]>,
+    cache: &AreaCache,
+    value_len: usize,
+    lo: usize,
+    len: usize,
+    cursor: Option<(usize, usize)>,
+    m: &Metrics,
+    color: Color,
+) -> Option<Rect> {
+    let rules = |out: &mut SmallVec<[Primitive; 5]>, from: usize, to: usize, w: f32| {
+        let mut rects = Vec::new();
+        build_washes(
+            &mut rects,
+            cache,
+            value_len,
+            &[TextSelection {
+                caret: to,
+                anchor: from,
+            }],
+            m,
+            color,
+        );
+        // The rule sits on a whole device pixel, so it stays crisp.
+        let device = norm_scale(m.scale);
+        for p in rects {
+            if let Primitive::SolidRect { rect, color, .. } = p {
+                let bottom = ((rect.y + rect.height) * device).round() / device;
+                out.push(Primitive::SolidRect {
+                    rect: Rect::new(rect.x, bottom - w, rect.width, w),
+                    color,
+                    corner_radius: 0.0,
+                });
+            }
+        }
+    };
+    rules(out, lo, lo + len, PREEDIT_RULE_W);
+    if let Some((a, b)) = cursor.filter(|(a, b)| a < b) {
+        rules(out, lo + a, lo + b, PREEDIT_CURSOR_RULE_W);
+    }
+    let at = lo + cursor.map_or(0, |(a, _)| a);
+    let mut probe: SmallVec<[Primitive; 5]> = SmallVec::new();
+    build_carets(
+        &mut probe,
+        cache,
+        value_len,
+        &[TextSelection {
+            caret: at,
+            anchor: at,
+        }],
+        m,
+        color,
+    );
+    probe.iter().find_map(|p| match p {
+        Primitive::Line {
+            from, to, width, ..
+        } => Some(Rect::new(from.x, from.y, *width, to.y - from.y)),
+        _ => None,
+    })
+}
+
 type Bounds = [f32; 4];
 
 /// Union of the bounds of the primitives that reach outside `rect`, if any.
@@ -1003,7 +1071,17 @@ fn emit_area(
     let frame_moved = cache.frame_top != frame_top;
     cache.frame_top = frame_top;
     let head = surface(framed(rect, frame_top), focused, invalid, &th);
-    let selections = selection_list(st.caret, st.anchor, &st.secondary);
+    // A composition shows as one caret at the input method's cursor (or none)
+    // and an underline; the selection it replaced is hidden meanwhile.
+    let comp = st
+        .compose
+        .as_ref()
+        .map(|c| (c.lo, c.len, c.cursor, c.caret_shown()));
+    let selections = match comp {
+        None => selection_list(st.caret, st.anchor, &st.secondary),
+        Some((_, _, _, true)) => selection_list(st.caret, st.caret, &[]),
+        Some(_) => SmallVec::new(),
+    };
     let value = st.value.as_str();
 
     // Inside a Scroll, an edit that adds lines or visual rows moves which lines
@@ -1189,6 +1267,18 @@ fn emit_area(
         let mut carets: SmallVec<[Primitive; 5]> = SmallVec::new();
         if focused {
             build_carets(&mut carets, cache, value.len(), &selections, &m, th.text);
+            if let Some((lo, len, cursor, _)) = comp {
+                st.preedit_box = build_preedit_marks(
+                    &mut carets,
+                    cache,
+                    value.len(),
+                    lo,
+                    len,
+                    cursor,
+                    &m,
+                    th.text,
+                );
+            }
         }
         prims.splice(r.text_end..r.caret_end, carets.iter().copied());
         r.caret_end = r.text_end + carets.len();
@@ -1301,6 +1391,18 @@ fn emit_area(
     let mut carets: SmallVec<[Primitive; 5]> = SmallVec::new();
     if focused {
         build_carets(&mut carets, cache, value.len(), &selections, &m, th.text);
+        if let Some((lo, len, cursor, _)) = comp {
+            st.preedit_box = build_preedit_marks(
+                &mut carets,
+                cache,
+                value.len(),
+                lo,
+                len,
+                cursor,
+                &m,
+                th.text,
+            );
+        }
     }
     pd.primitives.extend(carets.iter().copied());
     let caret_end = pd.primitives.len();

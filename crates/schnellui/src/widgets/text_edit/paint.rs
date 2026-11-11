@@ -61,6 +61,59 @@ pub(crate) fn byte_under_x(shaped: &ShapedText, len: usize, x: f32) -> usize {
     len
 }
 
+/// Where a composition sits in the text a field draws.
+#[derive(Clone, Copy)]
+pub(crate) struct Composition {
+    /// The composed text, as display bytes.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// The input method's cursor range, as display bytes.
+    pub(crate) cursor: Option<(usize, usize)>,
+    /// The byte the scroll must keep in view.
+    pub(crate) reveal: usize,
+}
+
+/// The text a field draws while `preedit` replaces `lo..hi` of `value`, and
+/// where the composition lies in it. A protected value stays obscured, and so
+/// does what is composed into it.
+pub(crate) fn composed_display(
+    value: &str,
+    lo: usize,
+    hi: usize,
+    preedit: &Preedit,
+    password: bool,
+) -> (String, Option<Composition>) {
+    let mut shown = display_value(&value[..lo], password);
+    let start = shown.len();
+    let map = |byte: usize| {
+        if password {
+            display_byte_for_value_byte(&preedit.text, byte, true)
+        } else {
+            byte
+        }
+    };
+    if password {
+        shown.push_str(&obscured_value(&preedit.text));
+    } else {
+        shown.push_str(&preedit.text);
+    }
+    let end = shown.len();
+    shown.push_str(&display_value(&value[hi..], password));
+    let cursor = preedit
+        .cursor
+        .map(|(a, b)| (start + map(a), start + map(b)));
+    let reveal = cursor.map_or(end, |(_, b)| b);
+    (
+        shown,
+        Some(Composition {
+            start,
+            end,
+            cursor,
+            reveal,
+        }),
+    )
+}
+
 /// Crops the glyph quads in `primitives[first..]` to the column `x0..x1`,
 /// trimming the atlas sample with the quad so a cut glyph keeps its scale, and
 /// drops quads that fall wholly outside.
@@ -127,6 +180,7 @@ pub(crate) fn emit_text_input_paint(
         hold_scroll,
         hint,
         min_height,
+        preedit,
     )) = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         rt.edits.get_mut(id).map(|e| {
@@ -149,6 +203,7 @@ pub(crate) fn emit_text_input_paint(
                 std::mem::take(&mut e.hold_scroll),
                 e.hint,
                 e.min_height,
+                e.preedit.clone(),
             )
         })
     })
@@ -158,7 +213,15 @@ pub(crate) fn emit_text_input_paint(
 
     let inv = 1.0 / norm_scale(scale);
     let phys = phys_size_px(size_px, scale);
-    let shown_value = display_value(&value, password);
+    // A composition shows in the field's own text, in place of the primary
+    // selection. Everything below measures that composed text.
+    let (shown_value, comp) = match preedit.as_ref().filter(|_| focused) {
+        Some(p) => {
+            let (lo, hi) = selections[0].range();
+            composed_display(&value, lo, hi, p, password)
+        }
+        None => (display_value(&value, password), None),
+    };
     let shaped = shaper.shape(&shown_value, phys, None);
     let text_sz = Size {
         width: shaped.width * inv,
@@ -221,7 +284,10 @@ pub(crate) fn emit_text_input_paint(
     let view_w = clip_x1 - clip_x0;
     let mut scroll_x = if focused { scroll_x } else { 0.0 };
     if focused && !hold_scroll {
-        let display_caret = display_byte_for_value_byte(&value, selections[0].caret, password);
+        let display_caret = match comp {
+            Some(c) => c.reveal,
+            None => display_byte_for_value_byte(&value, selections[0].caret, password),
+        };
         let caret_x = advance_before(&shaped, display_caret) * inv;
         if caret_x < scroll_x {
             scroll_x = caret_x;
@@ -271,8 +337,9 @@ pub(crate) fn emit_text_input_paint(
         color: t.surface,
         corner_radius: (radius - bw).max(0.0),
     });
-    // selection wash behind the glyphs (only meaningful while focused)
-    if focused {
+    // selection wash behind the glyphs (only meaningful while focused; a
+    // composition replaces the selection on screen)
+    if focused && comp.is_none() {
         for selection in &selections {
             let (start, end) = selection.range();
             if start == end {
@@ -300,7 +367,7 @@ pub(crate) fn emit_text_input_paint(
     // upward and shrinks when focused or populated. Geometry remains inside the
     // field so themes with thick frames and hard shadows still compose cleanly.
     // A hint shows only in an empty field, at the rest position.
-    if !placeholder.is_empty() && !(hint && !value.is_empty()) {
+    if !placeholder.is_empty() && !(hint && !shown_value.is_empty()) {
         let progress = if hint {
             0.0
         } else {
@@ -334,7 +401,7 @@ pub(crate) fn emit_text_input_paint(
     }
     // Once present, the value occupies the lower text line while the label stays
     // floated. An unlabelled input retains the original compact single-line box.
-    if !value.is_empty() {
+    if !shown_value.is_empty() {
         let first = pd.primitives.len();
         rasterize_and_push(
             pd,
@@ -348,8 +415,73 @@ pub(crate) fn emit_text_input_paint(
         );
         clip_glyphs_x(&mut pd.primitives, first, clip_x0, clip_x1);
     }
+    // a composition: its underline, the input method's cursor range as a
+    // thicker segment, and the caret only where the cursor is a point
+    let mut preedit_box = None;
+    if let Some(c) = comp {
+        let at = |byte: usize| text_origin.x + advance_before(&shaped, byte) * inv;
+        // The line box of composed wide glyphs can be taller than the field
+        // was built for, so the rule never sinks into the border.
+        // It sits on a whole device pixel, so it stays crisp.
+        let device = norm_scale(scale);
+        let bottom = ((value_origin.y + content_h).min(rect.y + rect.height - bw - pad_v * 0.5)
+            * device)
+            .round()
+            / device;
+        let rule = |pd: &mut schnellui::scene::PaintData, from: usize, to: usize, w: f32| {
+            let x0 = at(from).max(clip_x0);
+            let x1 = at(to).min(clip_x1);
+            if x1 > x0 {
+                pd.primitives.push(Primitive::SolidRect {
+                    rect: Rect::new(x0, bottom - w, x1 - x0, w),
+                    color: t.text,
+                    corner_radius: 0.0,
+                });
+            }
+        };
+        rule(pd, c.start, c.end, PREEDIT_RULE_W);
+        if let Some((a, b)) = c.cursor {
+            if a < b {
+                rule(pd, a, b, PREEDIT_CURSOR_RULE_W);
+            } else if (clip_x0..=clip_x1).contains(&at(a)) {
+                let x = at(a);
+                pd.primitives.push(Primitive::Line {
+                    from: Point {
+                        x,
+                        y: value_origin.y,
+                    },
+                    to: Point {
+                        x,
+                        y: value_origin.y + content_h,
+                    },
+                    width: CARET_W,
+                    color: t.text,
+                });
+            }
+            preedit_box = Some(Rect::new(
+                at(a).clamp(clip_x0, clip_x1),
+                value_origin.y,
+                CARET_W,
+                content_h,
+            ));
+        } else {
+            preedit_box = Some(Rect::new(
+                at(c.start).clamp(clip_x0, clip_x1),
+                value_origin.y,
+                CARET_W,
+                content_h,
+            ));
+        }
+    }
+    if comp.is_some() {
+        runtime.with(|rt| {
+            if let Some(e) = rt.borrow_mut().edits.get_mut(id) {
+                e.preedit_box = preedit_box;
+            }
+        });
+    }
     // the caret (collapsed selection only — a range selection shows the wash)
-    if focused {
+    if focused && comp.is_none() {
         for selection in &selections {
             if selection.caret != selection.anchor {
                 continue;

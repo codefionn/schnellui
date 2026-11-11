@@ -57,9 +57,12 @@ fn live_bits(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<u64> {
         WidgetKind::TextInput => {
             runtime.with(|rt| rt.borrow().edits.get(id).map(|e| text_bits(&e.value)))?
         }
-        WidgetKind::TextArea => {
-            runtime.with(|rt| rt.borrow().areas.get(id).map(|a| text_bits(&a.value)))?
-        }
+        WidgetKind::TextArea => runtime.with(|rt| {
+            rt.borrow()
+                .areas
+                .get(id)
+                .map(|a| text_bits(&a.real_value()))
+        })?,
         WidgetKind::Dropdown => text_bits(scene.a11y(id)?.value.as_deref()?),
         _ => return None,
     })
@@ -239,7 +242,9 @@ pub fn inherit_control_value(
             let value = previous_runtime.with(|rt| {
                 let rt = rt.borrow();
                 if kind == WidgetKind::TextArea {
-                    rt.areas.get(previous_id).map(|a| a.value.clone())
+                    rt.areas
+                        .get(previous_id)
+                        .map(|a| a.real_value().into_owned())
                 } else {
                     rt.edits.get(previous_id).map(|e| e.value.clone())
                 }
