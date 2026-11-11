@@ -61,7 +61,7 @@ fn kept_place(
 
 /// Whether Tab can stop on `id`: it is no roving-group member, or the group's
 /// entry. A tab bar's other tabs are reached by arrow keys, not Tab.
-fn is_tab_stop(scene: &Scene, id: WidgetId) -> bool {
+pub(crate) fn is_tab_stop(scene: &Scene, id: WidgetId) -> bool {
     match crate::app_interaction::roving_group(scene, id) {
         None => true,
         Some(group) => schnellui::a11y::with_tab_order(scene, |order| {
@@ -157,6 +157,7 @@ impl App {
     /// already do so automatically.
     pub fn inherit_remount_state(&mut self, previous: &App) {
         schnellui::widgets::set_clock(&self.widgets, schnellui::widgets::clock(&previous.widgets));
+        self.keyboard_modality = previous.keyboard_modality;
         let previous_focus = previous.focused_widget().map(|id| {
             let ring_visible = schnellui::widgets::focus_ring_visible(&previous.widgets, id);
             (id, ring_visible)
@@ -210,11 +211,14 @@ impl App {
         let previous_scrollbar = schnellui::widgets::scrollbar_pointer_target(&previous.widgets);
         stateful_nodes.extend(previous_scrollbar);
         let previous_panels = schnellui::widgets::dialog_panels(&previous.widgets);
+        let previous_windows =
+            schnellui::widgets::dialogs_front_first(&previous.widgets, &previous.scene);
         let modal_ids = previous
             .modal_openers
             .iter()
             .flat_map(|entry| [entry.panel, entry.opener])
-            .chain(previous_panels.iter().copied());
+            .chain(previous_panels.iter().copied())
+            .chain(previous_windows.iter().filter_map(|&(_, last)| last));
         let previous_nav_start = schnellui::widgets::nav_start(&previous.widgets);
         let previous_reveal = schnellui::widgets::pending_reveal(&previous.widgets);
         let counterparts = remount::CounterpartMap::new(
@@ -275,6 +279,13 @@ impl App {
             if !takes_focus(&self.scene, target) {
                 return None;
             }
+            // A picked or dismissed list hands focus back to its field, with the ring
+            // as the picking or the Escape left it.
+            let ring_visible = if previous_option_trigger.is_some() {
+                previous.keyboard_modality
+            } else {
+                ring_visible
+            };
             Some(RemountFocus {
                 target,
                 ring_visible,
@@ -284,14 +295,15 @@ impl App {
         // A closed dialog or window returns focus to the control that opened it, when
         // that control survives.
         let restored = restored.or_else(|| {
-            let (opener, ring_visible) = previous.modal_opener_of(effective_focus?.0)?;
+            let opener = previous.modal_opener_of(effective_focus?.0)?;
             let target = counterparts.get(opener)?;
             if !takes_focus(&self.scene, target) {
                 return None;
             }
+            // The ring follows how it closed, not how it opened.
             Some(RemountFocus {
                 target,
-                ring_visible,
+                ring_visible: previous.keyboard_modality,
             })
         });
 
@@ -309,6 +321,35 @@ impl App {
             Some(RemountFocus {
                 target,
                 ring_visible,
+            })
+        });
+
+        // A window or modal with no opener (open at mount, or its opener is gone) closed
+        // with focus in it: the front window left open gives focus back to its control,
+        // else the page's first tab stop. Focus never ends on nothing.
+        let restored = restored.or_else(|| {
+            let (focused, _) = effective_focus?;
+            let home = schnellui::widgets::enclosing_dialog_panel(
+                &previous.widgets,
+                &previous.scene,
+                focused,
+            )?;
+            if counterparts.get(home).is_some() {
+                return None;
+            }
+            let remaining: Vec<_> = previous_windows
+                .iter()
+                .filter_map(|&(panel, last)| {
+                    Some((
+                        counterparts.get(panel)?,
+                        last.and_then(|id| counterparts.get(id)),
+                    ))
+                })
+                .collect();
+            let target = self.closed_window_fallback(&remaining)?;
+            Some(RemountFocus {
+                target,
+                ring_visible: previous.keyboard_modality,
             })
         });
 
@@ -347,14 +388,12 @@ impl App {
                 Some(ModalOpener {
                     panel: counterparts.get(entry.panel)?,
                     opener: counterparts.get(entry.opener)?,
-                    ring_visible: entry.ring_visible,
                 })
             })
             .collect();
         // A modal that opened with this remount took focus from the
         // counterpart of the previous focus.
-        let focus_before =
-            previous_focus.and_then(|(id, ring)| Some((counterparts.get(id)?, ring)));
+        let focus_before = previous_focus.and_then(|(id, _)| counterparts.get(id));
         self.note_opened_modal(focus_before, &known);
 
         if let Some(focus) = restored {

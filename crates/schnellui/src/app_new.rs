@@ -133,6 +133,7 @@ impl App {
             theme_transition: None,
             reopen_context_menu: None,
             modal_openers: Vec::new(),
+            keyboard_modality: true,
             region_returns: Vec::new(),
             pressed_dialog: None,
             redrive_content_drag: None,

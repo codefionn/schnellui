@@ -73,13 +73,6 @@ fn outside_windows(app: &App) -> bool {
     })
 }
 
-fn start_outside_windows(app: &App) -> bool {
-    schnellui::widgets::nav_start(&app.widgets).is_some_and(|start| {
-        schnellui::widgets::enclosing_dialog_panel(&app.widgets, app.scene(), start.widget)
-            .is_none()
-    })
-}
-
 #[test]
 fn closing_a_window_opened_with_the_keyboard_returns_a_ring_to_its_opener() {
     let mut base = mounted(0);
@@ -141,10 +134,9 @@ fn closing_a_window_open_at_mount_does_not_land_in_another_window() {
             );
             assert!(closed.focus_ring_shown());
         } else {
-            // Pointer focus is cleared; the place Tab starts from is outside
-            // every window.
-            assert_eq!(closed.focused_widget(), None);
-            assert!(start_outside_windows(&closed));
+            // A pointer close lands outside every window too, without a ring.
+            assert!(outside_windows(&closed), "{:?}", focused_name(&closed));
+            assert!(!closed.focus_ring_shown());
         }
     }
 }
@@ -360,13 +352,12 @@ fn focus_the_user_put_on_the_page_survives_closing_a_window_they_pressed() {
 
 #[test]
 fn closing_a_window_open_at_mount_after_a_press_on_its_body_leaves_the_windows() {
-    // No opener was recorded, so the fallback a closing window gives is a
-    // control outside every window. The press was a pointer press, so that
-    // control is the place Tab starts from, not invisible focus.
+    // No opener was recorded, so the fallback a closing window gives is the
+    // page's first tab stop. The press was a pointer press: no ring.
     let host = click_window_a_body(mounted(A));
     let closed = remount(host.app(), 0);
-    assert_eq!(closed.focused_widget(), None);
-    assert!(start_outside_windows(&closed));
+    assert_eq!(focused_name(&closed).as_deref(), Some("Open A"));
+    assert!(!closed.focus_ring_shown());
 }
 
 fn modal_view(open: bool) -> Column {

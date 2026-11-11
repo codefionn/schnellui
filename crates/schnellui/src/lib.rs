@@ -652,6 +652,10 @@ pub struct App {
     /// focus when it opened. Closing a modal returns focus there. Widget ids
     /// are remapped through the counterpart map on every remount.
     modal_openers: Vec<ModalOpener>,
+    /// Whether the last input was the keyboard (a key, a keyboard focus move) rather than a
+    /// pointer press. A closing window or modal hands focus back with the ring shown only
+    /// when the keyboard closed it, whatever the ring did when it opened.
+    keyboard_modality: bool,
     /// The docked regions that returned focus on Escape, each with the control that had focus
     /// when the region appeared.
     region_returns: Vec<RegionReturn>,
@@ -716,8 +720,6 @@ struct DialogGeometry {
 struct ModalOpener {
     panel: WidgetId,
     opener: WidgetId,
-    /// Whether the opener wore the keyboard ring when the modal opened.
-    ring_visible: bool,
 }
 
 /// Where focus was before a docked region was replaced.
@@ -786,6 +788,8 @@ pub mod accesskit_reexport {
 
 #[cfg(test)]
 mod tests_capture_keys;
+#[cfg(test)]
+mod tests_close_focus;
 #[cfg(test)]
 mod tests_core;
 #[cfg(test)]

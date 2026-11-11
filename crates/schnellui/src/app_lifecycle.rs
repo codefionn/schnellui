@@ -288,9 +288,7 @@ impl App {
         // When the focused node goes with the branch, focus should land on the
         // same-identity node of the replacement, else the nearest survivor in
         // the old tab order (next first, then previous), not on nothing.
-        let focus_before = self
-            .focused_widget()
-            .map(|id| (id, self.focus_ring_shown()));
+        let focus_before = self.focused_widget();
         let known: Vec<_> = schnellui::widgets::dialog_panels(&self.widgets)
             .into_iter()
             .filter(|panel| !removed_nodes.contains(panel))
@@ -307,7 +305,7 @@ impl App {
             let reference = self.scene.component_ref(focused);
             let opener = self
                 .modal_opener_of(focused)
-                .filter(|(id, _)| !removed_nodes.contains(id));
+                .filter(|id| !removed_nodes.contains(id));
             // A window that goes with the branch takes its neighbours with it:
             // land outside every dialog, not on another window's Close button.
             let home_is_gone =
@@ -330,7 +328,7 @@ impl App {
                             .is_none()
                     })
             });
-            displaced_focus = Some((reference, opener, neighbour, ring));
+            displaced_focus = Some((reference, opener, neighbour, ring, home_is_gone));
             let previous = self.focused_input_semantics();
             let _ = schnellui::widgets::dispatch_focus(
                 &self.widgets,
@@ -387,7 +385,7 @@ impl App {
         self.scene
             .mark_dirty(removed.parent.unwrap_or(new_root), scene::DirtyFlags::ALL);
         self.note_opened_modal(focus_before, &known);
-        if let Some((reference, opener, neighbour, ring)) = displaced_focus {
+        if let Some((reference, opener, neighbour, ring, home_is_gone)) = displaced_focus {
             let same_identity = reference
                 .and_then(|reference| self.scene.resolve_ref(reference))
                 .filter(|id| schnellui::widgets::is_in_subtree(&self.scene, *id, new_root))
@@ -405,11 +403,25 @@ impl App {
             // Invisible pointer focus is cleared instead, and the neighbour
             // becomes the starting point of the next Tab.
             let mut parked = None;
+            let new_window = self.first_control_of_new_window(&known);
+            // A window with no opener: the front window left open gives focus to its
+            // control, else the page's first tab stop.
+            let closed_fallback = home_is_gone
+                .then(|| {
+                    let windows =
+                        schnellui::widgets::dialogs_front_first(&self.widgets, &self.scene);
+                    self.closed_window_fallback(&windows)
+                })
+                .flatten();
             let (heir, ring) = match (same_identity, opener) {
                 (Some(id), _) => (Some(id), ring),
-                (None, Some((id, opener_ring))) => (Some(id), opener_ring),
+                // The ring follows how the window closed, not how it opened.
+                (None, Some(id)) => (Some(id), self.keyboard_modality),
+                (None, None) if new_window.is_none() && closed_fallback.is_some() => {
+                    (closed_fallback, self.keyboard_modality)
+                }
                 (None, None) => (
-                    self.first_control_of_new_window(&known).or_else(|| {
+                    new_window.or_else(|| {
                         let (id, after) =
                             neighbour.filter(|(id, _)| self.scene.node(*id).is_some())?;
                         if ring {

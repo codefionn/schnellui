@@ -4,12 +4,12 @@ use super::*;
 
 impl App {
     /// The opener of the innermost tracked dialog containing `focused`.
-    pub(crate) fn modal_opener_of(&self, focused: WidgetId) -> Option<(WidgetId, bool)> {
+    pub(crate) fn modal_opener_of(&self, focused: WidgetId) -> Option<WidgetId> {
         self.modal_openers
             .iter()
             .rev()
             .find(|entry| schnellui::widgets::is_in_subtree(&self.scene, focused, entry.panel))
-            .map(|entry| (entry.opener, entry.ring_visible))
+            .map(|entry| entry.opener)
     }
 
     /// A control standing in for focus that a press on a window's body took
@@ -64,6 +64,43 @@ impl App {
         })
     }
 
+    /// Where focus goes when the window or modal that held it closed and had no opener to
+    /// return to: the control that last had focus in the front window still open, else the
+    /// first tab stop of the page. `windows` lists the open windows, front first, with their
+    /// remembered control. Never `None` while a control can take focus.
+    pub(crate) fn closed_window_fallback(
+        &self,
+        windows: &[(WidgetId, Option<WidgetId>)],
+    ) -> Option<WidgetId> {
+        let remembered = windows.iter().find_map(|&(panel, last)| {
+            let last = last?;
+            (self.scene.node(last).is_some()
+                && schnellui::widgets::is_in_subtree(&self.scene, last, panel)
+                && crate::app_inherit::takes_focus(&self.scene, last))
+            .then_some(last)
+        });
+        let stops = |id: &WidgetId| {
+            crate::app_inherit::takes_focus(&self.scene, *id)
+                && crate::app_inherit::is_tab_stop(&self.scene, *id)
+        };
+        // The first stop that is no window's control (the one that holds the page); with
+        // every control inside a window (an open modal limits the tab order to it), the
+        // first of those.
+        remembered.or_else(|| {
+            schnellui::a11y::with_tab_order(&self.scene, |order| {
+                order
+                    .iter()
+                    .filter(|id| stops(id))
+                    .find(|&&id| {
+                        schnellui::widgets::enclosing_dialog_panel(&self.widgets, &self.scene, id)
+                            .is_none()
+                    })
+                    .or_else(|| order.iter().find(|id| stops(id)))
+                    .copied()
+            })
+        })
+    }
+
     /// Drops dialogs that left the tree, then records every dialog that is
     /// new, modal or modeless, with `focus_before` as its opener: the control
     /// that held focus when it appeared. `known` lists the panels that were
@@ -71,16 +108,10 @@ impl App {
     /// opener they had, or none when they were open at mount. A focus already
     /// inside the new dialog is no opener. Remount and subtree replacement
     /// time only.
-    pub(crate) fn note_opened_modal(
-        &mut self,
-        focus_before: Option<(WidgetId, bool)>,
-        known: &[WidgetId],
-    ) {
+    pub(crate) fn note_opened_modal(&mut self, focus_before: Option<WidgetId>, known: &[WidgetId]) {
         self.modal_openers
             .retain(|entry| self.scene.node(entry.panel).is_some());
-        let Some((opener, ring_visible)) =
-            focus_before.filter(|&(id, _)| self.scene.node(id).is_some())
-        else {
+        let Some(opener) = focus_before.filter(|&id| self.scene.node(id).is_some()) else {
             return;
         };
         for panel in schnellui::widgets::dialog_panels(&self.widgets) {
@@ -90,11 +121,7 @@ impl App {
             {
                 continue;
             }
-            self.modal_openers.push(ModalOpener {
-                panel,
-                opener,
-                ring_visible,
-            });
+            self.modal_openers.push(ModalOpener { panel, opener });
         }
     }
 }

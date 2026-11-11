@@ -1029,6 +1029,31 @@ pub fn remember_dialog_focus(runtime: &crate::widgets::Runtime, scene: &Scene, f
     });
 }
 
+/// Every mounted dialog's panel with the control that last had focus in it, the one in
+/// front first. A closing window falls back to the front one's remembered control.
+pub fn dialogs_front_first(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+) -> Vec<(WidgetId, Option<WidgetId>)> {
+    runtime.with(|runtime| {
+        let runtime = runtime.borrow();
+        let mut layers: Vec<_> = runtime
+            .dialog_layer_ids
+            .iter()
+            .filter_map(|&layer| {
+                let state = runtime.dialog_layers.get(layer)?;
+                let key = (scene.overlay_level(layer), scene.overlay_order(layer));
+                Some((key, state.panel, state.last_focus))
+            })
+            .collect();
+        layers.sort_by_key(|(key, _, _)| std::cmp::Reverse(*key));
+        layers
+            .into_iter()
+            .map(|(_, panel, last)| (panel, last))
+            .collect()
+    })
+}
+
 /// The panel of the dialog or window a press on `hit` lands in, its backdrop
 /// included. `None` outside every dialog.
 pub fn pressed_dialog_panel(

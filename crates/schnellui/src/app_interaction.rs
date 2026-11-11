@@ -6,6 +6,7 @@ impl App {
     /// AccessKit `Focus`/`Blur` action and the windowed Tab/click take (SOUL §6.3).
     /// Returns `true` if focus actually moved (⇒ redraw).
     pub fn focus(&mut self, target: Option<scene::WidgetId>) -> bool {
+        self.keyboard_modality = true;
         let previous = self.focused_input_semantics();
         let dismissed =
             schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, target);
@@ -61,6 +62,7 @@ impl App {
     /// modal or outside every window changes nothing. Returns whether a window
     /// was activated.
     pub(crate) fn activate_window_at(&mut self, hit: Option<scene::WidgetId>) -> bool {
+        self.keyboard_modality = false;
         self.pressed_dialog = hit.and_then(|hit| {
             schnellui::widgets::pressed_dialog_panel(&self.widgets, &self.scene, hit)
         });
@@ -100,6 +102,7 @@ impl App {
     /// keyboard ring. Text editables do wear it and also paint their focused
     /// border and caret, matching browser keyboard-input heuristics.
     pub(crate) fn pointer_focus(&mut self, target: Option<scene::WidgetId>) -> bool {
+        self.keyboard_modality = false;
         let previous = self.focused_input_semantics();
         let target = self.pointer_focus_target(target);
         let dismissed =
@@ -308,6 +311,7 @@ impl App {
     pub fn dispatch_key(&mut self, key: UiKey<'_>) -> bool {
         use widgets::{ActivateKey, Adjust, EditKey};
 
+        self.keyboard_modality = true;
         // A drag in flight owns Escape before any focused handler sees it.
         if key == UiKey::Escape && self.cancel_drag() {
             return true;
@@ -362,6 +366,8 @@ impl App {
                 .is_some_and(|a| a11y::StateFlags(a.state).contains(a11y::StateFlags::EXPANDED));
             match key {
                 UiKey::Escape if expanded => {
+                    // The field keeps focus, now with the ring: the keyboard closed it.
+                    self.show_focus_ring();
                     return schnellui::widgets::dismiss_open_dropdowns(
                         &self.widgets,
                         &mut self.scene,
@@ -643,6 +649,19 @@ impl App {
         })
     }
 
+    /// Shows the keyboard ring on the focused control: a key closed something that
+    /// leaves focus where it is.
+    fn show_focus_ring(&mut self) {
+        if let Some(id) = self.focused_widget() {
+            let _ = schnellui::widgets::set_focus_ring_visible(
+                &self.widgets,
+                &mut self.scene,
+                id,
+                true,
+            );
+        }
+    }
+
     /// Focuses `target` without the keyboard focus ring, as a pointer press
     /// would: for a host that puts focus into an overlay it opened itself.
     /// The first navigation key shows the ring.
@@ -663,7 +682,9 @@ impl App {
         target: scene::WidgetId,
         ring_visible: bool,
     ) -> bool {
+        let modality = self.keyboard_modality;
         let changed = self.focus(Some(target));
+        self.keyboard_modality = modality;
         changed
             | schnellui::widgets::set_focus_ring_visible(
                 &self.widgets,
@@ -859,7 +880,7 @@ impl App {
     pub fn dismiss_context_menu(&mut self) -> bool {
         let back = self.menu_focus_return();
         let dismissed = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
-        dismissed | back.is_some_and(|id| self.focus(Some(id)))
+        dismissed | back.is_some_and(|id| self.focus_after_replacement(id, self.keyboard_modality))
     }
 
     /// Escape's ladder, the same from the keyboard path and the window: a
@@ -874,6 +895,7 @@ impl App {
             return Some(self.dismiss_context_menu());
         }
         if schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, None) {
+            self.show_focus_ring();
             return Some(true);
         }
         if let Some(result) =
@@ -950,7 +972,7 @@ impl App {
         let activation =
             schnellui::widgets::activate_context_menu_item(&self.widgets, &mut self.scene, id)?;
         if let Some(back) = back {
-            let _ = self.focus(Some(back));
+            let _ = self.focus_after_replacement(back, self.keyboard_modality);
         }
         match activation.action {
             widgets::ContextMenuAction::SelectAll => {

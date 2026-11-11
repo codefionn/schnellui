@@ -144,6 +144,34 @@ fn keyboard_after_a_pointer_open_picks_closes_and_tabs_on() {
 }
 
 #[test]
+fn escape_closes_a_pointer_opened_list_with_the_ring_on_the_trigger() {
+    let (mut host, _) = host();
+    click_trigger(&mut host);
+    assert!(!host.app().focus_ring_shown(), "the click shows no ring");
+    key(&mut host, HostKey::Escape);
+    assert_eq!(focused(&host).as_deref(), Some("Density"));
+    assert!(host.app().focus_ring_shown(), "Escape shows the ring");
+}
+
+#[test]
+fn clicking_an_option_closes_the_list_without_a_ring_on_the_trigger() {
+    let (mut host, _) = host();
+    click_trigger(&mut host);
+    key(&mut host, HostKey::Down);
+    let option = find(&host, Role::ListBoxOption, "Comfortable");
+    let at = center(&host, option);
+    host.pointer_move(at);
+    host.press(PointerButton::Left);
+    host.release(PointerButton::Left);
+    host.frame();
+    assert_eq!(focused(&host).as_deref(), Some("Density"));
+    assert!(
+        !host.app().focus_ring_shown(),
+        "a pointer pick shows no ring"
+    );
+}
+
+#[test]
 fn the_debug_route_click_focuses_the_trigger_too() {
     let (mut host, _) = host();
     host.set_route(PointerRoute::Debug);
