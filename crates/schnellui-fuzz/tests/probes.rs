@@ -608,3 +608,69 @@ mod replays {
         assert_eq!(oracle::animation(&component, mount, &ops), Ok(()));
     }
 }
+
+// --- decorations that outlive their state -----------------------------------------
+
+mod decorations_after_a_tiny_resize {
+
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::curve::Gradual;
+    use schnellui_fuzz::ops::Op;
+    use schnellui_fuzz::{oracle, serial, PointerButton, THEMES};
+
+    fn mount() -> Mount {
+        Mount {
+            theme: THEMES[0],
+            size: (720, 520),
+            scale: 1.0,
+            animate: false,
+        }
+    }
+
+    /// Press, a fast click on a control's corner, then a resize to a fifth of
+    /// the window: the text input's hover fill, recoloured glyphs and focus
+    /// stroke stayed after the pointer and focus had left it.
+    #[test]
+    fn a_press_then_a_corner_click_then_a_tiny_resize() {
+        let _serial = serial();
+        let c = components::named("dialogs");
+        let ops = [
+            Op::Press(PointerButton::Left),
+            Op::Click {
+                n: 16,
+                corner: true,
+                button: PointerButton::Left,
+                count: 1,
+            },
+            Op::Resize(0.2, 0.2),
+        ];
+        assert_eq!(oracle::twin(&c, mount(), &ops), Ok(()));
+    }
+
+    /// The same, as a window drag with the pointer held on a corner.
+    #[test]
+    fn a_gradual_resize_while_a_corner_is_held() {
+        let _serial = serial();
+        let c = components::named("dialogs");
+        let drag = Gradual {
+            from: (720.0, 520.0),
+            to: (241.0, 90.0),
+            steps: 2,
+            seed: 9775942948504049,
+        };
+        let drag = Gradual {
+            from: (720.0, 520.0),
+            ..drag
+        };
+        let grip = oracle::Grip {
+            before: vec![Op::Aim {
+                n: 166,
+                corner: true,
+            }],
+        };
+        assert_eq!(
+            oracle::resize(&c, mount(), Some(&grip), &drag.sizes()),
+            Ok(())
+        );
+    }
+}

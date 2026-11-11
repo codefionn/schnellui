@@ -577,8 +577,10 @@ pub fn fit_text_fields(
         if !runtime.with(|rt| rt.borrow().edits.contains_key(id)) {
             continue;
         }
+        // The emit lays hover, press and focus again itself. Doing it twice
+        // would forget the records of the first set while its primitives stay
+        // in the paint, and stack a second set over them.
         crate::widgets::text_edit::emit_text_input_paint(runtime, scene, shaper, atlas, id);
-        redecorate_after_refill(runtime, scene, id);
         scene.mark_dirty(id, DirtyFlags::PAINT);
     }
 }
