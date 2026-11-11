@@ -41,17 +41,28 @@ jobs:
           persist-credentials: false
       - name: Install native build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev
+          # Transient mirror/DNS failures on hosted runners have failed this
+          # step before; retry before giving up.
+          for attempt in 1 2 3 4; do
+            if sudo apt-get update && sudo apt-get install -y \
+                pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev; then
+              break
+            fi
+            if [ "$attempt" = 4 ]; then
+              echo "apt-get failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "apt-get failed (attempt $attempt); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
       - name: Install repository Rust toolchain
         run: rustup show active-toolchain
       # Servo is excluded like in scripts/ci.sh: building it takes longer than the
-      # rest of the workspace together. Lints are reported but do not fail the job
-      # until the existing warnings are fixed; add `-- -D warnings` after that.
+      # rest of the workspace together. Warnings fail the job.
       - name: Clippy
         run: |
           cargo clippy --locked --workspace --all-targets \
-              --exclude schnellui-servo --exclude servo_demo
+              --exclude schnellui-servo --exclude servo_demo -- -D warnings
 
   package:
     runs-on: ubuntu-24.04

@@ -31,8 +31,21 @@ jobs:
           persist-credentials: false
       - name: Install native build and software rendering dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev libvulkan1 mesa-vulkan-drivers fonts-dejavu-core
+          # Transient mirror/DNS failures on hosted runners have failed this
+          # step before; retry before giving up.
+          for attempt in 1 2 3 4; do
+            if sudo apt-get update && sudo apt-get install -y \
+                pkg-config libfontconfig1-dev libwayland-dev libxkbcommon-dev \
+                libvulkan1 mesa-vulkan-drivers fonts-dejavu-core; then
+              break
+            fi
+            if [ "$attempt" = 4 ]; then
+              echo "apt-get failed after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "apt-get failed (attempt $attempt); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           # Job-level env cannot read the runner context, so these paths are set here.
           echo "SCHNELLUI_CI_REPORT=$RUNNER_TEMP/allocation-report.json" >> "$GITHUB_ENV"
           XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-runtime"
