@@ -214,6 +214,7 @@ impl App {
             .flat_map(|entry| [entry.panel, entry.opener])
             .chain(previous_panels.iter().copied());
         let previous_nav_start = schnellui::widgets::nav_start(&previous.widgets);
+        let previous_reveal = schnellui::widgets::pending_reveal(&previous.widgets);
         let counterparts = remount::CounterpartMap::new(
             &previous.scene,
             &self.scene,
@@ -221,7 +222,8 @@ impl App {
                 .iter()
                 .copied()
                 .chain(modal_ids)
-                .chain(previous_nav_start.map(|start| start.widget)),
+                .chain(previous_nav_start.map(|start| start.widget))
+                .chain(previous_reveal),
         );
 
         self.inherit_dialog_geometry(previous);
@@ -364,6 +366,13 @@ impl App {
                 })
             });
             schnellui::widgets::set_nav_start(&self.widgets, nav_start.or(carried));
+        }
+
+        // A reveal that waited for layout still waits for it, on the
+        // control's counterpart. A rebuild must not drop it: a theme fade
+        // rebuilds every frame, and the action would never scroll.
+        if let Some(target) = previous_reveal.and_then(|id| counterparts.get(id)) {
+            schnellui::widgets::request_reveal(&self.widgets, target);
         }
 
         // A context menu open on a control that survives the rebuild stays

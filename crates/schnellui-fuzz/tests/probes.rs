@@ -567,3 +567,44 @@ mod debug_route {
         }
     }
 }
+
+/// Replays of inputs the properties once failed on.
+mod replays {
+    use schnellui_fuzz::components::{self, Mount};
+    use schnellui_fuzz::ops::{Op, ScrollAction};
+    use schnellui_fuzz::PointerButton;
+    use schnellui_fuzz::{oracle, serial, THEMES};
+
+    /// A theme fade, a click, a burst that a tiny resize and a scroll-into-view
+    /// action fall in, then a wait: the outer scroll view ended at 10 with the
+    /// animations on and at 0 with them off.
+    #[test]
+    fn scroll_into_view_after_a_tiny_resize_during_a_fade() {
+        let _serial = serial();
+        let component = components::named("scroll_nested");
+        let mount = Mount {
+            theme: THEMES[0],
+            size: (300, 220),
+            scale: 1.0,
+            animate: false,
+        };
+        let ops = [
+            Op::ThemeFade(1, 50),
+            Op::Click {
+                n: 0,
+                corner: false,
+                button: PointerButton::Left,
+                count: 1,
+            },
+            Op::Burst(true),
+            Op::Resize(0.2, 0.2),
+            Op::Access {
+                n: 3,
+                viewport: false,
+                action: ScrollAction::IntoView,
+            },
+            Op::Wait(1),
+        ];
+        assert_eq!(oracle::animation(&component, mount, &ops), Ok(()));
+    }
+}

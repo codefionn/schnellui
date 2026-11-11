@@ -903,6 +903,12 @@ pub fn request_reveal(runtime: &Runtime, id: WidgetId) {
     runtime.with(|rt| rt.borrow_mut().pending_reveal = Some(id));
 }
 
+/// The widget a [`request_reveal`] is waiting to show, if any. A remount
+/// carries it to the replacement tree.
+pub fn pending_reveal(runtime: &Runtime) -> Option<WidgetId> {
+    runtime.with(|rt| rt.borrow().pending_reveal)
+}
+
 /// Runs the reveal [`request_reveal`] queued, if its widget is still mounted.
 pub fn flush_pending_reveal(runtime: &Runtime, scene: &mut Scene, shaper: &mut TextShaper) -> bool {
     let Some(id) = runtime.with(|rt| rt.borrow_mut().pending_reveal.take()) else {
