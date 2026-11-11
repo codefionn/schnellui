@@ -127,8 +127,9 @@ pub(crate) fn sidebar(
     let inner_width = width - 36.0;
     let inner_height = height - 36.0;
     // A short window can't fit the whole library, so it scrolls inside the
-    // card. The viewport reaches 14 px into the right padding for the
-    // scrollbar, which only shows when the content overflows.
+    // card. The viewport reaches 12 px into the right padding, so a list that
+    // fits keeps the card's 18 px margin on both sides. When it overflows the
+    // scroll's own gutter takes those 12 px for the scrollbar.
     let library = Column::new()
         .width(inner_width)
         .min_height(inner_height)
@@ -194,7 +195,7 @@ pub(crate) fn sidebar(
         .child(
             Pad::insets(EdgeInsets {
                 top: 18.0,
-                right: 4.0,
+                right: 6.0,
                 bottom: 18.0,
                 left: 18.0,
             })
@@ -202,7 +203,10 @@ pub(crate) fn sidebar(
                 Scroll::new()
                     .label("Widget library")
                     .scrollbar(true)
-                    .size(inner_width + 14.0, inner_height)
+                    .size(
+                        inner_width + schnellui::layout::SCROLLBAR_GUTTER,
+                        inner_height,
+                    )
                     .child(library),
             ),
         )
@@ -533,9 +537,11 @@ pub(crate) fn pane_view(
             .label(format!("{} pane", active.title))
             .scrollbar(true)
             .size(inner_width, scroll_height)
+            // The body is as wide as the viewport less the gutter the scroll
+            // reserves for its bar: the widest widgets are fixed-size charts.
             .child(widget_body(
                 &active,
-                inner_width - 14.0,
+                inner_width - schnellui::layout::SCROLLBAR_GUTTER,
                 scroll_height,
                 compact,
             )),

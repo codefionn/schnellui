@@ -70,8 +70,6 @@ const TODO_THEME: Theme = Theme {
 
 /// The height of the task entry and its Add button, so they line up.
 const ENTRY_HEIGHT: f32 = 40.0;
-/// A task row leaves a gutter at the list's right edge for the scrollbar.
-const TASK_ROW_WIDTH: f32 = 516.0;
 
 /// A finished task's words: the board theme with muted ink.
 const DONE_THEME: Theme = Theme {
@@ -319,7 +317,7 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
     let visible_tasks = tasks_for_filter(&state);
     let visible_count = visible_tasks.len();
 
-    let mut task_list = Column::new().gap(6.0).width(TASK_ROW_WIDTH);
+    let mut task_list = Column::new().gap(6.0).align(Align::Stretch);
     if visible_tasks.is_empty() {
         task_list = task_list
             .child(Text::new("NOTHING HERE — A RARE AND EXCELLENT SIGHT.").size(12.0))
@@ -350,10 +348,9 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
         task_list = task_list.child(
             Column::new()
                 .gap(8.0)
-                .width(TASK_ROW_WIDTH)
+                .align(Align::Stretch)
                 .child(
                     Row::new()
-                        .width(TASK_ROW_WIDTH)
                         .gap(12.0)
                         .align(Align::Center)
                         .child(
@@ -463,6 +460,9 @@ fn todo_view(runtime: TodoRuntime) -> impl View {
             .size(540.0, 304.0)
             .label("Tasks")
             .scrollbar(true)
+            // Rows take the viewport's width: all of it while the list fits, and
+            // what the scrollbar's gutter leaves once it overflows.
+            .fit_width()
             // A task just added lands at the end of the list: show it.
             .follow_end(state.reveal_end)
             // Room for the checkbox focus ring at the list edge.
@@ -806,6 +806,79 @@ mod tests {
             }
         }
         assert!(faults.is_empty(), "{faults:#?}");
+    }
+
+    /// The right edge of the task rows in the "Tasks" list, and the viewport's:
+    /// `(content_right, viewport_right, bar_left)`. `bar_left` is the viewport's
+    /// right edge less the scrollbar's gutter, and `None` while nothing overflows.
+    fn task_list_edges(app: &App) -> (f32, f32, Option<f32>) {
+        let scene = app.scene();
+        let viewport = app
+            .find_widget(Role::ScrollView, Some("Tasks"))
+            .expect("the task list");
+        let right = |id| scene.layout(id).map_or(f32::MIN, |l| l.rect.right());
+        // The Remove buttons sit at the right end of their rows.
+        let content = scene
+            .preorder()
+            .into_iter()
+            .filter(|&id| {
+                scene
+                    .a11y(id)
+                    .and_then(|a| a.name.as_deref())
+                    .is_some_and(|name| name.starts_with("Remove "))
+            })
+            .map(right)
+            .fold(f32::MIN, f32::max);
+        let bar = schnellui::testing::fuzz::scrollbars(app)
+            .into_iter()
+            .find(|bar| bar.viewport == viewport)
+            .map(|bar| bar.track.x);
+        (content, right(viewport), bar)
+    }
+
+    /// An overflowing list ends where the scrollbar's gutter begins, less the
+    /// 4px the list keeps for the checkbox focus ring. The list used to stop a
+    /// further 14px short, on top of the gutter.
+    #[test]
+    fn an_overflowing_task_list_runs_up_to_the_scrollbar_gutter() {
+        let (runtime, _) = scenario_app(Scenario::DayPlan, 940, 700, 1.0);
+        runtime.update(|todo| {
+            for id in 6..12 {
+                todo.tasks.push(Task {
+                    id,
+                    title: format!("Extra task {id}"),
+                    area: "HOME".into(),
+                    done: false,
+                });
+            }
+        });
+        let mut app = mount_todo(runtime, 940, 700, 1.0);
+        app.frame();
+        let (content, viewport, bar) = task_list_edges(&app);
+        let bar = bar.expect("eleven tasks overflow the 304px list");
+        assert!(
+            (viewport - bar - schnellui::layout::SCROLLBAR_GUTTER).abs() <= 1.0,
+            "gutter {} vs viewport {viewport}",
+            bar
+        );
+        assert!(
+            (content - (bar - 4.0)).abs() <= 1.0,
+            "rows end at {content}, the gutter begins at {bar}"
+        );
+    }
+
+    /// A list that fits has no scrollbar and no strip: rows run to the viewport's
+    /// edge less the focus-ring padding.
+    #[test]
+    fn a_fitting_task_list_runs_to_the_full_width() {
+        let (_runtime, mut app) = scenario_app(Scenario::CompletedView, 940, 700, 1.0);
+        app.frame();
+        let (content, viewport, bar) = task_list_edges(&app);
+        assert!(bar.is_none(), "one task fits");
+        assert!(
+            (content - (viewport - 4.0)).abs() <= 1.0,
+            "rows end at {content}, the viewport at {viewport}"
+        );
     }
 
     /// Every Tab stop of every scenario can be shown, at the default size and

@@ -67,6 +67,100 @@ mod tests {
         );
     }
 
+    /// The viewport named `name`, its content column (the viewport's first
+    /// child) and the scrollbar's track, which exists only while it overflows.
+    fn scroll_named(
+        app: &schnellui::App,
+        name: &str,
+    ) -> (
+        schnellui::scene::Rect,
+        schnellui::scene::Rect,
+        Option<schnellui::scene::Rect>,
+    ) {
+        let scene = app.scene();
+        let viewport = app
+            .find_widget(schnellui::a11y::Role::ScrollView, Some(name))
+            .unwrap_or_else(|| panic!("no scroll named {name}"));
+        let content = scene.node(viewport).unwrap().children[0];
+        let bar = schnellui::testing::fuzz::scrollbars(app)
+            .into_iter()
+            .find(|bar| bar.viewport == viewport)
+            .map(|bar| bar.track);
+        (
+            scene.layout(viewport).unwrap().rect,
+            scene.layout(content).unwrap().rect,
+            bar,
+        )
+    }
+
+    /// A pane that overflows ends its content at the scrollbar's gutter, not
+    /// 14px short of the viewport's edge on top of it.
+    #[test]
+    fn an_overflowing_pane_runs_up_to_the_scrollbar_gutter() {
+        use crate::runtime::{scenario_app, Scenario};
+        let runtime = WorkspaceRuntime::default();
+        let mut app = scenario_app(&runtime, Scenario::Starter, 480, 600, 1.0).expect("scenario");
+        app.frame();
+        let mut checked = 0;
+        for name in ["Focus pane", "Pulse pane", "Notes pane"] {
+            if app
+                .find_widget(schnellui::a11y::Role::ScrollView, Some(name))
+                .is_none()
+            {
+                continue;
+            }
+            let (viewport, content, bar) = scroll_named(&app, name);
+            let Some(bar) = bar else { continue };
+            assert!(
+                (viewport.right() - bar.x - schnellui::layout::SCROLLBAR_GUTTER).abs() <= 1.0,
+                "{name}: the bar starts at {}, the viewport ends at {}",
+                bar.x,
+                viewport.right()
+            );
+            assert!(
+                (content.right() - bar.x).abs() <= 1.0,
+                "{name}: content ends at {}, the gutter begins at {}",
+                content.right(),
+                bar.x
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no pane overflowed at 480x600");
+    }
+
+    /// The library card keeps equal margins while its list fits, and runs up to
+    /// the gutter once a short window makes it scroll.
+    #[test]
+    fn the_widget_library_runs_up_to_the_scrollbar_gutter() {
+        use crate::runtime::{scenario_app, Scenario};
+        let runtime = WorkspaceRuntime::default();
+        let mut short =
+            scenario_app(&runtime, Scenario::Starter, 1210, 240, 1.0).expect("scenario");
+        short.frame();
+        let (_, content, bar) = scroll_named(&short, "Widget library");
+        let bar = bar.expect("the library scrolls in a 240px window");
+        assert!(
+            (content.right() - bar.x).abs() <= 1.0,
+            "content ends at {}, the gutter begins at {}",
+            content.right(),
+            bar.x
+        );
+
+        let runtime = WorkspaceRuntime::default();
+        let mut tall = scenario_app(&runtime, Scenario::Starter, 1210, 720, 1.0).expect("scenario");
+        tall.frame();
+        let (viewport, content, bar) = scroll_named(&tall, "Widget library");
+        assert!(bar.is_none(), "the library fits in 720px");
+        // The card's margin is the same on both sides: 18px.
+        let card_right = viewport.right() + 6.0;
+        assert!(
+            ((card_right - content.right()) - (content.x - (viewport.x - 18.0))).abs() <= 1.0,
+            "content spans {}..{} in a card ending at {card_right}",
+            content.x,
+            content.right()
+        );
+    }
+
     /// Every Tab stop of every scenario can be shown, at the default size and
     /// in a narrow, short window: something must scroll it in.
     #[test]
