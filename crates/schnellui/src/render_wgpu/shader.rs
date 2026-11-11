@@ -53,9 +53,16 @@ struct QuadOut {
 // Discards the fragment when its logical position falls outside the clip rect. The
 // unclipped sentinel spans all of logical space, so this is one always-pass branch
 // for non-scrolled content (SOUL §3.2).
+//
+// The edge is inclusive with a small slack. At a fractional scale a clip edge
+// often sits exactly on a pixel centre, and which side of it a fragment lands on
+// is float noise: a live app and a fresh mount sum the same layout in a different
+// order and differ by an ulp, so one drew the row and the other did not. The slack
+// (far below a pixel) makes the centre-on-the-edge case always draw.
+const CLIP_SLACK: f32 = 0.001;
 fn clip_discard(logical: vec2<f32>, clip: vec4<f32>) -> bool {
-    return logical.x < clip.x || logical.y < clip.y
-        || logical.x > clip.x + clip.z || logical.y > clip.y + clip.w;
+    return logical.x < clip.x - CLIP_SLACK || logical.y < clip.y - CLIP_SLACK
+        || logical.x > clip.x + clip.z + CLIP_SLACK || logical.y > clip.y + clip.w + CLIP_SLACK;
 }
 
 @vertex

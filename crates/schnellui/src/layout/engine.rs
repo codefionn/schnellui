@@ -768,7 +768,7 @@ impl LayoutEngine {
 /// on a 1/64 grid add exactly in f32, in any order, so both sums agree. The
 /// error is under 0.016 px, below what a pixel can show.
 #[inline]
-fn on_grid(length: f32) -> f32 {
+pub(crate) fn on_grid(length: f32) -> f32 {
     (length * 64.0).ceil() / 64.0
 }
 

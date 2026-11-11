@@ -612,7 +612,7 @@ impl View for Badge {
         let rect = node_rect(ctx.scene, id, intrinsic);
         // The pill: full-height corner radius rounds the ends (SOUL §8.1) — and
         // squares out into a stamp under a zero-roundness design ([`Shape::pill`]).
-        let radius = sh.pill(intrinsic.height);
+        let radius = sh.pill(rect.height);
         let (fill, label) = match this.tone {
             BadgeTone::Attention => (t.attention, t.ink_on(t.attention)),
             BadgeTone::Accent => (t.accent, t.on_accent),

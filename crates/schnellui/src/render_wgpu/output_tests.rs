@@ -788,6 +788,58 @@ fn scroll_clip_masks_content_outside_viewport() {
     );
 }
 
+/// A pixel centre that lands exactly on a clip edge (a window at scale 1.5 whose
+/// logical height is odd) must paint the same however float noise nudges the edge.
+/// A live app and a fresh mount reach the same layout through different float
+/// sums, so the edge differs by an ulp; the clip test used to flip the row.
+#[test]
+fn clip_edge_on_a_pixel_centre_is_stable_under_float_noise() {
+    let mut r = match Renderer::try_new(64, 64, Backend::Auto) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipping GPU render test: {e}");
+            return;
+        }
+    };
+    r.set_clear_color(Color::rgba(0, 0, 0, 255));
+    let atlas = GlyphAtlas::new(64, 64);
+    let mut rows = Vec::new();
+    // Row 32 has its centre at y = 32.5; so does column 32 at x = 32.5.
+    for edge in [32.5_f32, 32.5 - 4e-6, 32.5 + 4e-6] {
+        let mut scene = Scene::new();
+        let scroll = scene.insert(WidgetKind::Scroll, None);
+        scene.set_root(scroll);
+        scene.set_layout(
+            scroll,
+            LayoutBox {
+                rect: Rect::new(0.0, 0.0, edge, edge),
+                content: Rect::ZERO,
+            },
+        );
+        let child = scene.insert(WidgetKind::Chart, Some(scroll));
+        scene
+            .paint_mut(child)
+            .primitives
+            .push(Primitive::SolidRect {
+                rect: Rect::new(0.0, 0.0, 64.0, 64.0),
+                color: Color::rgba(255, 0, 0, 255),
+                corner_radius: 0.0,
+            });
+        scene.mark_dirty(child, DirtyFlags::PAINT);
+        let rgba = r.render_rgba8(&scene, &atlas);
+        rows.push((
+            px(&rgba, 64, 10, 32),
+            px(&rgba, 64, 32, 10),
+            px(&rgba, 64, 10, 33),
+        ));
+    }
+    for (below, right, past) in &rows {
+        assert_eq!(*below, [255, 0, 0, 255], "row on the edge painted");
+        assert_eq!(*right, [255, 0, 0, 255], "column on the edge painted");
+        assert_eq!(*past, [0, 0, 0, 255], "row past the edge clipped");
+    }
+}
+
 #[test]
 fn scroll_culls_offscreen_rich_text_before_gathering_its_glyphs() {
     let mut renderer = match Renderer::try_new(64, 64, Backend::Auto) {

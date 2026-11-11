@@ -1,10 +1,19 @@
 use super::*;
 use crate::text::{FontFace, ShapeOptions};
 
+/// The box a widget paints into: its laid-out rect, else the size layout will give
+/// it. Layout rounds a measured length up to a 1/64 px grid, so the fallback does
+/// too; a paint at the raw intrinsic differs from the repaint after layout, and a
+/// fresh mount (painted once, before layout) then differs from a live app.
 pub fn node_rect(scene: &Scene, id: WidgetId, intrinsic: Size) -> Rect {
     match scene.layout(id) {
         Some(b) if !b.rect.is_empty() => b.rect,
-        _ => Rect::new(0.0, 0.0, intrinsic.width, intrinsic.height),
+        _ => Rect::new(
+            0.0,
+            0.0,
+            crate::layout::on_grid(intrinsic.width),
+            crate::layout::on_grid(intrinsic.height),
+        ),
     }
 }
 

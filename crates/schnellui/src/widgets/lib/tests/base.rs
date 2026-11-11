@@ -593,6 +593,27 @@ fn disabled_button_is_inert() {
     assert_eq!(count.get(), 0);
 }
 
+/// A control painted before its first layout takes the size layout will give it. Layout
+/// rounds a measured length up to a 1/64 px grid; a paint at the raw intrinsic
+/// differed from the repaint after layout, so a live app and a fresh mount drew a
+/// control's frame on different sub-pixel edges.
+#[test]
+fn unlaid_out_paint_rect_is_on_the_layout_grid() {
+    let mut scene = Scene::new();
+    let id = scene.insert(WidgetKind::Chart, None);
+    scene.set_root(id);
+    let rect = node_rect(
+        &scene,
+        id,
+        Size {
+            width: 24.3,
+            height: 24.3,
+        },
+    );
+    assert_eq!(rect.width, 24.3125);
+    assert_eq!(rect.height, 24.3125);
+}
+
 #[test]
 fn checkbox_toggles_state_and_fires_handler() {
     let runtime_handle = crate::widgets::Runtime::new();
