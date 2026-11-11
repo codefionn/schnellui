@@ -672,10 +672,10 @@ impl App {
         // Layout slides paint to new origins but never resizes a hover wash or
         // focus ring that was sized before it; lay those again where the
         // decorated paint changed size.
-        if let Some((source, position, can_paste)) =
+        if let Some((source, anchor, can_paste)) =
             self.reopen_context_menu.take_if(|_| self.laid_out)
         {
-            let _ = self.open_context_menu(source, position, can_paste);
+            let _ = self.open_context_menu_anchored(source, anchor, can_paste);
         }
         if let Some(point) = self.redrive_content_drag.take_if(|_| self.laid_out) {
             let _ = self.update_drag(point);

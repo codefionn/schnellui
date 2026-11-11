@@ -788,7 +788,7 @@ fn opening_a_buttons_menu_hides_its_tooltip() {
         &mut text,
         &mut atlas,
         id,
-        Point { x: 0.0, y: 28.0 },
+        Rect::new(0.0, 28.0, 0.0, 0.0),
         viewport,
         1.0,
         false,

@@ -240,9 +240,10 @@ impl WindowedApp {
         }) else {
             return false;
         };
-        let position = self.app.context_menu_anchor(source);
+        let anchor = self.app.context_menu_anchor(source);
         let can_paste = self.clipboard.read_text().is_ok();
-        self.app.open_context_menu(source, position, can_paste)
+        self.app
+            .open_context_menu_anchored(source, anchor, can_paste)
     }
 
     pub(super) fn text_press_action(

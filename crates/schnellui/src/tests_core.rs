@@ -3994,3 +3994,147 @@ mod overlays_in_a_window {
         );
     }
 }
+
+/// A menu that does not fit below its field hangs above it, not over it.
+mod context_menu_flips_above {
+    use super::*;
+    use schnellui::scene::{Point, Rect};
+    use schnellui::widgets::{Button, Column, ContextMenu, ContextMenuItem, Scroll, TextInput};
+
+    const WIDTH: u32 = 360;
+    const HEIGHT: u32 = 320;
+    const GAP: f32 = 4.0;
+
+    fn field_in_scroll(scale: f32, near_bottom: f32) -> (App, WidgetId) {
+        let mut column = Column::new();
+        for n in 0..8 {
+            column = column.child(Button::new(format!("Row {n}")).height(40.0));
+        }
+        let column = column
+            .child(
+                TextInput::new("name").label("Project name").context_menu(
+                    ContextMenu::new()
+                        .item(ContextMenuItem::new("One"))
+                        .item(ContextMenuItem::new("Two"))
+                        .item(ContextMenuItem::new("Three"))
+                        .item(ContextMenuItem::new("Four")),
+                ),
+            )
+            .child(Button::new("After").height(600.0));
+        let view = Scroll::new().fill().child(column);
+        let mut app = App::mount_with_size_scaled(view, WIDTH, HEIGHT, scale);
+        app.frame();
+        let field = app
+            .find_widget(Role::TextInput, Some("Project name"))
+            .unwrap();
+        let scroll = app.find_widget(Role::ScrollView, None).unwrap();
+        let top = app.scene().layout(field).unwrap().rect.y;
+        let wanted = top - (HEIGHT as f32 - near_bottom);
+        app.scene_mut().set_scroll_offset(
+            scroll,
+            Point {
+                x: 0.0,
+                y: wanted.max(0.0),
+            },
+        );
+        app.frame();
+        (app, field)
+    }
+
+    fn menu_rect(app: &App) -> Rect {
+        let menu = app.find_widget(Role::Menu, None).expect("menu is open");
+        app.scene().composited_rect(menu)
+    }
+
+    fn drawn(app: &App, id: WidgetId) -> Rect {
+        app.scene().composited_rect(id)
+    }
+
+    fn open_by_action(scale: f32, near_bottom: f32) {
+        let (mut app, field) = field_in_scroll(scale, near_bottom);
+        let f = drawn(&app, field);
+        assert!(
+            f.bottom() + 100.0 > HEIGHT as f32,
+            "setup: no room below {f:?}"
+        );
+        assert!(app.open_context_menu_anchored(field, app.context_menu_anchor(field), true));
+        app.frame();
+        let m = menu_rect(&app);
+        assert!(
+            m.bottom() <= f.y || m.y >= f.bottom(),
+            "menu {m:?} covers field {f:?}"
+        );
+        assert!(
+            (m.bottom() - (f.y - GAP)).abs() < 0.01,
+            "menu {m:?} field {f:?}"
+        );
+    }
+
+    #[test]
+    fn a_scrolled_field_at_scale_1() {
+        open_by_action(1.0, 60.0);
+    }
+
+    #[test]
+    fn a_scrolled_field_at_scale_1_5() {
+        open_by_action(1.5, 60.0);
+    }
+
+    #[test]
+    fn a_scrolled_field_at_scale_2() {
+        open_by_action(2.0, 60.0);
+    }
+
+    #[test]
+    fn a_field_near_the_bottom_unscrolled() {
+        // Short content: the field is the last thing, at the window bottom.
+        let view = Column::new().fill().child(
+            Scroll::new().fill().child(
+                Column::new().child(Button::new("Top").height(240.0)).child(
+                    TextInput::new("name").label("Project name").context_menu(
+                        ContextMenu::new()
+                            .item(ContextMenuItem::new("One"))
+                            .item(ContextMenuItem::new("Two"))
+                            .item(ContextMenuItem::new("Three")),
+                    ),
+                ),
+            ),
+        );
+        let mut app = App::mount_with_size(view, WIDTH, HEIGHT);
+        app.frame();
+        let field = app
+            .find_widget(Role::TextInput, Some("Project name"))
+            .unwrap();
+        let f = drawn(&app, field);
+        assert!(app.open_context_menu_anchored(field, app.context_menu_anchor(field), true));
+        app.frame();
+        let m = menu_rect(&app);
+        assert!(m.bottom() <= f.y, "menu {m:?} covers field {f:?}");
+        assert!((m.bottom() - (f.y - GAP)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_pointer_menu_near_the_bottom_hangs_above_the_pointer() {
+        let (mut app, field) = field_in_scroll(1.0, 60.0);
+        let at = Point {
+            x: 40.0,
+            y: HEIGHT as f32 - 10.0,
+        };
+        assert!(app.open_context_menu(field, at, true));
+        app.frame();
+        let m = menu_rect(&app);
+        assert!(
+            (m.bottom() - at.y).abs() < 0.01,
+            "menu {m:?} pointer {at:?}"
+        );
+    }
+
+    #[test]
+    fn a_pointer_menu_with_room_below_hangs_from_the_pointer() {
+        let (mut app, field) = field_in_scroll(1.0, 60.0);
+        let at = Point { x: 40.0, y: 20.0 };
+        assert!(app.open_context_menu(field, at, true));
+        app.frame();
+        assert!((menu_rect(&app).y - at.y).abs() < 0.01);
+    }
+}

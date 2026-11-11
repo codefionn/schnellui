@@ -419,8 +419,8 @@ impl App {
         // A context menu open on a control that survives the rebuild stays
         // open where it was. Otherwise a theme fade or a background remount
         // would close it under the pointer a frame after it opened.
-        self.reopen_context_menu = previous_menu.and_then(|(source, position, can_paste)| {
-            Some((counterparts.get(source)?, position, can_paste))
+        self.reopen_context_menu = previous_menu.and_then(|(source, anchor, can_paste)| {
+            Some((counterparts.get(source)?, anchor, can_paste))
         });
         // A scrollbar thumb held across the rebuild stays held on the
         // counterpart of its viewport.

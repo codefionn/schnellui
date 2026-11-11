@@ -182,7 +182,7 @@ struct OpenMenu {
     items: Vec<WidgetId>,
     /// Where it was opened and whether Paste was offered, so a rebuilt tree
     /// can open the same menu on the source's counterpart.
-    position: Point,
+    anchor: Rect,
     can_paste: bool,
     /// The control that had focus when the menu opened from the keyboard.
     /// Closing the menu from the keyboard gives focus back to it.
@@ -320,7 +320,39 @@ fn action_enabled(
         }
 }
 
-/// Opens `source`'s configured menu at a logical window position.
+/// The top edge of a menu `height` tall that hangs from `anchor` in a window
+/// `window_height` tall. Below the anchor when it fits, else above it with the
+/// usual gap (none for a pointer point), else on the side with more room,
+/// clamped into the window and as near the anchor as it can be.
+fn menu_top(anchor: Rect, height: f32, window_height: f32) -> f32 {
+    let max_y = (window_height - height - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
+    let below = anchor.bottom();
+    if below <= max_y {
+        return below.max(CONTEXT_MENU_MARGIN);
+    }
+    let gap = if anchor.height > 0.0 {
+        CONTEXT_MENU_MARGIN
+    } else {
+        0.0
+    };
+    let above = anchor.y - gap - height;
+    if above >= CONTEXT_MENU_MARGIN {
+        return above.min(max_y);
+    }
+    let room_below = window_height - CONTEXT_MENU_MARGIN - below;
+    let room_above = anchor.y - gap - CONTEXT_MENU_MARGIN;
+    let preferred = if room_above > room_below {
+        above
+    } else {
+        below
+    };
+    preferred.clamp(CONTEXT_MENU_MARGIN, max_y)
+}
+
+/// Opens `source`'s configured menu hanging from `anchor`, a logical window
+/// rect: the field it belongs to, or a zero-size rect at the pointer. The menu
+/// opens below the anchor when it fits, above it when it does not, and is
+/// clamped into the window only when neither side has room.
 #[allow(clippy::too_many_arguments)]
 pub fn open_context_menu(
     runtime: &crate::widgets::Runtime,
@@ -328,7 +360,7 @@ pub fn open_context_menu(
     shaper: &mut TextShaper,
     atlas: &mut GlyphAtlas,
     source: WidgetId,
-    position: Point,
+    anchor: Rect,
     viewport: Size,
     scale: f32,
     can_paste: bool,
@@ -416,9 +448,8 @@ pub fn open_context_menu(
     let width = desired_width.min((viewport.width - 2.0 * CONTEXT_MENU_MARGIN).max(1.0));
     let height = row_height * items.len() as f32;
     let max_x = (viewport.width - width - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
-    let max_y = (viewport.height - height - CONTEXT_MENU_MARGIN).max(CONTEXT_MENU_MARGIN);
-    let x = position.x.clamp(CONTEXT_MENU_MARGIN, max_x);
-    let y = position.y.clamp(CONTEXT_MENU_MARGIN, max_y);
+    let x = anchor.x.clamp(CONTEXT_MENU_MARGIN, max_x);
+    let y = menu_top(anchor, height, viewport.height);
     let menu_rect = Rect::new(x, y, width, height);
 
     // Inside a modal the menu hangs off the dialog panel: the panel is the
@@ -433,6 +464,17 @@ pub fn open_context_menu(
     let root = scene.insert(WidgetKind::Column, Some(parent));
     remember_node_theme(runtime, root, theme);
     scene.set_overlay_level(root, crate::widgets::POPUP_OVERLAY_LEVEL);
+    // `menu_rect` is in window coordinates, but layout boxes are in the
+    // parent's content space: a scroll view as the parent moves its children,
+    // and the menu with them. Place the menu so it is drawn at `menu_rect`.
+    let (inherited, _) = scene.overlay_inherited_context(root);
+    let menu_rect = Rect::new(
+        menu_rect.x - inherited.x,
+        menu_rect.y - inherited.y,
+        menu_rect.width,
+        menu_rect.height,
+    );
+    let (x, y) = (menu_rect.x, menu_rect.y);
     scene.set_layout(
         root,
         LayoutBox {
@@ -589,7 +631,7 @@ pub fn open_context_menu(
             root,
             parent,
             items: item_ids,
-            position,
+            anchor,
             can_paste,
             opener: None,
         });
@@ -633,17 +675,17 @@ pub(crate) fn context_menu_open_for(runtime: &crate::widgets::Runtime, id: Widge
     })
 }
 
-/// The open menu's source, the point it was opened at and whether it offered
+/// The open menu's source, the rect it hangs from and whether it offered
 /// Paste: what a rebuild needs to open it again on the source's counterpart.
 pub(crate) fn open_context_menu_anchor(
     runtime: &crate::widgets::Runtime,
-) -> Option<(WidgetId, Point, bool)> {
+) -> Option<(WidgetId, Rect, bool)> {
     runtime.context_menu.with(|state| {
         state
             .borrow()
             .open
             .as_ref()
-            .map(|open| (open.source, open.position, open.can_paste))
+            .map(|open| (open.source, open.anchor, open.can_paste))
     })
 }
 
@@ -762,4 +804,36 @@ pub fn dismiss_context_menu(runtime: &crate::widgets::Runtime, scene: &mut Scene
         scene.mark_dirty(open.parent, DirtyFlags::A11Y);
     }
     true
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    #[test]
+    fn it_hangs_below_when_it_fits() {
+        assert_eq!(
+            menu_top(Rect::new(0.0, 10.0, 50.0, 30.0), 100.0, 300.0),
+            40.0
+        );
+    }
+
+    #[test]
+    fn it_flips_above_with_a_gap_when_below_is_short() {
+        let y = menu_top(Rect::new(0.0, 200.0, 50.0, 30.0), 100.0, 300.0);
+        assert_eq!(y + 100.0, 200.0 - CONTEXT_MENU_MARGIN);
+    }
+
+    #[test]
+    fn with_no_room_on_either_side_it_takes_the_roomier_one() {
+        // A 300 tall window and a 200 tall menu: no side fits it.
+        assert_eq!(
+            menu_top(Rect::new(0.0, 150.0, 50.0, 40.0), 200.0, 300.0),
+            4.0
+        );
+        assert_eq!(
+            menu_top(Rect::new(0.0, 100.0, 50.0, 40.0), 200.0, 300.0),
+            96.0
+        );
+    }
 }

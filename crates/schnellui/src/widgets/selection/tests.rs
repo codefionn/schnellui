@@ -701,7 +701,7 @@ mod tests {
             &mut text,
             &mut atlas,
             tab,
-            Point { x: 10.0, y: 10.0 },
+            Rect::new(10.0, 10.0, 0.0, 0.0),
             Size {
                 width: 400.0,
                 height: 300.0,

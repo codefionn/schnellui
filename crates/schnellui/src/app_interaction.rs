@@ -852,29 +852,42 @@ impl App {
         position: scene::Point,
         can_paste: bool,
     ) -> bool {
+        let anchor = scene::Rect::new(position.x, position.y, 0.0, 0.0);
+        self.open_context_menu_anchored(id, anchor, can_paste)
+    }
+
+    /// Opens a widget's configured context menu hanging from `anchor`, a
+    /// logical window rect: below it when the menu fits, above it when not.
+    pub fn open_context_menu_anchored(
+        &mut self,
+        id: scene::WidgetId,
+        anchor: scene::Rect,
+        can_paste: bool,
+    ) -> bool {
         schnellui::widgets::open_context_menu(
             &self.widgets,
             &mut self.scene,
             &mut self.text,
             &mut self.atlas,
             id,
-            position,
+            anchor,
             self.size,
             self.scale,
             can_paste,
         )
     }
 
-    /// Where a menu a keyboard or AccessKit request opens hangs from: the
-    /// bottom-left of `source` as drawn, in window coordinates. Its layout box
-    /// is in content space, which a scrolled view moves.
-    pub(crate) fn context_menu_anchor(&self, source: scene::WidgetId) -> scene::Point {
+    /// What a menu a keyboard or AccessKit request opens hangs from: `source`
+    /// as drawn, in window coordinates. Its layout box is in content space,
+    /// which a scrolled view moves.
+    pub(crate) fn context_menu_anchor(&self, source: scene::WidgetId) -> scene::Rect {
         let offset = self.scene.composited_offset(source);
         self.scene
             .layout(source)
-            .map(|layout| scene::Point {
+            .map(|layout| scene::Rect {
                 x: layout.rect.x + offset.x,
-                y: layout.rect.y + layout.rect.height + offset.y,
+                y: layout.rect.y + offset.y,
+                ..layout.rect
             })
             .unwrap_or_default()
     }
@@ -1058,11 +1071,11 @@ impl App {
             // Trigger button wants to open its source's menu. Mirror the
             // keyboard ShowContextMenu path: anchor at the source's bottom-left
             // and enable paste for editable sources when the clipboard has text.
-            let position = self.context_menu_anchor(source);
+            let anchor = self.context_menu_anchor(source);
             // For trigger-sourced opens we always probe clipboard once (editable
             // Paste gating mirrors the generic Action::ShowContextMenu handler).
             let can_paste = true;
-            return self.open_context_menu(source, position, can_paste);
+            return self.open_context_menu_anchored(source, anchor, can_paste);
         }
         let clicked = schnellui::widgets::dispatch_click(&self.widgets, &mut self.scene, id);
         clicked | self.run_pending_submit()

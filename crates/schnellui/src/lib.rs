@@ -644,10 +644,10 @@ pub struct App {
     theme_transition_duration: Duration,
     theme_transition: Option<ActiveThemeTransition>,
     /// A context menu that was open on a control when the tree was rebuilt:
-    /// its source's counterpart, the point and whether it offered Paste. The
+    /// its source's counterpart, the rect it hangs from and whether it offered Paste. The
     /// menu places itself on laid-out geometry, so it reopens after the
     /// replacement's first layout.
-    reopen_context_menu: Option<(scene::WidgetId, scene::Point, bool)>,
+    reopen_context_menu: Option<(scene::WidgetId, scene::Rect, bool)>,
     /// The open modal dialogs, lowest first, each with the control that had
     /// focus when it opened. Closing a modal returns focus there. Widget ids
     /// are remapped through the counterpart map on every remount.

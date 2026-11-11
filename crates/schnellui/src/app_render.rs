@@ -325,16 +325,16 @@ impl App {
                 _ => false,
             },
             Action::ShowContextMenu => {
-                let position = self.context_menu_anchor(id);
-                self.open_context_menu(id, position, true)
+                let anchor = self.context_menu_anchor(id);
+                self.open_context_menu_anchored(id, anchor, true)
             }
             Action::Click
                 if schnellui::widgets::context_menu_trigger_source(&self.widgets, id).is_some() =>
             {
                 let source = schnellui::widgets::context_menu_trigger_source(&self.widgets, id)
                     .expect("checked above");
-                let position = self.context_menu_anchor(source);
-                self.open_context_menu(source, position, true)
+                let anchor = self.context_menu_anchor(source);
+                self.open_context_menu_anchored(source, anchor, true)
             }
             Action::Click
                 if schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id) =>

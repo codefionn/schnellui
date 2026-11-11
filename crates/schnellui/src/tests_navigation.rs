@@ -1871,9 +1871,11 @@ fn a_context_menu_opened_by_action_hangs_from_the_drawn_field() {
         data: None,
     }));
     let menu = app.find_widget(Role::Menu, Some("Text editing")).unwrap();
-    let menu_rect = app.scene().layout(menu).unwrap().rect;
+    // Where it is drawn: the scroll view that holds the menu's layer moves its
+    // layout box.
+    let menu_y = app.scene().layout(menu).unwrap().rect.y + app.scene().composited_offset(menu).y;
     assert!(
-        (menu_rect.y - drawn_bottom).abs() < 6.0,
-        "menu at {menu_rect:?}, field drawn down to {drawn_bottom}"
+        (menu_y - drawn_bottom).abs() < 6.0,
+        "menu drawn at {menu_y}, field drawn down to {drawn_bottom}"
     );
 }
