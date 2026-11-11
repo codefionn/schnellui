@@ -603,11 +603,31 @@ impl WindowedApp {
         if self.drag_slider.is_some() && drag_slider.is_none() {
             interrupted.push("slider");
         }
-        if widget_state.content_drag_source.is_some() {
+        if self.backdrop_press.is_some() && backdrop_press.is_none() {
+            interrupted.push("backdrop_press");
+        }
+        let scrollbar_held = schnellui::widgets::scrollbar_pointer_active(&self.app.widgets);
+        let reduce_motion = !self.app.animations_enabled();
+        // A replacement built with `App::with_remount_engine` already owns the old
+        // shaper and atlas (same atlas id, so no reconcile below); others bring
+        // their own, and their glyph rects already point into it.
+        // A fork keeps the running atlas id only if the running app has not
+        // rasterized anything since the fork; otherwise the ids would alias
+        // different texels and the reconcile below must run.
+        new_app.atlas.resolve_fork(&self.app.atlas);
+        new_app.inherit_remount_state(&self.app);
+        // Content drag, dialog move/resize and scrollbar thumb ride along to
+        // the replacement (inherit_remount_state above); list only the ones
+        // it did not take.
+        let carried = schnellui::widgets::interaction_debug_state(&new_app.widgets);
+        if widget_state.content_drag_source.is_some() && carried.content_drag_source.is_none() {
             interrupted.push("content_drag");
         }
-        if widget_state.dialog_pointer_capture {
+        if widget_state.dialog_pointer_capture && !carried.dialog_pointer_capture {
             interrupted.push("dialog_pointer");
+        }
+        if scrollbar_held && !schnellui::widgets::scrollbar_pointer_active(&new_app.widgets) {
+            interrupted.push("scrollbar");
         }
         if !interrupted.is_empty() {
             self.trace_with("interaction_interrupted_by_remount", |this| {
@@ -620,15 +640,6 @@ impl WindowedApp {
                 })
             });
         }
-        let reduce_motion = !self.app.animations_enabled();
-        // A replacement built with `App::with_remount_engine` already owns the old
-        // shaper and atlas (same atlas id, so no reconcile below); others bring
-        // their own, and their glyph rects already point into it.
-        // A fork keeps the running atlas id only if the running app has not
-        // rasterized anything since the fork; otherwise the ids would alias
-        // different texels and the reconcile below must run.
-        new_app.atlas.resolve_fork(&self.app.atlas);
-        new_app.inherit_remount_state(&self.app);
         let _ = new_app.apply_reduced_motion(reduce_motion);
         carry_redraw_signal(&self.app, &mut new_app);
         self.app = new_app;
@@ -740,9 +751,30 @@ impl WindowedApp {
             alive(self.drag_slider),
             alive(self.backdrop_press),
         );
+        let mut dropped = Vec::new();
+        if self.drag_text.is_some() && text.is_none() {
+            dropped.push("text_selection");
+        }
+        if self.drag_slider.is_some() && slider.is_none() {
+            dropped.push("slider");
+        }
+        if self.backdrop_press.is_some() && backdrop.is_none() {
+            dropped.push("backdrop_press");
+        }
         self.drag_text = text;
         self.drag_slider = slider;
         self.backdrop_press = backdrop;
+        if !dropped.is_empty() {
+            self.trace_with("interaction_interrupted_by_remount", |this| {
+                json!({
+                    "severity": "warning",
+                    "reason": "subtree_replacement",
+                    "trigger": this.remount_trigger,
+                    "interrupted": dropped,
+                    "before": before.clone(),
+                })
+            });
+        }
 
         if let Some(target) = focus_after {
             if let Some(widget) = self.app.scene().resolve_ref(target) {

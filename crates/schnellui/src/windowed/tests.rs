@@ -2108,6 +2108,241 @@ mod backdrop_click {
     }
 }
 
+/// A remount while a pointer button is held: the trace names each capture the
+/// replacement dropped, and none it carried over.
+mod remount_during_a_held_press {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use serde_json::Value;
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{ElementState, MouseButton};
+
+    use super::super::{event_handler::EventTail, WindowedApp};
+    use crate::a11y::Role;
+    use crate::interaction_debug::{InteractionRecorder, InteractionTrace};
+    use crate::widgets::{Button, Dialog, Stack, Text};
+    use crate::{App, Remount, WindowUpdate};
+
+    fn view(open: bool, modal: bool, dismissed: Rc<Cell<u32>>) -> Stack {
+        let stack = Stack::new().fill();
+        if !open {
+            return stack.child(Text::new("Closed"));
+        }
+        let dialog = Dialog::new("Approval")
+            .size(240.0, 160.0)
+            .at(30.0, 60.0)
+            .child(Text::new("Sure?"))
+            .child(Button::new("Yes").on_click(|| {}))
+            .on_dismiss(move || dismissed.set(dismissed.get() + 1));
+        stack.child(if modal {
+            dialog
+        } else {
+            dialog.modeless().non_fixed().movable()
+        })
+    }
+
+    struct Rig {
+        host: WindowedApp,
+        /// What the next remount mounts: `None` for no remount, else whether
+        /// the dialog is still open.
+        next: Rc<Cell<Option<bool>>>,
+        dismissed: Rc<Cell<u32>>,
+        trace: std::path::PathBuf,
+    }
+
+    fn rig(tag: &str, modal: bool) -> Rig {
+        let dismissed = Rc::new(Cell::new(0));
+        let next = Rc::new(Cell::new(None::<bool>));
+        let mut app = App::mount_with_size(view(true, modal, dismissed.clone()), 640, 480);
+        app.frame();
+        let (n, d) = (next.clone(), dismissed.clone());
+        let mut host = super::windowed_host(
+            app,
+            Some(Box::new(move |size| {
+                let open = n.take()?;
+                let app = App::mount_with_size(
+                    view(open, modal, d.clone()),
+                    size.width as u32,
+                    size.height as u32,
+                );
+                Some(WindowUpdate::Remount(Remount::new(app, "test")))
+            })),
+        );
+        let trace = std::env::temp_dir().join(format!(
+            "schnellui-remount-held-{}-{tag}.jsonl",
+            std::process::id()
+        ));
+        host.interaction_trace =
+            InteractionRecorder::open(Some(InteractionTrace::file(&trace))).unwrap();
+        Rig {
+            host,
+            next,
+            dismissed,
+            trace,
+        }
+    }
+
+    fn to(host: &mut WindowedApp, x: f32, y: f32) {
+        host.on_cursor_moved(PhysicalPosition::new(f64::from(x), f64::from(y)));
+    }
+
+    fn button(host: &mut WindowedApp, state: ElementState) {
+        if host.on_mouse_input(state, MouseButton::Left) == EventTail::Normal {
+            host.poll_remount();
+        }
+    }
+
+    /// The `interrupted` list of every interrupted-by-remount record.
+    fn interrupted(rig: &Rig) -> Vec<Vec<String>> {
+        let text = std::fs::read_to_string(&rig.trace).unwrap();
+        let _ = std::fs::remove_file(&rig.trace);
+        text.lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|r| r["event"] == "interaction_interrupted_by_remount")
+            .map(|r| {
+                r["interrupted"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_owned())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn remount(rig: &mut Rig, open: bool) {
+        rig.next.set(Some(open));
+        rig.host.poll_remount();
+    }
+
+    #[test]
+    fn a_backdrop_press_dropped_by_a_remount_is_traced() {
+        let mut rig = rig("backdrop-dropped", true);
+        to(&mut rig.host, 10.0, 10.0);
+        button(&mut rig.host, ElementState::Pressed);
+        remount(&mut rig, false);
+        button(&mut rig.host, ElementState::Released);
+        assert_eq!(rig.dismissed.get(), 0, "the release clicks nothing");
+        assert_eq!(interrupted(&rig), [["backdrop_press"]]);
+    }
+
+    #[test]
+    fn a_backdrop_press_carried_by_a_remount_is_not_traced() {
+        let mut rig = rig("backdrop-carried", true);
+        to(&mut rig.host, 10.0, 10.0);
+        button(&mut rig.host, ElementState::Pressed);
+        remount(&mut rig, true);
+        button(&mut rig.host, ElementState::Released);
+        assert_eq!(
+            rig.dismissed.get(),
+            1,
+            "the press carried over and dismissed"
+        );
+        assert!(interrupted(&rig).is_empty());
+    }
+
+    #[test]
+    fn a_dialog_drag_carried_by_a_remount_is_not_listed_as_interrupted() {
+        let mut rig = rig("dialog-carried", false);
+        let panel = rig
+            .host
+            .app
+            .find_widget(Role::Dialog, Some("Approval"))
+            .unwrap();
+        let r = rig.host.app.scene().layout(panel).unwrap().rect;
+        to(&mut rig.host, r.x + 20.0, r.y + 18.0);
+        button(&mut rig.host, ElementState::Pressed);
+        let held = schnellui::widgets::interaction_debug_state(&rig.host.app.widgets);
+        assert!(
+            held.dialog_pointer_capture,
+            "the title bar grabbed the dialog"
+        );
+        remount(&mut rig, true);
+        let carried = schnellui::widgets::interaction_debug_state(&rig.host.app.widgets);
+        assert!(
+            carried.dialog_pointer_capture,
+            "the drag followed the dialog"
+        );
+        assert!(interrupted(&rig).is_empty());
+    }
+
+    #[test]
+    fn a_dialog_drag_dropped_by_a_remount_is_listed() {
+        let mut rig = rig("dialog-dropped", false);
+        let panel = rig
+            .host
+            .app
+            .find_widget(Role::Dialog, Some("Approval"))
+            .unwrap();
+        let r = rig.host.app.scene().layout(panel).unwrap().rect;
+        to(&mut rig.host, r.x + 20.0, r.y + 18.0);
+        button(&mut rig.host, ElementState::Pressed);
+        remount(&mut rig, false);
+        assert_eq!(interrupted(&rig), [["dialog_pointer"]]);
+    }
+
+    #[test]
+    fn a_text_selection_dropped_by_a_subtree_replacement_is_traced() {
+        use crate::scene::ComponentRef;
+        use crate::widgets::{Column, TextInput, View};
+        use crate::SubtreeReplacement;
+
+        let slot = ComponentRef::new();
+        let mut app = App::mount_with_size(
+            Column::new().child(Column::new().child(TextInput::new("hello")).with_ref(slot)),
+            400,
+            200,
+        );
+        app.frame();
+        let swap = Rc::new(Cell::new(false));
+        let s = swap.clone();
+        let mut host = super::windowed_host(
+            app,
+            Some(Box::new(move |_| {
+                s.take().then(|| {
+                    WindowUpdate::Subtrees(vec![SubtreeReplacement::new(
+                        slot,
+                        Text::new("gone"),
+                        "test",
+                    )])
+                })
+            })),
+        );
+        let trace = std::env::temp_dir().join(format!(
+            "schnellui-subtree-held-{}.jsonl",
+            std::process::id()
+        ));
+        host.interaction_trace =
+            InteractionRecorder::open(Some(InteractionTrace::file(&trace))).unwrap();
+        let id = host.app.find_widget(Role::TextInput, None).unwrap();
+        let r = host.app.scene().layout(id).unwrap().rect;
+        to(&mut host, r.x + 10.0, r.y + r.height / 2.0);
+        button(&mut host, ElementState::Pressed);
+        assert!(host.drag_text.is_some(), "the press began a selection");
+        swap.set(true);
+        host.poll_remount();
+        assert!(host.drag_text.is_none());
+        let rig = Rig {
+            host,
+            next: Rc::new(Cell::new(None)),
+            dismissed: Rc::new(Cell::new(0)),
+            trace,
+        };
+        assert_eq!(interrupted(&rig), [["text_selection"]]);
+    }
+
+    #[test]
+    fn a_raw_capture_dropped_by_a_remount_is_traced() {
+        use crate::RawPointerButton;
+        let mut rig = rig("raw", true);
+        rig.host.raw_pointer_capture.push(RawPointerButton::Left);
+        remount(&mut rig, false);
+        assert!(rig.host.raw_pointer_capture.is_empty());
+        assert_eq!(interrupted(&rig), [["raw_pointer"]]);
+    }
+}
+
 /// Activating a window with the pointer gives it keyboard focus, as on a
 /// desktop: the control that last had focus in it, else nothing.
 mod window_activation {
