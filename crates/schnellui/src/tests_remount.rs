@@ -572,6 +572,39 @@ fn reactive_theme_binding_rebuilds_on_the_next_frame() {
     assert_eq!(app.clear_color(), theme::DARK.page);
 }
 
+#[test]
+fn reactive_theme_mode_binding_keeps_following_the_platform() {
+    use schnellui::signal::create_signal;
+    use schnellui::widgets::Text;
+
+    let follow = create_signal(true);
+    let mut app = App::mount_themed(theme::LIGHT, || Text::new("reactive"));
+    assert!(app.bind_theme_mode(move || {
+        if follow.get() {
+            ThemeMode::system(theme::LIGHT, theme::DARK)
+        } else {
+            ThemeMode::Fixed(theme::DARK)
+        }
+    }));
+    app.frame();
+    assert_eq!(app.active_theme(), theme::LIGHT);
+    // A pair keeps following the platform after the binding ran.
+    assert!(app.apply_color_scheme(ColorScheme::Dark));
+    assert_eq!(app.active_theme(), theme::DARK);
+    assert!(app.apply_color_scheme(ColorScheme::Light));
+    assert_eq!(app.active_theme(), theme::LIGHT);
+    // A fixed theme ignores it, and the pair comes back when the signal says so.
+    follow.set(false);
+    app.frame();
+    assert_eq!(app.active_theme(), theme::DARK);
+    assert!(!app.apply_color_scheme(ColorScheme::Light));
+    assert_eq!(app.active_theme(), theme::DARK);
+    follow.set(true);
+    app.frame();
+    assert_eq!(app.active_theme(), theme::LIGHT);
+    assert!(app.apply_color_scheme(ColorScheme::Dark));
+}
+
 /// Regression for the playground's Text tab: wrapped paint owns a mutable
 /// widget-runtime borrow, so theme lookup must never re-borrow that registry.
 #[test]

@@ -192,7 +192,17 @@ impl App {
     /// `evaluate` runs in the pull phase of each frame. When its value changes,
     /// a `mount_themed*` app reconstructs its retained tree immediately under the
     /// new palette and shape tokens. Returns `false` for one-shot mounts.
-    pub fn bind_theme(&mut self, evaluate: impl FnMut() -> Theme + 'static) -> bool {
+    pub fn bind_theme(&mut self, mut evaluate: impl FnMut() -> Theme + 'static) -> bool {
+        self.bind_theme_mode(move || ThemeMode::Fixed(evaluate()))
+    }
+
+    /// Binds the theme mode to reactive application state.
+    ///
+    /// Like [`App::bind_theme`], but `evaluate` returns a [`ThemeMode`]: a fixed theme, or
+    /// a light and dark pair that keeps following the platform appearance
+    /// ([`App::apply_color_scheme`]) until the next change of the mode. The app rebuilds only
+    /// when the theme the mode resolves to differs from the one in use.
+    pub fn bind_theme_mode(&mut self, evaluate: impl FnMut() -> ThemeMode + 'static) -> bool {
         if self.theme_factory.is_none() {
             return false;
         }
@@ -202,11 +212,12 @@ impl App {
 
     pub(crate) fn poll_theme_binding(&mut self) {
         // Only a changed signal the closure read (or a fresh binding) re-runs it.
-        let Some(selected) = self.theme_binding.as_mut().and_then(|b| b.poll()) else {
+        let Some(mode) = self.theme_binding.as_mut().and_then(|b| b.poll()) else {
             return;
         };
+        self.theme_mode = mode;
+        let selected = mode.resolve(self.color_scheme);
         if selected != self.active_theme {
-            self.theme_mode = ThemeMode::Fixed(selected);
             self.theme_transition = None;
             let _ = self.rebuild_with_theme(selected);
         }

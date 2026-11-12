@@ -170,14 +170,14 @@ impl PaintBindings {
 pub(crate) struct ThemeBinding {
     group: SubscriptionGroup,
     subscription: Subscription,
-    pub(crate) eval: Box<dyn FnMut() -> schnellui::widgets::Theme>,
+    pub(crate) eval: Box<dyn FnMut() -> crate::ThemeMode>,
     /// Evaluate on the next frame even if no signal changed (fresh binding).
     force: bool,
     ready: Vec<u64>,
 }
 
 impl ThemeBinding {
-    pub(crate) fn new(eval: Box<dyn FnMut() -> schnellui::widgets::Theme>) -> Self {
+    pub(crate) fn new(eval: Box<dyn FnMut() -> crate::ThemeMode>) -> Self {
         let group = SubscriptionGroup::new();
         let subscription = group.subscribe(0);
         Self {
@@ -190,8 +190,8 @@ impl ThemeBinding {
     }
 
     /// Runs the closure under tracking when a signal it read changed (or on the
-    /// first frame) and returns its theme; `None` on a clean frame.
-    pub(crate) fn poll(&mut self) -> Option<schnellui::widgets::Theme> {
+    /// first frame) and returns its mode; `None` on a clean frame.
+    pub(crate) fn poll(&mut self) -> Option<crate::ThemeMode> {
         self.group.drain_ready_into(&mut self.ready);
         let due = std::mem::take(&mut self.force) || !self.ready.is_empty();
         self.ready.clear();
