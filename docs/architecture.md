@@ -443,8 +443,13 @@ refresh interval between input and pixels.
 [`schnellui::text`](../crates/schnellui/src/text/mod.rs) has two pieces.
 
 - `TextShaper` ([`shaper.rs`](../crates/schnellui/src/text/shaper.rs)) wraps Parley.
-  The font collection is built once per process (`BaseFonts::get`, a `OnceLock`) and
-  each shaper clones it, so creating an app does not reload fonts. `shape_into` shapes
+  The font collections are built once per process and each shaper clones them, so
+  creating an app does not reload fonts. `BaseFonts` holds the embedded faces and is
+  built in microseconds. `SystemFonts` adds the installed fonts, which costs a
+  fontconfig scan of about 20 ms. The first shaper starts that scan on a background
+  thread (`SystemFonts::prewarm`) and a shaper takes the collection only when text
+  needs it, waiting for the scan if it is still running. An app whose text the
+  embedded faces cover never waits for it. `shape_into` shapes
   into a caller-owned `ShapedText` that keeps its capacity, so a call site shapes
   without allocating once it has grown. `shape` and `shape_with` return a fresh value
   and are for cold paths. `TextShaper::detached` is a font-less stand-in used for a
@@ -456,6 +461,61 @@ refresh interval between input and pixels.
   drops the log, so renderers re-upload fully. `has_headroom` tells callers whether an
   atlas is too full to carry over.
 
+
+  The shaper holds two font collections. One has the embedded faces plus the system
+  fonts, for named families and glyph fallback. The other has the embedded faces
+  alone. With system fonts loaded, a generic family is the embedded face followed by
+  every matching system family (188 on the machine this was measured on), and Parley
+  copies that list into its font query for every shaped item, and again per cluster
+  for digits and other characters that have an emoji form. `TextShaper::covered`
+  checks each character against a per-face coverage bitmap (`FaceCoverage`, filled in
+  64-codepoint blocks on first use). Text the face covers is shaped against the
+  embedded-only collection. Parley stops at the first font that maps a whole cluster
+  and the embedded face is first in both lists, so the glyphs are the same.
+
+  Text with a character the face lacks (an emoji, "✓", CJK) uses the full collection,
+  but usually not the full stack. `TextShaper::narrow_stacks` builds a short stack:
+  the embedded families, then only the system families that map at least one of the
+  lacking characters, in their original order. The short stack goes into a generic
+  family that fontconfig leaves empty (`UiSerif` for the sans faces, `UiMonospace` for
+  mono) on the shaper's own collection, and the text is shaped with that generic.
+  Names would not work, because the embedded symbol face is also called "DejaVu Sans".
+
+  Which families map a character is a row of bits, one per family of the stack, kept
+  process-wide in `FamilyRows` and keyed by character and face (the face fixes the
+  stack and the attributes). Every shaper, fork and remount shares the rows. Working
+  one out means querying every system family of the stack, about 187 here, which
+  loads their font files: 270 to 460 ms for the first character, milliseconds for
+  later ones. So the shaping thread never does it. On a missing row it requests the
+  row and shapes the text with the full stack, which gives the same glyphs. One worker
+  thread, "schnellui-font-rows", owns its own collection clone and source cache,
+  scans requests in order, and unmaps the font files when its queue runs dry. The
+  next shape of the text finds the rows and takes the short stack. A shape that hits
+  only reads the rows under one uncontended lock. On wasm32 there is no worker, so
+  rows never arrive and text keeps the full stack. Tests wait for rows with
+  `TextShaper::wait_for_family_rows`, and
+  `an_unseen_character_shapes_on_the_full_stack_without_scanning` checks that a miss
+  neither blocks nor scans.
+
+  The glyphs come out the same because of how Parley picks a font per cluster. It
+  keeps the first font that maps the whole cluster, else the one that first mapped the
+  largest share, else the first font. A dropped family maps nothing the embedded face
+  lacks, so in any cluster it maps a subset of what the embedded face (always first)
+  already mapped, and Parley discards it. The emoji generic and script fallbacks that
+  Parley appends are unchanged. Parley also maps a cluster's NFC and NFD forms, which
+  can hold characters that are not in the text. For a lacking kana the row also marks
+  families that map the kana it composes with or decomposes into (`KANA_PAIRS`, 58
+  pairs). Any other lacking character that takes part in canonical composition sends
+  the text down the full stack (`normalization_inert`: Hangul, Indic letters, arrows
+  and math operators from U+2190 to U+22FF, accented letters).
+
+  Digits and emoji still cost something on the short path: for those clusters Parley
+  appends the Emoji generic, which on a desktop is about 184 system families. The
+  tests `covered_text_shapes_the_same_as_the_full_family_stack` and
+  `covered_spans_shape_the_same_as_the_full_family_stack` compare every path with the
+  full stack (`TextShaper::set_full_stack_only`), and
+  `uncovered_text_takes_the_short_family_stack` checks which texts take the short
+  path.
 The text engine (shaper and atlas) outlives the tree it was built for:
 
 - Theme rebuilds. `rebuild_with_theme` ([`app_theme.rs`](../crates/schnellui/src/app_theme.rs))

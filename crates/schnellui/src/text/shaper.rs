@@ -1,8 +1,12 @@
 use crate::text::types::*;
+use parking_lot::{Condvar, Mutex};
 use std::borrow::Cow;
-use std::sync::{Arc, OnceLock};
+use std::sync::{mpsc, Arc, OnceLock};
 
-use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
+use parley::fontique::{
+    Attributes, Blob, Collection, CollectionOptions, FamilyId, QueryFamily, QueryFont, QueryStatus,
+    SourceCache,
+};
 use parley::FontData;
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontStyle, FontWeight,
@@ -22,7 +26,11 @@ use swash::FontRef;
 /// `LayoutContext`/`Layout` are pooled so warm shaping is amortized zero-alloc
 /// (SOUL §4.1 `text_edit` budget); rasterized glyphs are cached by [`GlyphKey`].
 pub struct TextShaper {
-    font_cx: FontContext,
+    /// The embedded faces plus the system fonts. Filled in from
+    /// [`SystemFonts`] by the first text that needs them.
+    font_cx: Option<FontContext>,
+    /// The embedded faces alone, for text they cover ([`FaceCoverage`]).
+    embedded_cx: FontContext,
     layout_cx: LayoutContext<Brush>,
     /// Reused layout scratch (`build_into` clears + refills — §4.4).
     scratch_layout: Layout<Brush>,
@@ -42,7 +50,449 @@ pub struct TextShaper {
     pub(crate) font_resources: Vec<FontData>,
     /// Maps Fontique blob/index identities to the rasterizer-facing id above.
     font_ids: FxHashMap<(u64, u32), FontId>,
+    /// Per embedded face, the characters it holds (see [`FaceCoverage`]).
+    coverage: [CoverageSlot; FACE_COUNT],
+    /// The families the sans and the mono short stacks keep for the text
+    /// being shaped, a bit per stack position ([`FamilyRows`]).
+    masks: [Vec<u64>; 2],
+    /// Shapes that took a narrowed family stack, so tests can tell the path ran.
+    pub(crate) narrowed: u64,
+    /// Test switch: shape everything with the full family stack.
+    full_stack_only: bool,
 }
+
+const FACE_COUNT: usize = FontFace::MonoBold as usize + 1;
+
+/// Every face, indexed by its discriminant.
+const FONT_FACES: [FontFace; FACE_COUNT] = [
+    FontFace::Sans,
+    FontFace::SansBold,
+    FontFace::SansItalic,
+    FontFace::SansBoldItalic,
+    FontFace::Mono,
+    FontFace::MonoBold,
+];
+
+/// Which characters one embedded face holds, so text made only of them can be
+/// shaped against the embedded faces alone.
+///
+/// With system fonts loaded, a generic family resolves to the embedded face
+/// followed by every matching system family (188 on a desktop with many fonts
+/// installed). Parley copies that list into its font query for each shaped
+/// item and drops it afterwards, and does so again per cluster for digits and
+/// other characters with an emoji form. That costs more than shaping a short
+/// label does. The embedded face is first in the list and parley stops at the
+/// first font that maps a whole cluster, so for text the face covers the rest
+/// of the list is never read. A collection without the system fonts gives the
+/// same glyphs from a list of one.
+struct FaceCoverage {
+    /// The font parley's query yields first for the face.
+    font: QueryFont,
+    /// One bit per 64-codepoint block of the BMP: `has` is filled in for it.
+    known: [u64; 16],
+    /// One bit per BMP codepoint: the font maps it to a glyph.
+    has: [u64; 1024],
+}
+
+#[derive(Default)]
+enum CoverageSlot {
+    #[default]
+    Unresolved,
+    /// The face could not be resolved; its text takes the full stack.
+    Unavailable,
+    Ready(Box<FaceCoverage>),
+}
+
+impl FaceCoverage {
+    fn resolve(font_cx: &mut FontContext, face: FontFace) -> Option<Box<FaceCoverage>> {
+        let generic = if face.mono() {
+            GenericFamily::Monospace
+        } else {
+            GenericFamily::SansSerif
+        };
+        let id = font_cx.collection.generic_families(generic).next()?;
+        let mut first = None;
+        let mut query = font_cx.collection.query(&mut font_cx.source_cache);
+        query.set_families([QueryFamily::Id(id)]);
+        query.set_attributes(face_attributes(face));
+        query.matches_with(|font| {
+            first = Some(font.clone());
+            QueryStatus::Stop
+        });
+        Some(Box::new(FaceCoverage {
+            font: first?,
+            known: [0; 16],
+            has: [0; 1024],
+        }))
+    }
+
+    /// Whether parley's font selection finds every cluster of `text` complete
+    /// in this face. Control characters count as held: they take no part in
+    /// shaping, so they never send a cluster to another font.
+    fn holds(&mut self, text: &str) -> bool {
+        text.chars().all(|ch| {
+            let cp = ch as u32;
+            if cp > 0xFFFF {
+                return false;
+            }
+            let block = (cp >> 6) as usize;
+            if self.known[block >> 6] & (1 << (block & 63)) == 0 {
+                self.fill(block);
+            }
+            self.has[block] & (1 << (cp & 63)) != 0 || ch.is_control()
+        })
+    }
+
+    fn fill(&mut self, block: usize) {
+        let mut bits = 0u64;
+        if let Some(charmap) = self.font.charmap() {
+            for bit in 0..64 {
+                let mapped = char::from_u32((block as u32) << 6 | bit)
+                    .and_then(|ch| charmap.map(ch))
+                    .is_some_and(|glyph| glyph != 0);
+                bits |= (mapped as u64) << bit;
+            }
+        }
+        self.has[block] = bits;
+        self.known[block >> 6] |= 1 << (block & 63);
+    }
+
+    /// Whether the face lacks `ch` (in the sense of [`FaceCoverage::holds`]).
+    fn lacks(&mut self, ch: char) -> bool {
+        let mut buf = [0u8; 4];
+        !self.holds(ch.encode_utf8(&mut buf))
+    }
+}
+
+/// The generic family stacks of the system collection. Built once per process.
+///
+/// Family ids come from the collection that [`SystemFonts`] built, and every
+/// shaper's full collection is a clone of it, so the ids hold for all of them.
+struct FamilyStacks {
+    sans: FamilyStack,
+    mono: FamilyStack,
+    /// The two slots below resolve to nothing in the system collection, so a
+    /// short stack written into them is all parley sees.
+    usable: bool,
+}
+
+struct FamilyStack {
+    /// The families the generic resolves to, in parley's order.
+    ids: Vec<FamilyId>,
+    /// How many leading families are the embedded ones.
+    embedded: usize,
+}
+
+/// The generic family that carries the short stack of the sans faces. The
+/// embedded faces leave it unset and fontconfig has no list for it.
+const SANS_SLOT: GenericFamily = GenericFamily::UiSerif;
+/// The same for the mono faces.
+const MONO_SLOT: GenericFamily = GenericFamily::UiMonospace;
+
+impl FamilyStacks {
+    fn get() -> &'static FamilyStacks {
+        static STACKS: OnceLock<FamilyStacks> = OnceLock::new();
+        STACKS.get_or_init(|| {
+            let mut system = SystemFonts::get().collection.clone();
+            let mut embedded = BaseFonts::get().embedded.clone();
+            let mut stack = |generic| FamilyStack {
+                ids: system.generic_families(generic).collect(),
+                embedded: embedded.generic_families(generic).count(),
+            };
+            let (sans, mono) = (
+                stack(GenericFamily::SansSerif),
+                stack(GenericFamily::Monospace),
+            );
+            let usable = system.generic_families(SANS_SLOT).next().is_none()
+                && system.generic_families(MONO_SLOT).next().is_none();
+            FamilyStacks { sans, mono, usable }
+        })
+    }
+
+    fn stack(&self, mono: bool) -> &FamilyStack {
+        if mono {
+            &self.mono
+        } else {
+            &self.sans
+        }
+    }
+}
+
+/// The short family stacks: for text the embedded face does not cover, a
+/// stack that shapes it exactly as the full generic stack would.
+///
+/// For each cluster parley walks the fonts of the stack (then the emoji
+/// generic for emoji clusters, then the script fallbacks) and keeps the first
+/// font that maps the whole cluster, else the font that mapped the largest
+/// share first, else the first font. The embedded face `E` comes first. A
+/// later font `F` that maps no character `E` lacks cannot change that
+/// outcome for a cluster `E` did not complete: `F` maps a subset of what `E`
+/// maps there, so its share is no larger than the best share already seen and
+/// parley discards it. So the stack can drop every system family that maps
+/// none of the characters the text needs from outside `E`, and the fonts
+/// parley still meets come in the same order. The emoji and script fallback
+/// lists parley appends are untouched.
+///
+/// Parley also maps a cluster's NFC and NFD forms, whose characters may not
+/// be in the text. A missing kana therefore marks the families that map any
+/// kana it composes with or decomposes into ([`KANA_PAIRS`]), and any other
+/// missing character that takes part in canonical composition sends the text
+/// down the full stack ([`normalization_inert`]).
+///
+/// The short stack reaches parley as a generic family ([`SANS_SLOT`],
+/// [`MONO_SLOT`]) rewritten on the shaper's own collection before each build.
+/// Names would not do: the embedded symbol face is called "DejaVu Sans", so
+/// that name never resolves to the system DejaVu Sans.
+///
+/// Which families map a character is a row in [`FamilyRows`], computed off
+/// the shaping thread. Until every row a text needs is there, the text takes
+/// the full stack, which gives the same glyphs.
+struct FamilyRows {
+    state: Mutex<RowState>,
+    ready: Condvar,
+    /// The worker's request queue; `None` where there is no worker thread.
+    requests: OnceLock<Option<mpsc::Sender<RowKey>>>,
+}
+
+/// A character and the face whose stack and attributes its row is for. The
+/// face fixes both: no two faces share a stack and attributes.
+type RowKey = (char, u8);
+
+/// A row that was requested and has not arrived.
+const PENDING: u32 = u32::MAX;
+
+#[derive(Default)]
+struct RowState {
+    /// Per key, the offset of its row in `bits`, or [`PENDING`]. A row is a bit
+    /// per stack position: the family yields a font that maps the character
+    /// or, for kana, one of its [`KANA_PAIRS`] partners.
+    rows: FxHashMap<RowKey, u32>,
+    bits: Vec<u64>,
+}
+
+thread_local! {
+    /// Family rows scanned on this thread, so a test can prove shaping never
+    /// scans.
+    static ROW_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl FamilyRows {
+    fn get() -> &'static FamilyRows {
+        static ROWS: OnceLock<FamilyRows> = OnceLock::new();
+        ROWS.get_or_init(|| FamilyRows {
+            state: Mutex::new(RowState::default()),
+            ready: Condvar::new(),
+            requests: OnceLock::new(),
+        })
+    }
+
+    /// Asks the worker for the row of `key`, once. Without a worker the key
+    /// stays pending and its text keeps the full stack.
+    fn request(&'static self, state: &mut RowState, key: RowKey) {
+        if state.rows.contains_key(&key) {
+            return;
+        }
+        state.rows.insert(key, PENDING);
+        if let Some(requests) = self.requests.get_or_init(|| self.spawn_worker()) {
+            let _ = requests.send(key);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn spawn_worker(&'static self) -> Option<mpsc::Sender<RowKey>> {
+        None
+    }
+
+    /// One thread that scans the rows in request order, with its own clone of
+    /// the system collection and its own source cache.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_worker(&'static self) -> Option<mpsc::Sender<RowKey>> {
+        let (send, receive) = mpsc::channel::<RowKey>();
+        std::thread::Builder::new()
+            .name("schnellui-font-rows".into())
+            .spawn(move || {
+                let mut font_cx = SystemFonts::context();
+                let mut row = Vec::new();
+                let mut next = receive.recv().ok();
+                while let Some(key) = next {
+                    self.scan_into(key, &mut font_cx, &mut row);
+                    next = match receive.try_recv() {
+                        Ok(key) => Some(key),
+                        Err(mpsc::TryRecvError::Disconnected) => None,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            // Unmap the font files once the queue is drained;
+                            // the next burst maps what it needs again.
+                            font_cx.source_cache.prune(0, false);
+                            receive.recv().ok()
+                        }
+                    };
+                }
+            })
+            .ok()
+            .map(|_| send)
+    }
+
+    /// Scans and stores the row of `key`.
+    fn scan_into(&self, key: RowKey, font_cx: &mut FontContext, row: &mut Vec<u64>) {
+        scan_row(key, font_cx, row);
+        let mut state = self.state.lock();
+        let at = state.bits.len();
+        state.bits.extend_from_slice(row);
+        state.rows.insert(key, at as u32);
+        drop(state);
+        self.ready.notify_all();
+    }
+}
+
+/// Fills `row` with a bit per position of the face's stack: the family yields
+/// a font that maps the character or one of its [`KANA_PAIRS`] partners.
+/// Queries every system family of the stack, which loads their files.
+fn scan_row((ch, face): RowKey, font_cx: &mut FontContext, row: &mut Vec<u64>) {
+    ROW_SCANS.with(|c| c.set(c.get() + 1));
+    let face = FONT_FACES[face as usize];
+    let stack = FamilyStacks::get().stack(face.mono());
+    row.clear();
+    row.resize(stack.ids.len().div_ceil(64), 0);
+    let mut query = font_cx.collection.query(&mut font_cx.source_cache);
+    query.set_attributes(face_attributes(face));
+    // The character and, for kana, the characters parley may map in its
+    // place (the NFC or NFD form of its cluster).
+    let relatives = KANA_PAIRS
+        .iter()
+        .filter(|pair| pair.contains(&(ch as u16)))
+        .flatten();
+    let wanted =
+        || std::iter::once(ch).chain(relatives.clone().filter_map(|&r| char::from_u32(r as u32)));
+    for (at, &id) in stack.ids.iter().enumerate().skip(stack.embedded) {
+        // The same fonts, in the same order, that this family yields inside
+        // the full stack.
+        query.set_families([QueryFamily::Id(id)]);
+        let mut maps = false;
+        query.matches_with(|font| {
+            maps = font.charmap().is_some_and(|charmap| {
+                wanted().any(|c| charmap.map(c).is_some_and(|glyph| glyph != 0))
+            });
+            if maps {
+                QueryStatus::Stop
+            } else {
+                QueryStatus::Continue
+            }
+        });
+        row[at / 64] |= (maps as u64) << (at % 64);
+    }
+}
+
+/// The font attributes parley resolves for `face`.
+fn face_attributes(face: FontFace) -> Attributes {
+    Attributes {
+        weight: if face.bold() {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        },
+        style: if face.italic() {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        },
+        ..Attributes::default()
+    }
+}
+
+/// Whether a short family stack can stand in for the full one when the
+/// embedded face lacks `ch`. Parley maps a cluster's NFC and NFD forms as well
+/// as its text, so the stack has to hold the families for those characters
+/// too. That holds for a character with no two-character canonical
+/// decomposition that is neither half of one, so its clusters have no other
+/// form, and for kana, whose forms [`KANA_PAIRS`] lists in full. The ranges
+/// were checked against the Unicode 16 decomposition data; they leave out
+/// accented letters, arrows and math operators (U+2190 to U+22FF, U+2ADC,
+/// U+2ADD) and Hangul, which compose.
+fn normalization_inert(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x2000..=0x218F
+            | 0x2300..=0x2ADB
+            | 0x2ADE..=0x2BFF
+            | 0x2E00..=0x2E7F
+            | 0x3000..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xE000..=0xF8FF
+            | 0xF900..=0xFAFF
+            | 0xFE00..=0xFE0F
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+            | 0x1F000..=0x1FBFF
+            | 0x20000..=0x3FFFF
+            | 0xE0000..=0xE01EF
+            | 0xF0000..=0x10FFFF
+    )
+}
+
+/// Every two-character canonical decomposition that involves kana, as
+/// (composed, first, second), from the Unicode 16 data. None reaches outside
+/// U+3040 to U+30FF.
+const KANA_PAIRS: [[u16; 3]; 58] = [
+    [0x304C, 0x304B, 0x3099],
+    [0x304E, 0x304D, 0x3099],
+    [0x3050, 0x304F, 0x3099],
+    [0x3052, 0x3051, 0x3099],
+    [0x3054, 0x3053, 0x3099],
+    [0x3056, 0x3055, 0x3099],
+    [0x3058, 0x3057, 0x3099],
+    [0x305A, 0x3059, 0x3099],
+    [0x305C, 0x305B, 0x3099],
+    [0x305E, 0x305D, 0x3099],
+    [0x3060, 0x305F, 0x3099],
+    [0x3062, 0x3061, 0x3099],
+    [0x3065, 0x3064, 0x3099],
+    [0x3067, 0x3066, 0x3099],
+    [0x3069, 0x3068, 0x3099],
+    [0x3070, 0x306F, 0x3099],
+    [0x3071, 0x306F, 0x309A],
+    [0x3073, 0x3072, 0x3099],
+    [0x3074, 0x3072, 0x309A],
+    [0x3076, 0x3075, 0x3099],
+    [0x3077, 0x3075, 0x309A],
+    [0x3079, 0x3078, 0x3099],
+    [0x307A, 0x3078, 0x309A],
+    [0x307C, 0x307B, 0x3099],
+    [0x307D, 0x307B, 0x309A],
+    [0x3094, 0x3046, 0x3099],
+    [0x309E, 0x309D, 0x3099],
+    [0x30AC, 0x30AB, 0x3099],
+    [0x30AE, 0x30AD, 0x3099],
+    [0x30B0, 0x30AF, 0x3099],
+    [0x30B2, 0x30B1, 0x3099],
+    [0x30B4, 0x30B3, 0x3099],
+    [0x30B6, 0x30B5, 0x3099],
+    [0x30B8, 0x30B7, 0x3099],
+    [0x30BA, 0x30B9, 0x3099],
+    [0x30BC, 0x30BB, 0x3099],
+    [0x30BE, 0x30BD, 0x3099],
+    [0x30C0, 0x30BF, 0x3099],
+    [0x30C2, 0x30C1, 0x3099],
+    [0x30C5, 0x30C4, 0x3099],
+    [0x30C7, 0x30C6, 0x3099],
+    [0x30C9, 0x30C8, 0x3099],
+    [0x30D0, 0x30CF, 0x3099],
+    [0x30D1, 0x30CF, 0x309A],
+    [0x30D3, 0x30D2, 0x3099],
+    [0x30D4, 0x30D2, 0x309A],
+    [0x30D6, 0x30D5, 0x3099],
+    [0x30D7, 0x30D5, 0x309A],
+    [0x30D9, 0x30D8, 0x3099],
+    [0x30DA, 0x30D8, 0x309A],
+    [0x30DC, 0x30DB, 0x3099],
+    [0x30DD, 0x30DB, 0x309A],
+    [0x30F4, 0x30A6, 0x3099],
+    [0x30F7, 0x30EF, 0x3099],
+    [0x30F8, 0x30F0, 0x3099],
+    [0x30F9, 0x30F1, 0x3099],
+    [0x30FA, 0x30F2, 0x3099],
+    [0x30FE, 0x30FD, 0x3099],
+];
 
 thread_local! {
     /// Full shapers built on this thread (see [`TextShaper::full_builds`]).
@@ -55,9 +505,15 @@ impl Default for TextShaper {
     }
 }
 
-/// The process-wide font setup every [`TextShaper`] starts from.
+/// The embedded part of the process-wide font setup every [`TextShaper`]
+/// starts from. It reads no files, so building it takes microseconds.
 struct BaseFonts {
-    collection: Collection,
+    /// The embedded faces and the generic families that point at them.
+    embedded: Collection,
+    /// One blob per embedded face. [`SystemFonts`] registers the same blobs,
+    /// so a face has one blob identity (and one `FontId`) whichever collection
+    /// shaped it.
+    blobs: Vec<Blob<u8>>,
     font_resources: Vec<FontData>,
     font_ids: FxHashMap<(u64, u32), FontId>,
 }
@@ -69,67 +525,124 @@ impl BaseFonts {
     }
 
     fn build() -> BaseFonts {
-        // UI text resolves through the deterministic embedded generics. System
-        // fonts are loaded too: they serve callers that name a family and act as
-        // glyph fallback behind the embedded faces.
-        let mut collection = Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: true,
-        });
-
-        // Register every embedded face from its static bytes (no copy). The
-        // four sans faces share the family name "Liberation Sans", so fontique
-        // folds them into one family and resolves bold/italic within it; the
-        // two mono faces fold into "Liberation Mono" the same way. Nerd Fonts
-        // Symbols follows it only as fallback, retaining stable terminal metrics.
         let mut font_resources = Vec::new();
         let mut font_ids = FxHashMap::default();
-        let mut families = [None; EMBEDDED_FACES.len()];
-        for (slot, bytes) in families.iter_mut().zip(EMBEDDED_FACES) {
-            let blob = Blob::new(Arc::new(bytes) as Arc<dyn AsRef<[u8]> + Send + Sync>);
-            let family = collection
-                .register_fonts(blob.clone(), None)
-                .first()
-                .map(|(id, _)| *id)
-                .expect("embedded face registered at least one family");
+        // Static bytes, no copy.
+        let blobs: Vec<Blob<u8>> = EMBEDDED_FACES
+            .iter()
+            .map(|bytes| Blob::new(Arc::new(*bytes) as Arc<dyn AsRef<[u8]> + Send + Sync>))
+            .collect();
+        for blob in &blobs {
             // FontFace::font_id and the symbol-font ids are indices into
             // EMBEDDED_FACES, so registration order is part of their contract.
             let id = FontId(font_resources.len() as u32);
             font_ids.insert((blob.id(), 0), id);
-            font_resources.push(FontData::new(blob, 0));
-            *slot = Some((family, id));
+            font_resources.push(FontData::new(blob.clone(), 0));
         }
-        let family_of = |id: FontId| families[id.0 as usize].expect("registered").0;
-        let family_id = family_of(EMBEDDED_FONT_ID);
-        let mono_family_id = family_of(FontFace::Mono.font_id());
-        let nerd_symbols_family_id = family_of(NERD_SYMBOLS_FONT_ID);
-        let unicode_symbols_family_id = family_of(UNICODE_SYMBOLS_FONT_ID);
-
-        // Point the generic families at the embedded fonts so any resolution
-        // path (including the default "sans-serif") lands on them. Monospace
-        // resolves to Liberation Mono — the code face rich text shapes with.
-        for generic in [
-            GenericFamily::SansSerif,
-            GenericFamily::Serif,
-            GenericFamily::SystemUi,
-            GenericFamily::UiSansSerif,
-        ] {
-            collection.set_generic_families(generic, std::iter::once(family_id));
-        }
-        collection.set_generic_families(
-            GenericFamily::Monospace,
-            [
-                mono_family_id,
-                nerd_symbols_family_id,
-                unicode_symbols_family_id,
-            ]
-            .into_iter(),
-        );
-
+        let mut embedded = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        register_embedded(&mut embedded, &blobs);
         BaseFonts {
-            collection,
+            embedded,
+            blobs,
             font_resources,
             font_ids,
+        }
+    }
+}
+
+/// Registers the embedded faces in `collection` and maps the generic families
+/// to them. The four sans faces share the family name "Liberation Sans", so
+/// fontique folds them into one family and resolves bold/italic within it; the
+/// two mono faces fold into "Liberation Mono" the same way. Nerd Fonts Symbols
+/// follows it only as fallback, retaining stable terminal metrics.
+fn register_embedded(collection: &mut Collection, blobs: &[Blob<u8>]) {
+    let families: Vec<_> = blobs
+        .iter()
+        .map(|blob| {
+            collection
+                .register_fonts(blob.clone(), None)
+                .first()
+                .map(|(id, _)| *id)
+                .expect("embedded face registered at least one family")
+        })
+        .collect();
+    let family_of = |id: FontId| families[id.0 as usize];
+    let family_id = family_of(EMBEDDED_FONT_ID);
+    let mono_family_id = family_of(FontFace::Mono.font_id());
+    let nerd_symbols_family_id = family_of(NERD_SYMBOLS_FONT_ID);
+    let unicode_symbols_family_id = family_of(UNICODE_SYMBOLS_FONT_ID);
+
+    // Point the generic families at the embedded fonts so any resolution
+    // path (including the default "sans-serif") lands on them. Monospace
+    // resolves to Liberation Mono — the code face rich text shapes with.
+    for generic in [
+        GenericFamily::SansSerif,
+        GenericFamily::Serif,
+        GenericFamily::SystemUi,
+        GenericFamily::UiSansSerif,
+    ] {
+        collection.set_generic_families(generic, std::iter::once(family_id));
+    }
+    collection.set_generic_families(
+        GenericFamily::Monospace,
+        [
+            mono_family_id,
+            nerd_symbols_family_id,
+            unicode_symbols_family_id,
+        ]
+        .into_iter(),
+    );
+}
+
+/// The embedded faces plus the system fonts, which serve callers that name a
+/// family and act as glyph fallback behind the embedded faces.
+///
+/// Building it scans the installed fonts (about 20 ms through fontconfig on a
+/// desktop with many of them), and text the embedded faces cover never reads
+/// it. So the first shaper starts the scan on a background thread instead of
+/// running it, and a shaper asks for the collection only when it meets text
+/// that needs it. That call waits for the scan if it is still running.
+struct SystemFonts {
+    collection: Collection,
+}
+
+impl SystemFonts {
+    fn get() -> &'static SystemFonts {
+        static SYSTEM: OnceLock<SystemFonts> = OnceLock::new();
+        SYSTEM.get_or_init(|| {
+            let mut collection = Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: true,
+            });
+            register_embedded(&mut collection, &BaseFonts::get().blobs);
+            SystemFonts { collection }
+        })
+    }
+
+    /// Starts the font scan in the background, once per process. Without
+    /// threads (wasm), or if the thread cannot start, the first caller of
+    /// [`SystemFonts::get`] runs the scan.
+    fn prewarm() {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            static STARTED: std::sync::Once = std::sync::Once::new();
+            STARTED.call_once(|| {
+                let _ = std::thread::Builder::new()
+                    .name("schnellui-fonts".into())
+                    .spawn(|| {
+                        SystemFonts::get();
+                    });
+            });
+        }
+    }
+
+    fn context() -> FontContext {
+        FontContext {
+            collection: SystemFonts::get().collection.clone(),
+            source_cache: SourceCache::default(),
         }
     }
 }
@@ -138,18 +651,21 @@ impl TextShaper {
     /// Builds a shaper over a Fontique collection holding the embedded faces
     /// (deterministic, SOUL §7.3), mapped as every generic family so UI text
     /// resolves to Liberation Sans (Liberation Mono for monospace). The
-    /// collection also loads the system fonts: they serve explicitly named
-    /// families and glyph fallback for characters the embedded faces lack.
+    /// system fonts serve explicitly named families and glyph fallback for
+    /// characters the embedded faces lack; they load in the background
+    /// ([`SystemFonts`]).
     ///
-    /// The collection is built once per process and cloned: fontique keeps the
-    /// system font index behind an `Arc`, so a clone shares the fontconfig scan
-    /// instead of repeating it for every app, theme rebuild, or remount.
+    /// Both collections are built once per process and cloned: fontique keeps
+    /// the system font index behind an `Arc`, so a clone shares the fontconfig
+    /// scan instead of repeating it for every app, theme rebuild, or remount.
     pub fn new() -> TextShaper {
         FULL_BUILDS.with(|c| c.set(c.get() + 1));
         let base = BaseFonts::get();
+        SystemFonts::prewarm();
         TextShaper {
-            font_cx: FontContext {
-                collection: base.collection.clone(),
+            font_cx: None,
+            embedded_cx: FontContext {
+                collection: base.embedded.clone(),
                 source_cache: SourceCache::default(),
             },
             layout_cx: LayoutContext::new(),
@@ -162,6 +678,10 @@ impl TextShaper {
             scratch_cuts: Vec::new(),
             font_resources: base.font_resources.clone(),
             font_ids: base.font_ids.clone(),
+            coverage: Default::default(),
+            masks: Default::default(),
+            narrowed: 0,
+            full_stack_only: false,
         }
     }
 
@@ -171,7 +691,14 @@ impl TextShaper {
     #[doc(hidden)]
     pub fn detached() -> TextShaper {
         TextShaper {
-            font_cx: FontContext {
+            font_cx: Some(FontContext {
+                collection: Collection::new(CollectionOptions {
+                    shared: false,
+                    system_fonts: false,
+                }),
+                source_cache: SourceCache::default(),
+            }),
+            embedded_cx: FontContext {
                 collection: Collection::new(CollectionOptions {
                     shared: false,
                     system_fonts: false,
@@ -188,6 +715,10 @@ impl TextShaper {
             scratch_cuts: Vec::new(),
             font_resources: Vec::new(),
             font_ids: FxHashMap::default(),
+            coverage: Default::default(),
+            masks: Default::default(),
+            narrowed: 0,
+            full_stack_only: false,
         }
     }
 
@@ -202,6 +733,7 @@ impl TextShaper {
     pub fn font_families(&mut self) -> Vec<String> {
         let mut families: Vec<String> = self
             .font_cx
+            .get_or_insert_with(SystemFonts::context)
             .collection
             .family_names()
             .map(str::to_owned)
@@ -214,7 +746,7 @@ impl TextShaper {
     /// Returns installed families whose font metadata declares fixed-width metrics.
     pub fn monospace_font_families(&mut self) -> Vec<String> {
         let families = self.font_families();
-        let font_cx = &mut self.font_cx;
+        let font_cx = self.font_cx.get_or_insert_with(SystemFonts::context);
         families
             .into_iter()
             .filter(|family| {
@@ -290,18 +822,192 @@ impl TextShaper {
         out
     }
 
+    /// Shapes everything with the full generic family stack, skipping the
+    /// covered-text shortcut, so tests can compare the two.
+    #[doc(hidden)]
+    pub fn set_full_stack_only(&mut self, on: bool) {
+        self.full_stack_only = on;
+    }
+
+    /// Whether `face` holds all of `text`, so the embedded faces alone shape
+    /// it exactly as the full collection would ([`FaceCoverage`]).
+    fn covered(&mut self, face: FontFace, text: &str) -> bool {
+        if self.full_stack_only {
+            return false;
+        }
+        match self.coverage(face) {
+            CoverageSlot::Ready(coverage) => coverage.holds(text),
+            _ => false,
+        }
+    }
+
+    /// The coverage of `face`, resolved on first use.
+    fn coverage(&mut self, face: FontFace) -> &mut CoverageSlot {
+        let slot = &mut self.coverage[face as usize];
+        if matches!(slot, CoverageSlot::Unresolved) {
+            *slot = match FaceCoverage::resolve(&mut self.embedded_cx, face) {
+                Some(coverage) => CoverageSlot::Ready(coverage),
+                None => CoverageSlot::Unavailable,
+            };
+        }
+        slot
+    }
+
+    /// Writes the short family stacks for `text` into [`SANS_SLOT`] and
+    /// [`MONO_SLOT`] of the full collection. `faces` holds a bit per
+    /// [`FontFace`] the text is shaped in; a slot gets the families that any
+    /// face of its kind needs. False when the text has to take the full stack:
+    /// it needs a family row that has not arrived (this requests it), or a
+    /// character the short stack cannot stand in for.
+    ///
+    /// Only looks rows up, under one uncontended lock; the scans run on the
+    /// row worker ([`FamilyRows`]).
+    fn narrow_stacks(&mut self, text: &str, faces: u8) -> bool {
+        if self.full_stack_only || !self.faces_ready(faces) {
+            return false;
+        }
+        let stacks = FamilyStacks::get();
+        if !stacks.usable {
+            return false;
+        }
+        for (mono, mask) in [false, true].into_iter().zip(&mut self.masks) {
+            let words = stacks.stack(mono).ids.len().div_ceil(64);
+            if mask.len() != words {
+                *mask = vec![0; words];
+            }
+        }
+        let in_set = |face: usize| faces & (1 << face) != 0;
+        let rows = FamilyRows::get();
+        let mut state = rows.state.lock();
+        let mut complete = true;
+        for ch in text.chars() {
+            let mut lacking = false;
+            for (f, slot) in self.coverage.iter_mut().enumerate() {
+                if let (true, CoverageSlot::Ready(coverage)) = (in_set(f), slot) {
+                    lacking |= coverage.lacks(ch);
+                }
+            }
+            if !lacking {
+                continue;
+            }
+            if !normalization_inert(ch) {
+                complete = false;
+                break;
+            }
+            for f in (0..FACE_COUNT).filter(|&f| in_set(f)) {
+                let key = (ch, f as u8);
+                match state.rows.get(&key) {
+                    Some(&PENDING) => complete = false,
+                    Some(&at) => {
+                        let mask = &mut self.masks[FONT_FACES[f].mono() as usize];
+                        let row = &state.bits[at as usize..at as usize + mask.len()];
+                        for (mask, bits) in mask.iter_mut().zip(row) {
+                            *mask |= bits;
+                        }
+                    }
+                    None => {
+                        rows.request(&mut state, key);
+                        complete = false;
+                    }
+                }
+            }
+        }
+        drop(state);
+        if complete {
+            let font_cx = self.font_cx.get_or_insert_with(SystemFonts::context);
+            for (mono, generic) in [(false, SANS_SLOT), (true, MONO_SLOT)] {
+                if !(0..FACE_COUNT).any(|f| in_set(f) && FONT_FACES[f].mono() == mono) {
+                    continue;
+                }
+                let stack = stacks.stack(mono);
+                let mask = &self.masks[mono as usize];
+                let keep = |at: usize| at < stack.embedded || mask[at / 64] & (1 << (at % 64)) != 0;
+                let ids = stack.ids.iter().enumerate();
+                font_cx.collection.set_generic_families(
+                    generic,
+                    ids.filter(|(at, _)| keep(*at)).map(|(_, id)| *id),
+                );
+            }
+        }
+        for mask in &mut self.masks {
+            mask.fill(0);
+        }
+        complete
+    }
+
+    /// Whether every face in `faces` has its coverage resolved.
+    fn faces_ready(&mut self, faces: u8) -> bool {
+        (0..FACE_COUNT)
+            .filter(|&f| faces & (1 << f) != 0)
+            .all(|f| matches!(self.coverage(FONT_FACES[f]), CoverageSlot::Ready(_)))
+    }
+
+    /// Blocks until the family rows ([`FamilyRows`]) that `text` needs in any
+    /// face have arrived, so the next shape of `text` can take the short
+    /// stack. For tests; shaping itself never waits. Where there is no row
+    /// worker it scans the rows on this thread.
+    #[doc(hidden)]
+    pub fn wait_for_family_rows(&mut self, text: &str) {
+        let all = (1u8 << FACE_COUNT) - 1;
+        if self.full_stack_only || !self.faces_ready(all) || !FamilyStacks::get().usable {
+            return;
+        }
+        let rows = FamilyRows::get();
+        let mut keys = Vec::new();
+        for ch in text.chars() {
+            for f in 0..FACE_COUNT {
+                if let CoverageSlot::Ready(coverage) = &mut self.coverage[f] {
+                    if coverage.lacks(ch) && normalization_inert(ch) {
+                        keys.push((ch, f as u8));
+                    }
+                }
+            }
+        }
+        let mut state = rows.state.lock();
+        for &key in &keys {
+            rows.request(&mut state, key);
+        }
+        if rows.requests.get().is_some_and(Option::is_none) {
+            drop(state);
+            let mut font_cx = SystemFonts::context();
+            let mut row = Vec::new();
+            for key in keys {
+                rows.scan_into(key, &mut font_cx, &mut row);
+            }
+            return;
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while keys.iter().any(|key| state.rows.get(key) == Some(&PENDING)) {
+            let timed_out = rows.ready.wait_until(&mut state, deadline).timed_out();
+            assert!(!timed_out, "family rows for {text:?} never arrived");
+        }
+    }
+
+    /// Family rows scanned on the calling thread so far (see [`FamilyRows`]).
+    #[doc(hidden)]
+    pub fn family_row_scans_on_this_thread() -> usize {
+        ROW_SCANS.with(|c| c.get())
+    }
+
     /// Builds, breaks and aligns the pooled layout for `text`. `style` adds the
     /// font family and per-span properties; the size, wrap mode and alignment
     /// from `opts` are applied here, once, for every shaping entry point.
+    /// `embedded` resolves fonts against the embedded faces alone; pass it only
+    /// for text they cover ([`TextShaper::covered`]).
     fn layout_text(
         &mut self,
         text: &str,
         opts: &ShapeOptions,
+        embedded: bool,
         style: impl FnOnce(&mut RangedBuilder<'_, Brush>),
     ) {
         // Split-borrow the pooled fields so the builder can hold `layout_cx` +
         // `font_cx` while `build_into` fills `scratch_layout` (§4.1 pooling).
-        let font_cx = &mut self.font_cx;
+        let font_cx = if embedded {
+            &mut self.embedded_cx
+        } else {
+            self.font_cx.get_or_insert_with(SystemFonts::context)
+        };
         let layout_cx = &mut self.layout_cx;
         let layout = &mut self.scratch_layout;
 
@@ -365,7 +1071,11 @@ impl TextShaper {
         out: &mut ShapedText,
     ) {
         let face = opts.face;
-        self.layout_text(text, opts, |builder| {
+        let embedded = font_family.is_none() && self.covered(face, text);
+        let narrow =
+            font_family.is_none() && !embedded && self.narrow_stacks(text, 1 << face as u8);
+        self.narrowed += narrow as u64;
+        self.layout_text(text, opts, embedded, |builder| {
             // Borrowed names: no per-call Vec/String for a named family.
             let named;
             let family = if let Some(family) = font_family {
@@ -374,6 +1084,8 @@ impl TextShaper {
                     FontFamilyName::Generic(GenericFamily::Monospace),
                 ];
                 FontFamily::List(Cow::Borrowed(&named))
+            } else if narrow {
+                FontFamily::from(if face.mono() { MONO_SLOT } else { SANS_SLOT })
             } else if face.mono() {
                 FontFamily::from(GenericFamily::Monospace)
             } else {
@@ -462,8 +1174,37 @@ impl TextShaper {
         spans: &[SpanSpec],
         opts: &ShapeOptions,
     ) -> RichShapedText {
-        self.layout_text(text, opts, |builder| {
-            builder.push_default(StyleProperty::FontFamily(GenericFamily::SansSerif.into()));
+        // The embedded faces alone will do when each span's face holds its
+        // text and the default face holds the rest.
+        let mut embedded = true;
+        let mut at = 0usize;
+        for s in spans {
+            let end = (at + s.len).min(text.len());
+            embedded = text
+                .get(at..end)
+                .is_some_and(|part| self.covered(s.face, part));
+            if !embedded {
+                break;
+            }
+            at = end;
+        }
+        let embedded = embedded && self.covered(FontFace::Sans, &text[at..]);
+        // Otherwise the short stacks will do when the text allows them. Each
+        // gets the families for every character any of the faces lacks: a
+        // cluster takes the face of its first character, so a character can
+        // meet another span's stack.
+        let faces = spans.iter().fold(1u8 << FontFace::Sans as u8, |faces, s| {
+            faces | 1 << s.face as u8
+        });
+        let narrow = !embedded && self.narrow_stacks(text, faces);
+        self.narrowed += narrow as u64;
+        self.layout_text(text, opts, embedded, |builder| {
+            let (sans, mono) = if narrow {
+                (SANS_SLOT, MONO_SLOT)
+            } else {
+                (GenericFamily::SansSerif, GenericFamily::Monospace)
+            };
+            builder.push_default(StyleProperty::FontFamily(sans.into()));
             let mut at = 0usize;
             for s in spans {
                 let end = (at + s.len).min(text.len());
@@ -473,10 +1214,7 @@ impl TextShaper {
                     continue;
                 }
                 if s.face.mono() {
-                    builder.push(
-                        StyleProperty::FontFamily(GenericFamily::Monospace.into()),
-                        range.clone(),
-                    );
+                    builder.push(StyleProperty::FontFamily(mono.into()), range.clone());
                 }
                 if s.face.bold() {
                     builder.push(StyleProperty::FontWeight(FontWeight::BOLD), range.clone());
@@ -775,10 +1513,10 @@ impl TextShaper {
         forked.font_ids = self.font_ids.clone();
         // Share the loaded font blobs too, so a face the donor already loaded keeps
         // its blob identity (and thus its FontId and cached glyphs) in the fork.
-        forked.font_cx = FontContext {
-            collection: self.font_cx.collection.clone(),
-            source_cache: self.font_cx.source_cache.clone(),
-        };
+        forked.font_cx = self.font_cx.as_ref().map(|font_cx| FontContext {
+            collection: font_cx.collection.clone(),
+            source_cache: font_cx.source_cache.clone(),
+        });
         forked.font_resources = self.font_resources.clone();
         forked.rasterized = self.rasterized;
         forked

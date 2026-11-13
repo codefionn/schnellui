@@ -747,6 +747,66 @@ fn wrapped_reshape_is_alloc_neutral_vs_baseline() {
     );
 }
 
+/// A warm shape on the short family stack allocates no more than the same
+/// shape on the full stack: the per-character family rows and the stack slots
+/// are filled on first sight and reused. What remains is parley's own floor
+/// (see above), which grows with the number of script runs.
+#[cfg(feature = "count-allocations")]
+#[test]
+fn warm_uncovered_shape_allocates_no_more_than_the_full_stack() {
+    let mut short = TextShaper::new();
+    let mut full = TextShaper::new();
+    full.set_full_stack_only(true);
+    let mut out = ShapedText::default();
+    let opts = ShapeOptions::new(15.0);
+    let texts = [
+        "ok ✓",
+        "hello 😀 world 2024",
+        "日本語のテキスト ✓",
+        "**bold** ✓ 漢字",
+    ];
+    let spans = |text: &str| {
+        [SpanSpec {
+            len: text.len(),
+            face: FontFace::MonoBold,
+            color: [0; 4],
+            underline: false,
+            strikethrough: false,
+            tag: 0,
+        }]
+    };
+    for text in texts {
+        short.wait_for_family_rows(text);
+    }
+    // Warm every text and face on both shapers before measuring any.
+    for _ in 0..3 {
+        for shaper in [&mut short, &mut full] {
+            for text in texts {
+                shaper.shape_into(text, &opts, &mut out);
+                std::hint::black_box(shaper.shape_spans(text, &spans(text), &opts));
+            }
+        }
+    }
+    for text in texts {
+        let narrowed = short.narrowed;
+        let a = allocation_counter::measure(|| short.shape_into(text, &opts, &mut out));
+        let b = allocation_counter::measure(|| full.shape_into(text, &opts, &mut out));
+        assert_eq!(
+            short.narrowed,
+            narrowed + 1,
+            "{text:?} took the short stack"
+        );
+        assert!(
+            a.count_total <= b.count_total && a.bytes_total <= b.bytes_total,
+            "{text:?}: short stack {} allocs / {} B, full stack {} / {}",
+            a.count_total,
+            a.bytes_total,
+            b.count_total,
+            b.bytes_total
+        );
+    }
+}
+
 /// The face a shaped run resolved to (the first glyph's FontId).
 fn face_of(shaper: &mut TextShaper, family: &str) -> FontId {
     let shaped = shaper.shape_with_family("Ag", &ShapeOptions::new(16.0), family);
@@ -1037,4 +1097,189 @@ fn a_glyph_that_cannot_be_placed_is_not_cached_as_empty() {
     assert_eq!(tiny.generation(), 0);
     let mut roomy = GlyphAtlas::new(128, 128);
     assert!(!shaper.rasterize_glyph(key, &mut roomy).rect.is_empty());
+}
+
+/// Texts for the covered-text shortcut: ones the embedded faces hold, ones
+/// they hold only in part, and ones that need a fallback font throughout.
+const COVERAGE_SAMPLES: &[&str] = &[
+    "",
+    "18",
+    "Hello, schnellui",
+    "The quick brown fox jumps over the lazy dog 0123456789",
+    "fi fl ffi office AVATAR To. Wa, #1 *2 (c)",
+    "Größe, naïve café, Łódź, señor, 5 € · 20 % — ½",
+    "line one\nline two\r\n\tindented",
+    "a\u{0301}e\u{0308} combining marks",
+    "zero\u{200B}width\u{00AD}soft\u{00A0}nbsp",
+    "arrows → ← ✓ ✗ ★ and │ box ┌─┐",
+    "日本語のテキスト mixed with latin",
+    "emoji 😀 👍🏽 ❤\u{FE0F} 1\u{FE0F}\u{20E3}",
+    "العربية עברית",
+    "\u{1D11E} beyond the BMP",
+    // Uncovered characters the short family stack handles.
+    "ok ✓",
+    "Save ✓ done 12",
+    "2024😀1\u{FE0F}\u{20E3} 7😀8",
+    "✓ 😀 日本 ⌘ ♞ ✗ ★ 中文 ☃",
+    "😀\u{0301} ✓\u{20DD} 日\u{0301}\u{0308} x\u{20DD}",
+    "❤\u{FE0E} ✌\u{FE0F} ☺\u{FE0F} 漢\u{E0100} ✓\u{FE0F}",
+    "שלום ✓ 😀 مرحبا 12 עולם",
+    "👨\u{200D}👩\u{200D}👧 🇩🇪 #\u{FE0F}\u{20E3} 👍🏽 🏳\u{FE0F}\u{200D}🌈",
+    "\u{F8FF}\u{10FFFD}\u{E0001} no font has these \u{FFFFF}",
+    "𠀀 𪚥 astral ideographs, 🂡 cards",
+    "A chat line about sixty characters long with one emoji 😀 here.",
+    "\u{200D}✓\u{200C}😀\u{2028}next",
+    // Kana compose; the short stack holds the families of their NFC and NFD
+    // forms too.
+    "がぎ か\u{3099}ハ\u{309A} ゔ ヷ ゝ\u{3099} ✓",
+    "\u{3099}\u{309A} カタカナ ひらがな 2024年",
+    // Other uncovered characters that compose: the full stack.
+    "≠ ⇒ ✓",
+    "한글 ✓ ⇏",
+    "\u{0928}\u{093C} नमस्ते ✓",
+];
+
+#[test]
+fn covered_text_shapes_the_same_as_the_full_family_stack() {
+    let mut fast = TextShaper::new();
+    let mut full = TextShaper::new();
+    full.set_full_stack_only(true);
+    let faces = [
+        FontFace::Sans,
+        FontFace::SansBold,
+        FontFace::SansItalic,
+        FontFace::SansBoldItalic,
+        FontFace::Mono,
+        FontFace::MonoBold,
+    ];
+    for text in COVERAGE_SAMPLES {
+        fast.wait_for_family_rows(text);
+        for face in faces {
+            for max_width in [None, Some(90.0)] {
+                let opts = ShapeOptions::new(15.0).face(face).max_width(max_width);
+                let a = fast.shape_with(text, &opts);
+                let b = full.shape_with(text, &opts);
+                assert_eq!(
+                    format!("{a:?}"),
+                    format!("{b:?}"),
+                    "{text:?} in {face:?} at {max_width:?}"
+                );
+            }
+        }
+    }
+    assert!(fast.narrowed > 0, "no sample took the short family stack");
+}
+
+#[test]
+fn covered_spans_shape_the_same_as_the_full_family_stack() {
+    let mut fast = TextShaper::new();
+    let mut full = TextShaper::new();
+    full.set_full_stack_only(true);
+    let span = |len, face| SpanSpec {
+        len,
+        face,
+        color: [10, 20, 30, 255],
+        underline: face == FontFace::SansItalic,
+        strikethrough: false,
+        tag: len as u32,
+    };
+    for text in COVERAGE_SAMPLES {
+        fast.wait_for_family_rows(text);
+        // Cut at character boundaries near thirds.
+        let cut = |at: usize| {
+            (0..=at.min(text.len()))
+                .rev()
+                .find(|&i| text.is_char_boundary(i))
+        };
+        let (one, two) = (
+            cut(text.len() / 3).unwrap(),
+            cut(text.len() * 2 / 3).unwrap(),
+        );
+        let layouts = vec![
+            vec![],
+            vec![span(text.len(), FontFace::Mono)],
+            vec![
+                span(one, FontFace::SansBold),
+                span(two - one, FontFace::Mono),
+                span(text.len() - two, FontFace::SansItalic),
+            ],
+            vec![span(one, FontFace::MonoBold)],
+        ];
+        for spans in layouts {
+            let opts = ShapeOptions::new(15.0).max_width(Some(120.0));
+            let a = fast.shape_spans(text, &spans, &opts);
+            let b = full.shape_spans(text, &spans, &opts);
+            assert_eq!(
+                format!("{a:?}"),
+                format!("{b:?}"),
+                "{text:?} with {spans:?}"
+            );
+        }
+    }
+    assert!(fast.narrowed > 0, "no sample took the short family stacks");
+}
+
+/// A character no shaper has met yet takes the full stack on its first
+/// shape, and the shaping thread never scans for its family row: the row
+/// worker does. Once the row is in, the same text takes the short stack and
+/// comes out the same.
+#[test]
+fn an_unseen_character_shapes_on_the_full_stack_without_scanning() {
+    // A character no other test shapes, so its row is not in the
+    // process-wide store yet.
+    let text = "ring \u{1FA90} planet";
+    let opts = ShapeOptions::new(15.0);
+    let mut shaper = TextShaper::new();
+    let mut full = TextShaper::new();
+    full.set_full_stack_only(true);
+    let expected = format!("{:?}", full.shape_with(text, &opts));
+    let scans = TextShaper::family_row_scans_on_this_thread();
+    let before = shaper.narrowed;
+    let first = shaper.shape_with(text, &opts);
+    assert_eq!(
+        shaper.narrowed, before,
+        "the first shape took the short stack"
+    );
+    assert_eq!(
+        TextShaper::family_row_scans_on_this_thread(),
+        scans,
+        "the shaping thread scanned family rows"
+    );
+    assert_eq!(format!("{first:?}"), expected);
+
+    shaper.wait_for_family_rows(text);
+    let second = shaper.shape_with(text, &opts);
+    assert_eq!(
+        shaper.narrowed,
+        before + 1,
+        "the row arrived but went unused"
+    );
+    assert_eq!(format!("{second:?}"), expected);
+}
+
+#[test]
+fn uncovered_text_takes_the_short_family_stack() {
+    let mut shaper = TextShaper::new();
+    let opts = ShapeOptions::new(15.0);
+    for text in ["ok ✓", "hello 😀 world 2024", "日本 ✓", "がぎ か\u{3099}"] {
+        shaper.wait_for_family_rows(text);
+        let before = shaper.narrowed;
+        shaper.shape_with(text, &opts);
+        assert_eq!(shaper.narrowed, before + 1, "{text:?}");
+    }
+    // Covered text keeps the embedded faces; composing characters and named
+    // families take the full stack.
+    for text in ["plain", "한글 ✓", "\u{0928}\u{093C} ✓"] {
+        shaper.wait_for_family_rows(text);
+        let before = shaper.narrowed;
+        shaper.shape_with(text, &opts);
+        assert_eq!(shaper.narrowed, before, "{text:?}");
+    }
+    let before = shaper.narrowed;
+    shaper.shape_with_family("ok ✓", &opts, "Liberation Sans");
+    assert_eq!(shaper.narrowed, before);
+    let mut full = TextShaper::new();
+    full.set_full_stack_only(true);
+    full.shape_with("ok ✓", &opts);
+    assert_eq!(full.narrowed, 0);
 }
