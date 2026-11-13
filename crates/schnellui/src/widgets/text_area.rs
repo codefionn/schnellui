@@ -1123,6 +1123,24 @@ pub(crate) fn inherit_area_selection(
     })
 }
 
+thread_local! {
+    static AREA_FACE: std::cell::Cell<FontFace> = const { std::cell::Cell::new(FontFace::Mono) };
+}
+
+/// Sets the face every [`TextArea`] of this thread shapes its plain text in.
+/// The default is the mono face, which a source editor wants. An app whose
+/// areas hold prose (a chat composer, a topic field) sets [`FontFace::Sans`]
+/// once, before it builds its first area: the areas cache shaped lines and do
+/// not reshape them when the face changes later.
+pub fn set_text_area_face(face: FontFace) {
+    AREA_FACE.with(|current| current.set(face));
+}
+
+/// The face plain area text is shaped in on this thread.
+pub(crate) fn area_face() -> FontFace {
+    AREA_FACE.with(std::cell::Cell::get)
+}
+
 /// Shapes one raw source line in the regular mono face — the caret/pointer
 /// mapping shape (the mono family's uniform advances make it metric-identical
 /// to the highlighted paint shape).
@@ -1132,7 +1150,7 @@ fn shape_area_line(shaper: &mut TextShaper, line: &str, phys: f32) -> schnellui:
         line,
         &ShapeOptions::new(phys)
             .wrap(WrapMode::NoWrap)
-            .face(FontFace::Mono)
+            .face(area_face())
             .line_height(Some(AREA_LINE_HEIGHT)),
     )
 }
@@ -1154,7 +1172,7 @@ fn shape_area_line_wrapped(
         &ShapeOptions::new(phys)
             .max_width(max_width)
             .wrap(wrap)
-            .face(FontFace::Mono)
+            .face(area_face())
             .line_height(Some(AREA_LINE_HEIGHT)),
     )
 }

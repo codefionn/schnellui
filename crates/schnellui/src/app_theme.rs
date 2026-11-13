@@ -232,7 +232,17 @@ impl App {
         let selected = mode.resolve(self.color_scheme);
         if selected != self.active_theme {
             self.theme_transition = None;
-            let _ = self.rebuild_with_theme(selected);
+            if self.rebuild_with_theme(selected) {
+                self.theme_binding_rebuilt = true;
+            }
         }
+    }
+
+    /// Whether the theme binding rebuilt the tree since the last call. The rebuild
+    /// happens inside a frame, where a window host cannot see it: the host asks here
+    /// after each frame and then gives its renderer the new tree's clear color, scale
+    /// and atlas, as it does after every other theme change.
+    pub(crate) fn take_theme_binding_rebuild(&mut self) -> bool {
+        std::mem::take(&mut self.theme_binding_rebuilt)
     }
 }

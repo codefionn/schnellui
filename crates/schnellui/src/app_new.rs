@@ -143,6 +143,7 @@ impl App {
             pressed_dialog: None,
             redrive_content_drag: None,
             theme_binding: None,
+            theme_binding_rebuilt: false,
             animations_enabled: true,
             continuous_redraw: false,
             escape_exits: false,

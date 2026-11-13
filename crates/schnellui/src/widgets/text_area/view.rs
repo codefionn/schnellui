@@ -401,7 +401,7 @@ fn emit_line(
                 &ShapeOptions::new(m.phys)
                     .max_width(m.max_w)
                     .wrap(m.wrap)
-                    .face(FontFace::Mono)
+                    .face(super::area_face())
                     .line_height(Some(super::AREA_LINE_HEIGHT)),
             )
         } else {

@@ -36,6 +36,14 @@ const PILL_PAD_V: f32 = 2.0;
 /// they keep their contrast on the selected background.
 const SELECTED_META_LIFT: f32 = 0.35;
 
+/// A round badge before the title: a letter or two on a filled disc.
+struct LeadingMark {
+    text: Cow<'static, str>,
+    fill: Color,
+    ink: Color,
+    size: f32,
+}
+
 /// A left-aligned clickable row. See the module docs.
 pub struct ListRow {
     title: Cow<'static, str>,
@@ -43,8 +51,10 @@ pub struct ListRow {
     subtitle: Option<Cow<'static, str>>,
     accent: Option<Color>,
     dot: Option<Color>,
+    mark: Option<LeadingMark>,
     selected: bool,
     selected_background: Option<Color>,
+    selected_radius: f32,
     width: f32,
     height: f32,
     pad_h: f32,
@@ -69,8 +79,10 @@ impl ListRow {
             subtitle: None,
             accent: None,
             dot: None,
+            mark: None,
             selected: false,
             selected_background: None,
+            selected_radius: 0.0,
             width: 240.0,
             height: DEFAULT_HEIGHT,
             pad_h: DEFAULT_PAD_H,
@@ -188,6 +200,25 @@ impl ListRow {
 
     /// Marks the row selected: it gets the selected background and the
     /// `SELECTED` state.
+    /// Draws a round badge `size` across before the title, with `text` (an
+    /// initial or two) in `ink` on a disc of `fill`: an avatar stand-in. The
+    /// title starts after it.
+    pub fn leading_mark(
+        mut self,
+        text: impl Into<Cow<'static, str>>,
+        fill: Color,
+        ink: Color,
+        size: f32,
+    ) -> ListRow {
+        self.mark = Some(LeadingMark {
+            text: text.into(),
+            fill,
+            ink,
+            size: if size.is_finite() { size.max(0.0) } else { 0.0 },
+        });
+        self
+    }
+
     pub fn selected(mut self, selected: bool) -> ListRow {
         self.selected = selected;
         self
@@ -196,6 +227,17 @@ impl ListRow {
     /// Background of a selected row. Defaults to the theme's `selection`.
     pub fn selected_background(mut self, color: Color) -> ListRow {
         self.selected_background = Some(color);
+        self
+    }
+
+    /// Rounds the corners of the selected row's background. `0` by default: a
+    /// square fill that runs edge to edge.
+    pub fn selected_radius(mut self, radius: f32) -> ListRow {
+        self.selected_radius = if radius.is_finite() {
+            radius.max(0.0)
+        } else {
+            0.0
+        };
         self
     }
 
@@ -306,7 +348,8 @@ impl View for ListRow {
                 DOT_SIZE + DOT_GAP
             } else {
                 0.0
-            };
+            }
+            + this.mark.as_ref().map_or(0.0, |mark| mark.size + DOT_GAP);
         let trailing = this
             .trailing
             .as_ref()
@@ -363,7 +406,7 @@ impl View for ListRow {
         pd.primitives.push(Primitive::SolidRect {
             rect,
             color: background,
-            corner_radius: 0.0,
+            corner_radius: this.selected_radius.min(rect.height * 0.5),
         });
         if let Some(color) = this.accent {
             pd.primitives.push(Primitive::SolidRect {
@@ -383,6 +426,33 @@ impl View for ListRow {
                 color,
                 corner_radius: DOT_SIZE * 0.5,
             });
+        }
+        if let Some(mark) = &this.mark {
+            let disc = Rect::new(
+                rect.x + lead - DOT_GAP - mark.size,
+                rect.y + (this.height - mark.size) * 0.5,
+                mark.size,
+                mark.size,
+            );
+            pd.primitives.push(Primitive::SolidRect {
+                rect: disc,
+                color: mark.fill,
+                corner_radius: mark.size * 0.5,
+            });
+            let letters = ctx.text.shape(&mark.text, meta_phys, None);
+            rasterize_and_push(
+                pd,
+                ctx.text,
+                ctx.atlas,
+                &letters,
+                meta_phys as u32,
+                mark.ink,
+                ctx.scale,
+                Point {
+                    x: disc.x + (disc.width - letters.width * inv) * 0.5,
+                    y: disc.y + (disc.height - letters.height * inv) * 0.5,
+                },
+            );
         }
         let title_y = rect.y + (this.height - title.height * inv) * 0.5;
         rasterize_and_push(

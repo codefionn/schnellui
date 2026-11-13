@@ -698,6 +698,9 @@ pub struct App {
     /// to find its drop target at again after the replacement's first layout.
     redrive_content_drag: Option<scene::Point>,
     theme_binding: Option<bindings::ThemeBinding>,
+    /// The theme binding rebuilt the tree in a frame and the host has not yet
+    /// reconnected its renderer to the new tree ([`App::take_theme_binding_rebuild`]).
+    theme_binding_rebuilt: bool,
     /// Whether motion is allowed by the host platform's accessibility preference.
     /// Headless/custom hosts default to `true` and can update this through
     /// [`App::apply_reduced_motion`]; the built-in window host does so automatically.

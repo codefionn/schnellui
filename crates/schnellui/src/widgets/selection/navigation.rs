@@ -147,6 +147,7 @@ pub struct Tab {
     pub(crate) tooltip: Option<Cow<'static, str>>,
     /// The tooltip shows only while the window matches this.
     pub(crate) tooltip_when: Option<ResponsiveQuery>,
+    pub(crate) tooltip_side: crate::widgets::TooltipSide,
     pub(crate) selected: bool,
     pub(crate) width: Option<f32>,
     pub(crate) appearance: TabAppearance,
@@ -169,6 +170,7 @@ impl Tab {
             display: None,
             tooltip: None,
             tooltip_when: None,
+            tooltip_side: crate::widgets::TooltipSide::Above,
             selected: false,
             width: None,
             appearance: TabAppearance::Classic,
@@ -196,6 +198,12 @@ impl Tab {
     /// an icon only.
     pub fn tooltip(mut self, label: impl Into<Cow<'static, str>>) -> Tab {
         self.tooltip = Some(label.into());
+        self
+    }
+    /// Places the [`tooltip`](Tab::tooltip) on `side` of the tab, as
+    /// [`Button::tooltip_side`](crate::widgets::Button::tooltip_side) does.
+    pub fn tooltip_side(mut self, side: crate::widgets::TooltipSide) -> Tab {
+        self.tooltip_side = side;
         self
     }
     /// Shows the [`tooltip`](Tab::tooltip) only while the window matches `query`, for
@@ -392,6 +400,7 @@ impl View for Tab {
                 ctx.scale,
             );
             crate::widgets::elevate_tooltip_host(ctx.scene, id);
+            crate::widgets::set_tooltip_side(&ctx.runtime, id, this.tooltip_side);
             if let Some(query) = this.tooltip_when {
                 crate::widgets::set_tooltip_when(&ctx.runtime, id, query);
             }

@@ -381,4 +381,24 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), after_first + 1);
         assert_eq!(app.active_theme(), theme::DARK);
     }
+
+    #[test]
+    fn theme_binding_rebuild_is_reported_to_the_host_once() {
+        let dark = create_signal(false);
+        let mut app = App::mount_themed(theme::LIGHT, || Text::new("themed"));
+        assert!(app.bind_theme(move || {
+            if dark.get() {
+                theme::DARK
+            } else {
+                theme::LIGHT
+            }
+        }));
+        app.frame();
+        assert!(!app.take_theme_binding_rebuild(), "nothing rebuilt yet");
+        dark.set(true);
+        app.frame();
+        assert_eq!(app.clear_color(), theme::DARK.page);
+        assert!(app.take_theme_binding_rebuild(), "the rebuild is reported");
+        assert!(!app.take_theme_binding_rebuild(), "and only once");
+    }
 }

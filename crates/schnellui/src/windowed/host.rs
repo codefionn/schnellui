@@ -531,6 +531,12 @@ impl WindowedApp {
         // Layout bounds reach the tree through per-node a11y dirt (the scene marks
         // a node whose box moved), so a reflow no longer forces a full tree.
         let _ = self.app.settle_frame();
+        // A bound theme rebuilds the whole tree inside that frame. The renderer still
+        // has the old tree's clear color and atlas, and would paint the old page color
+        // behind the new widgets.
+        if self.app.take_theme_binding_rebuild() {
+            self.sync_renderer_after_theme_rebuild();
+        }
         if let Some(adapter) = self.accessibility.as_mut() {
             let scale = self.app.scale();
             let title = self.title.as_str();
