@@ -7,13 +7,13 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-argon2 = "0.6.0"
-axum = { version = "0.8.9", features = ["form", "http1", "tokio"] }
-rand = "0.10.3"
-serde = { version = "1.0.229", features = ["derive"] }
+argon2 = "0.6"
+axum = { version = "0.8", features = ["form", "http1", "tokio"] }
+rand = "0.10.2"
+serde = { version = "1.0.228", features = ["derive"] }
 schnellui = { path = "../../crates/schnellui", features = ["ssr"] }
-tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net"] }
+tokio = { version = "1.44.0", features = ["macros", "rt-multi-thread", "net"] }
 
 [dev-dependencies]
-http-body-util = "0.1.5"
-tower = { version = "0.5.3", features = ["util"] }
+http-body-util = "0.1.2"
+tower = { version = "0.5.2", features = ["util"] }

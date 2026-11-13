@@ -2,11 +2,12 @@
 //!
 //! A small, selector-oriented facade over [`schnellui::signal`]. [`Store`] splits
 //! its concerns deliberately: a tiny revision [`Signal`] owns reactive dependency
-//! tracking and disposal, while its payload lives behind a shared [`RwLock`]. This
-//! lets nested closure reads borrow the same store safely without lifting the
-//! complete application state out of the reactive arena. Each [`Selector`] is one
-//! equality-gated [`Memo`], so changing unrelated store fields recomputes its
-//! selector but only a changed projection reaches consumers.
+//! tracking and disposal, while its payload lives behind a shared
+//! [`RecursiveRwLock`]. This lets nested closure reads borrow the same store
+//! safely without lifting the complete application state out of the reactive
+//! arena. Each [`Selector`] is one equality-gated [`Memo`], so changing unrelated
+//! store fields recomputes its selector but only a changed projection reaches
+//! consumers.
 //!
 //! ## Lifetime and threading
 //!
@@ -51,7 +52,7 @@ use std::{
     sync::Arc,
 };
 
-use parking_lot::RwLock;
+use parking_lot::RecursiveRwLock;
 use schnellui::signal::{
     create_memo_equals, create_scope, create_signal, run_in_scope, Memo, Scope, Signal,
 };
@@ -66,7 +67,7 @@ pub struct Store<T: 'static> {
     /// application payload, so a tracked read never prevents a nested payload
     /// read from taking another shared lock.
     revision: Signal<()>,
-    data: Arc<RwLock<T>>,
+    data: Arc<RecursiveRwLock<T>>,
     owner: Arc<ScopeOwner>,
 }
 
@@ -93,7 +94,7 @@ impl<T: Send + Sync + 'static> Store<T> {
         let revision = run_in_scope(owner.scope, || create_signal(()));
         Self {
             revision,
-            data: Arc::new(RwLock::new(value)),
+            data: Arc::new(RecursiveRwLock::new(value)),
             owner,
         }
     }
@@ -131,7 +132,7 @@ impl<T: Send + Sync + 'static> Store<T> {
         T: Clone,
     {
         self.revision.try_get()?;
-        Some(self.data.read_recursive().clone())
+        Some(self.data.read().clone())
     }
 
     /// Reads the current state by reference without cloning it.
@@ -144,7 +145,7 @@ impl<T: Send + Sync + 'static> Store<T> {
     /// forever. Panics after disposal.
     pub fn with<R>(&self, reader: impl FnOnce(&T) -> R) -> R {
         self.revision.get();
-        reader(&self.data.read_recursive())
+        reader(&self.data.read())
     }
 
     /// Reads the current state by reference without subscribing the current
@@ -161,7 +162,7 @@ impl<T: Send + Sync + 'static> Store<T> {
     /// Untracked closure read, returning `None` after disposal.
     pub fn try_peek<R>(&self, reader: impl FnOnce(&T) -> R) -> Option<R> {
         self.revision.try_peek(|_| ())?;
-        Some(reader(&self.data.read_recursive()))
+        Some(reader(&self.data.read()))
     }
 
     /// Alias for [`Store::peek`] that makes the dependency behavior explicit.
@@ -250,7 +251,7 @@ impl<T: Send + Sync + 'static> Store<T> {
             create_memo_equals(
                 move || {
                     revision.get();
-                    selector(&data.read_recursive())
+                    selector(&data.read())
                 },
                 partial_eq::<U>,
             )
@@ -446,11 +447,10 @@ mod tests {
             clicks: 4,
         });
         // A selector must capture only the payload handle, never `Store`'s
-        // scope owner. Reading the same RwLock under its outer selector read
+        // scope owner. Reading the same lock under its outer selector read
         // also proves nested shared payload reads remain valid.
         let nested_data = Arc::clone(&store.data);
-        let combined =
-            store.select(move |state| state.clicks + nested_data.read_recursive().clicks);
+        let combined = store.select(move |state| state.clicks + nested_data.read().clicks);
 
         assert_eq!(combined.get(), 8);
         store.transaction(|state| state.clicks = 5);

@@ -50,49 +50,48 @@ schnellui-servo = { path = "crates/schnellui-servo", version = "0.1.0" }
 schnellui = { path = "crates/schnellui", version = "0.1.0" }
 
 # --- shared low-level deps (§4.4) ---
-slotmap = "1.1.1"
+slotmap = "1.0.6"
 smallvec = "1.16.2"
-rustc-hash = "2.1.3"
-parking_lot = "0.12.5"
+rustc-hash = "2.1.2"
+parking_lot = "0.13"
 once_cell = "1.21.4"
-bytemuck = { version = "1.25.2", features = ["derive"] }
+bytemuck = { version = "1.25.0", features = ["derive"] }
 unicode-segmentation = "1.13.3"
 # Inline (<= 24 byte) strings: terminal cell graphemes clone without allocating.
-compact_str = "0.9.1"
+compact_str = ">=0.9, <0.11"
 
 # --- macro / parser (§3.3) ---
-proc-macro2 = "1.0.107"
-syn = { version = "3.0.6", features = ["full", "extra-traits"] }
-quote = "1.0.47"
-rstml = "0.13.1"
+proc-macro2 = "1.0.95"
+syn = { version = "3.0", features = ["full", "extra-traits"] }
+quote = "1.0.38"
+rstml = "0.13"
 
 # --- layout / text / gpu / a11y ---
-taffy = "0.14.0"
-# Parley 0.12 requires ICU 2.3, which conflicts with Servo 0.7's ICU 2.1 pin.
-parley = "0.11.1"
-swash = "0.2.10"
-fontique = "0.12.0"
+taffy = "0.15.1"
+# Parley 0.12 and later require ICU 2.3, which conflicts with Servo 0.8's ICU 2.1 pin.
+parley = "0.11"
+swash = "0.2"
 wgpu = "30.0.1"
-pollster = "1.0.1"
+pollster = ">=0.3, <2"
 png = "0.18.1"
-accesskit = "0.25.1"
+accesskit = "0.25"
 # Cross-platform native adapter: AT-SPI on Linux, UI Automation on Windows,
 # and NSAccessibility on macOS (the crate selects its platform backend by target).
-accesskit_winit = "0.34.1"
+accesskit_winit = "0.34"
 # opt-in windowed (non-headless) mode: winit 0.30 ApplicationHandler event loop
 # glue in the umbrella crate (SOUL §8). Headless one-shot screenshotting (§7) never
 # touches this — it is only reached through `App::run_windowed`.
-winit = "0.30.13"
-arboard = { version = "3.6.1", default-features = false, features = ["image-data", "wayland-data-control"] }
+winit = "0.30.5"
+arboard = { version = "3.5", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 # --- native accessibility preferences ---
-ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "file_chooser", "global_shortcuts", "settings"] }
-async-io = "2.6.0"
-futures-util = "0.3.34"
+ashpd = { version = ">=0.13.6, <0.15", default-features = false, features = ["async-io", "file_chooser", "global_shortcuts", "settings"] }
+async-io = "2.3.2"
+futures-util = "0.3.30"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSApplication", "NSCell", "NSEvent", "NSFont", "NSMenu", "NSMenuItem", "NSResponder", "NSWorkspace", "objc2-core-foundation"] }
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSLocale", "NSProcessInfo", "NSString"] }
-windows-sys = { version = "0.61.2", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_System_SystemServices",
@@ -104,24 +103,24 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 # --- serialization / cli / testing ---
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
-jaq-core = "3.1.1"
-jaq-json = { version = "2.0.3", features = ["serde"] }
-jaq-std = "3.0.3"
-shell-words = "1.1.1"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
-clap = { version = "4.6.7", features = ["derive"] }
-strum = { version = "0.28.0", features = ["derive"] }
-allocation-counter = "0.8.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.127"
+jaq-core = "3"
+jaq-json = { version = "2", features = ["serde"] }
+jaq-std = "3"
+shell-words = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+clap = { version = "4.4", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
+allocation-counter = "0.8"
 # Property tests with shrinking (the `schnellui::testing` pillar's dev-dependency only).
-proptest = { version = "1.12.0", default-features = false, features = ["std"] }
-md-icons = "0.4.0"
-chromiumoxide = "0.9.1"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros"] }
-futures = "0.3.34"
-wasm-bindgen = "0.2.129"
-js-sys = "0.3.106"
+proptest = { version = "1.4", default-features = false, features = ["std"] }
+md-icons = "0.4"
+chromiumoxide = "0.9"
+tokio = { version = "1.44.0", features = ["rt-multi-thread", "macros"] }
+futures = "0.3.30"
+wasm-bindgen = "0.2.127"
+js-sys = "0.3.104"
 
 # Debug info made up most of every binary and test executable. Workspace crates
 # keep line tables, so panics and backtraces still name files and lines.

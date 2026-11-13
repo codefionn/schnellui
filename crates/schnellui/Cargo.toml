@@ -24,7 +24,6 @@ serde_json.workspace = true
 taffy.workspace = true
 parley.workspace = true
 swash.workspace = true
-fontique.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 # PNG encode (render readback) and decode (`Image::from_png`).

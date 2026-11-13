@@ -12,15 +12,15 @@ default = []
 servo-engine = ["dep:cookie", "dep:dpi", "dep:servo"]
 
 [dependencies]
-cookie = { version = "0.18.2", optional = true }
-dpi = { version = "0.1.2", optional = true }
+cookie = { version = "0.18", optional = true }
+dpi = { version = "0.1.1", optional = true }
 schnellui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror = "2.0.21"
-url = { version = "2.5.8", features = ["serde"] }
-servo = { version = "0.7", optional = true }
+thiserror = ">=1.0.40, <3"
+url = { version = "2.5", features = ["serde"] }
+servo = { version = "0.8", optional = true }
 
 [dev-dependencies]
-rustls = "0.23.45"
-tempfile = "3.27.0"
+rustls = "0.23.27"
+tempfile = "3.10"

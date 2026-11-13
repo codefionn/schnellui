@@ -414,6 +414,10 @@ impl LayoutEngine {
         let parent_kind = node.parent.and_then(|p| scene.node(p)).map(|n| n.kind);
 
         let mut s = taffy::Style::DEFAULT;
+        // Every node is the containing block of its absolute children. Taffy 0.15
+        // defaults to `Static`, which would place an absolute child against the
+        // nearest positioned ancestor instead (often the window).
+        s.position = taffy::Position::Relative;
 
         if kind.is_container() {
             let style = self
@@ -974,35 +978,35 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
             s.display = taffy::Display::Flex;
             s.flex_direction = taffy::FlexDirection::Row;
             s.gap = gap;
-            s.justify_content = Some(map_justify(style.justify));
-            s.align_items = Some(map_align(style.align));
+            s.justify_content = map_justify(style.justify);
+            s.align_items = map_align(style.align);
         }
         Container::Column => {
             s.display = taffy::Display::Flex;
             s.flex_direction = taffy::FlexDirection::Column;
             s.gap = gap;
-            s.justify_content = Some(map_justify(style.justify));
-            s.align_items = Some(map_align(style.align));
+            s.justify_content = map_justify(style.justify);
+            s.align_items = map_align(style.align);
         }
         Container::Stack => {
             // Relative container; children are absolutely positioned to fill it,
             // or placed by `justify` and `align` on an axis the stack centers or
             // ends (handled per child in `build_style`).
             s.display = taffy::Display::Flex;
-            s.justify_content = Some(map_justify(style.justify));
-            s.align_items = Some(map_align(style.align));
+            s.justify_content = map_justify(style.justify);
+            s.align_items = map_align(style.align);
         }
         Container::Grid => {
             s.display = taffy::Display::Grid;
             s.gap = gap;
-            s.justify_content = Some(map_justify(style.justify));
-            s.align_items = Some(map_align(style.align));
+            s.justify_content = map_justify(style.justify);
+            s.align_items = map_align(style.align);
         }
         Container::Scroll => {
             s.display = taffy::Display::Flex;
             s.flex_direction = taffy::FlexDirection::Column;
             s.gap = gap;
-            s.align_items = Some(map_align(style.align));
+            s.align_items = map_align(style.align);
             // Vertical scroll viewport; content offset is applied downstream, not
             // by layout (geometry only, SOUL §8.1).
             s.overflow = taffy::geometry::Point {
@@ -1015,7 +1019,7 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
             // the insets.
             s.display = taffy::Display::Flex;
             s.flex_direction = taffy::FlexDirection::Column;
-            s.align_items = Some(taffy::AlignItems::STRETCH);
+            s.align_items = taffy::AlignItems::STRETCH;
             s.padding = taffy::geometry::Rect {
                 left: length(insets.left),
                 right: length(insets.right),
@@ -1043,7 +1047,7 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
         // like wrapped text. CSS's stretch default would instead distribute the
         // lines across a taller-than-content box — e.g. a viewport-filling card
         // row would smear its lines over the whole window height.
-        s.align_content = Some(taffy::AlignContent::FLEX_START);
+        s.align_content = taffy::AlignContent::FLEX_START;
     }
 
     // `fill` first: 100% of the parent content box (the viewport at the root, so a
