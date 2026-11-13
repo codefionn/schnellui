@@ -326,6 +326,8 @@ pub enum Navigation {
 }
 
 type ShortcutHandler = Box<dyn FnMut() -> bool + 'static>;
+/// What Escape does when no drag, menu, list or dialog took it. Returns whether it acted.
+type EscapeHandler = Box<dyn FnMut() -> bool + 'static>;
 type NavigationHandler = Box<dyn FnMut(Navigation) -> bool + 'static>;
 type FocusedKeyHandler = Box<dyn for<'a> FnMut(UiKey<'a>) -> bool + 'static>;
 type FocusedInputHandler = Box<dyn FnMut(FocusedInputEvent) -> FocusedInputResult + 'static>;
@@ -603,6 +605,8 @@ pub struct App {
     /// What the mouse's back and forward buttons do where no raw surface
     /// takes them.
     navigation_handler: Option<NavigationHandler>,
+    /// What Escape does once no drag, menu, list or dialog took it.
+    escape_handler: Option<EscapeHandler>,
     /// Raw key handlers scoped to a focused semantic surface. Applications use
     /// this for controls such as terminal emulators that consume keyboard input
     /// directly instead of editing through a text-input widget.

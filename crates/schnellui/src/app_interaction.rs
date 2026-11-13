@@ -1011,6 +1011,13 @@ impl App {
         {
             return Some(result);
         }
+        if self
+            .escape_handler
+            .as_mut()
+            .is_some_and(|handler| handler())
+        {
+            return Some(true);
+        }
         // A docked region is no dialog. Escape inside it hands focus back.
         let (opener, ring) = self.region_escape_target()?;
         Some(self.focus_after_replacement(opener, ring))

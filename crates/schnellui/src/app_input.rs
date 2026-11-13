@@ -56,6 +56,13 @@ impl App {
             .insert(shortcut.normalized(), Box::new(handler));
     }
 
+    /// Registers what Escape does when nothing else takes it: after a drag in flight, an open
+    /// menu, an open list and the top dialog. The handler returns whether it acted, and the
+    /// app keeps it across a host remount. It replaces any earlier one.
+    pub fn register_escape_handler(&mut self, handler: impl FnMut() -> bool + 'static) {
+        self.escape_handler = Some(Box::new(handler));
+    }
+
     /// Registers the handler for the mouse's back and forward buttons and the
     /// keyboard's browser back and forward keys, replacing any earlier one. A
     /// focused raw surface under the pointer gets the buttons first. The

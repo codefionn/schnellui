@@ -455,6 +455,7 @@ impl App {
         self.inherit_global_shortcuts(previous);
         self.inherit_global_menu(previous);
         self.navigation_handler = previous.navigation_handler.take();
+        self.escape_handler = previous.escape_handler.take();
         self.focused_key_bindings = std::mem::take(&mut previous.focused_key_bindings);
         self.focused_input_bindings = std::mem::take(&mut previous.focused_input_bindings);
 
@@ -526,6 +527,9 @@ impl App {
         }
         if self.navigation_handler.is_none() {
             self.navigation_handler = previous.navigation_handler.take();
+        }
+        if self.escape_handler.is_none() {
+            self.escape_handler = previous.escape_handler.take();
         }
         for (chord, handler) in std::mem::take(&mut previous.shortcut_registry) {
             self.shortcut_registry.entry(chord).or_insert(handler);

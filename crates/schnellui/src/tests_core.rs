@@ -740,6 +740,23 @@ fn navigation_reaches_the_registered_handler() {
 }
 
 #[test]
+fn escape_reaches_the_registered_handler_after_a_dialog() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let mut app = App::new(100, 100);
+    assert!(!app.dispatch_key(UiKey::Escape));
+    let seen = Rc::new(Cell::new(0));
+    let sink = seen.clone();
+    app.register_escape_handler(move || {
+        sink.set(sink.get() + 1);
+        true
+    });
+    assert!(app.dispatch_key(UiKey::Escape));
+    assert_eq!(seen.get(), 1);
+}
+
+#[test]
 fn dump_a11y_reflects_scene() {
     let mut app = App::new(100, 100);
     let root = app.scene_mut().insert(WidgetKind::Button, None);

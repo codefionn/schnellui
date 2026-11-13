@@ -109,6 +109,7 @@ impl App {
             global_shortcuts: Default::default(),
             global_menu: Default::default(),
             navigation_handler: None,
+            escape_handler: None,
             focused_key_bindings: Vec::new(),
             focused_input_bindings: Vec::new(),
             hover_surface: None,
