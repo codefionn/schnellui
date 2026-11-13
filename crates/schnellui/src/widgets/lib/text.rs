@@ -12,7 +12,7 @@ pub struct Text {
     pub(crate) align: TextAlign,
     /// single-line ellipsis truncation to the available width (SOUL §8.1).
     pub(crate) ellipsis: bool,
-    /// Shapes a static single-line label in the bold face.
+    /// Shapes the text in the bold face.
     pub(crate) bold: bool,
 }
 
@@ -89,8 +89,9 @@ impl Text {
         self
     }
 
-    /// Sets a static, single-line label in the bold face, for headings. A
-    /// dynamic, wrapped, aligned or ellipsized text stays regular.
+    /// Sets the text in the bold face, for headings. It works for a single
+    /// line and for wrapped or aligned text, static or dynamic. An ellipsized
+    /// text stays regular.
     pub fn bold(mut self) -> Text {
         self.bold = true;
         self
@@ -161,6 +162,7 @@ impl View for Text {
                         size_px,
                         scale,
                         text,
+                        this.bold,
                     );
                 } else {
                     // Shape once → real glyph quads + the glyph-exact intrinsic size.
@@ -205,6 +207,7 @@ impl View for Text {
                         size_px,
                         scale,
                         initial.clone(),
+                        this.bold,
                     );
                     ctx.runtime.with(|rt| {
                         rt.borrow_mut().slots.insert(
@@ -277,6 +280,7 @@ pub(crate) fn register_text_layout(
     size_px: f32,
     scale: f32,
     text: String,
+    bold: bool,
 ) {
     runtime.with(|rt| {
         rt.borrow_mut().text_layouts.insert(
@@ -285,6 +289,7 @@ pub(crate) fn register_text_layout(
                 wrap,
                 align,
                 ellipsis,
+                bold,
                 size_px,
                 scale,
                 text,

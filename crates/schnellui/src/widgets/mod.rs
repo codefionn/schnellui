@@ -90,7 +90,7 @@ use schnellui::scene::{
     Color, DirtyFlags, PaintData, Point, Primitive, Rect, Scene, Size, TexelRect, WidgetId,
     WidgetKind,
 };
-use schnellui::text::{GlyphAtlas, ShapeOptions, ShapedText, TextShaper};
+use schnellui::text::{FontFace, GlyphAtlas, ShapeOptions, ShapedText, TextShaper};
 use slotmap::SecondaryMap;
 use smallvec::SmallVec;
 
@@ -1156,6 +1156,8 @@ struct TextLayout {
     wrap: WrapMode,
     align: TextAlign,
     ellipsis: bool,
+    /// shape in the bold face (not applied to an ellipsized text).
+    bold: bool,
     size_px: f32,
     scale: f32,
     /// the text to shape; a `Text::dynamic` slot overwrites this on change.
@@ -1205,10 +1207,13 @@ impl TextLayout {
                     }
                 }
             } else {
-                let opts = ShapeOptions::new(phys)
+                let mut opts = ShapeOptions::new(phys)
                     .max_width(max_w)
                     .wrap(self.wrap)
                     .align(self.align);
+                if self.bold {
+                    opts = opts.face(FontFace::SansBold);
+                }
                 shaper.shape_into(&self.text, &opts, &mut self.shaped);
             }
             // NaN never equals itself, so an unconstrained width just reshapes.

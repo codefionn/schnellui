@@ -2474,6 +2474,48 @@ fn a_bold_label_is_shaped_in_the_bold_face() {
     assert!(width("Allowed hosts") > width("Allowed hosts "));
 }
 
+#[test]
+fn a_wrapped_bold_text_is_shaped_in_the_bold_face() {
+    use widgets::{Column, Text, WrapMode};
+    let words = "Allowed hosts";
+    // The unwrapped widths of the two faces give a window width between them.
+    let mut probe = App::mount_with_size(
+        Column::new()
+            .child(Text::new(words).size(14.0))
+            .child(Text::new("Allowed hosts ").size(14.0).bold()),
+        400,
+        200,
+    );
+    probe.frame();
+    let width = |app: &App, name| {
+        let id = app.find_widget(Role::Label, Some(name)).unwrap();
+        app.scene().layout(id).unwrap().rect.width
+    };
+    let regular = width(&probe, words);
+    let bold = width(&probe, "Allowed hosts ");
+    assert!(bold > regular);
+    let window = ((regular + bold) / 2.0).round() as u32;
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Text::new(words).size(14.0).wrap(WrapMode::Word))
+            .child(
+                Text::new("Allowed hosts ")
+                    .size(14.0)
+                    .wrap(WrapMode::Word)
+                    .bold(),
+            ),
+        window,
+        400,
+    );
+    app.frame();
+    let height = |name| {
+        let id = app.find_widget(Role::Label, Some(name)).unwrap();
+        app.scene().layout(id).unwrap().rect.height
+    };
+    // The regular text fits one line at that width; the bold one needs two.
+    assert!(height("Allowed hosts ") > height(words));
+}
+
 /// The playground's Dialogs page: open the Theme dropdown above the
 /// embedded "Review changes" dialog. The dialog covered the lower options,
 /// which could be neither seen nor clicked.
