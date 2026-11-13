@@ -18,6 +18,7 @@ pub struct SubtreeReplacement {
     pub(crate) focus_after: Option<ComponentRef>,
     pub(crate) escape_return: bool,
     pub(crate) escape_fallback: Option<ComponentRef>,
+    pub(crate) focus_ring: bool,
 }
 
 impl SubtreeReplacement {
@@ -33,6 +34,7 @@ impl SubtreeReplacement {
             focus_after: None,
             escape_return: false,
             escape_fallback: None,
+            focus_ring: false,
         }
     }
 
@@ -40,6 +42,14 @@ impl SubtreeReplacement {
     /// transient control (for example, an autocomplete choice).
     pub fn with_focus_after(mut self, target: ComponentRef) -> Self {
         self.focus_after = Some(target);
+        self
+    }
+
+    /// Shows the keyboard focus ring on the control [`Self::with_focus_after`]
+    /// focuses, even after a pointer click, for a move the keyboard asked
+    /// for, such as F6 stepping to another part of the window.
+    pub fn with_focus_ring(mut self) -> Self {
+        self.focus_ring = true;
         self
     }
 

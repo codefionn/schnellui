@@ -263,13 +263,17 @@ pub(crate) fn emit_text_input_paint(
         .max(min_height),
     };
     let rect = node_rect(scene, id, intrinsic);
+    // Glyph rows start on a whole device pixel. A field laid out at a
+    // fractional y would otherwise sample the atlas between texel rows and
+    // smear every glyph vertically.
+    let snap = |v: f32| (v / inv).round() * inv;
     let value_origin = Point {
         x: rect.x + pad_h,
-        y: if hint || placeholder.is_empty() {
+        y: snap(if hint || placeholder.is_empty() {
             rect.y + ((rect.height - content_h) * 0.5).max(pad_v)
         } else {
             rect.y + float_label_sz.height + 2.0 * pad_v
-        },
+        }),
     };
 
     // Horizontal scroll (single line, LTR): the text box spans the padded
@@ -380,11 +384,11 @@ pub(crate) fn emit_text_input_paint(
         let label = shaper.truncate_to_width(&placeholder, label_phys, view_w / inv);
         let rest_y = rect.y + (rect.height - full_label_sz.height) * 0.5;
         let float_y = rect.y + pad_v;
-        // A hint starts after the caret, so the caret never covers its
-        // first letter.
+        // A hint starts where typed text starts, as a browser's placeholder
+        // does, so the first letter typed lands where the hint's began.
         let label_origin = Point {
-            x: rect.x + pad_h + if hint { CARET_W + 2.0 } else { 0.0 },
-            y: rest_y + (float_y - rest_y) * eased,
+            x: rect.x + pad_h,
+            y: snap(rest_y + (float_y - rest_y) * eased),
         };
         rasterize_and_push(
             pd,

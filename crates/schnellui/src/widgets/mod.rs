@@ -338,6 +338,20 @@ pub enum DockPosition {
     Bottom,
 }
 
+impl DockPosition {
+    pub const ALL: [DockPosition; 5] = [
+        DockPosition::Center,
+        DockPosition::Left,
+        DockPosition::Right,
+        DockPosition::Top,
+        DockPosition::Bottom,
+    ];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DropHover {
     target: WidgetId,
@@ -356,6 +370,9 @@ struct TabReorderHover {
     bar: WidgetId,
     from: usize,
     to: usize,
+    /// The dragged tab lands after the hovered one, else before it: the
+    /// insertion bar sits on that edge.
+    after: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -582,7 +599,15 @@ fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, side: Toolt
     }
     let left = viewport.x + TOOLTIP_VIEWPORT_MARGIN;
     let right = (viewport.right() - TOOLTIP_VIEWPORT_MARGIN - tooltip.width).max(left);
-    let x = (target.right() - tooltip.width).clamp(left, right);
+    // A target in the left half of the window starts its tooltip at its own
+    // left edge, so the tooltip grows into the window and not over what sits
+    // left of the target; one in the right half ends at its right edge.
+    let x = if target.x + target.width * 0.5 < viewport.x + viewport.width * 0.5 {
+        target.x
+    } else {
+        target.right() - tooltip.width
+    }
+    .clamp(left, right);
 
     let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
     let bottom = viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN;
@@ -600,8 +625,9 @@ fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, side: Toolt
 }
 
 /// Repositions only the tooltip tail of a node's paint after final layout is
-/// known. The preferred placement remains right-aligned above the target, but
-/// edge controls clamp horizontally and flip below when the top edge is tight.
+/// known. The preferred placement is above the target, aligned with its edge
+/// nearer the window's middle; edge controls clamp horizontally and flip below
+/// when the top edge is tight.
 fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     let (tooltip, window) = runtime.with(|registry| {
         let registry = registry.borrow();
@@ -724,10 +750,21 @@ fn emit_hover_tooltip(
         glyph_end: pd.primitives.len(),
         size: tooltip_size,
         background_color: theme.text,
-        text_color: theme.surface,
+        text_color: tooltip_ink(&theme),
         visible: false,
         side: TooltipSide::Above,
         highlights: [None; 2],
+    }
+}
+
+/// The text color of a tooltip, whose fill is the theme's text color: the
+/// surface while it reads at 7:1 on it, else black or white. A muted theme
+/// (a status bar's) has a mid-tone text color the surface falls short on.
+fn tooltip_ink(theme: &Theme) -> Color {
+    if crate::widgets::theme::contrast_ratio(theme.surface, theme.text) >= 7.0 {
+        theme.surface
+    } else {
+        theme.ink_on(theme.text)
     }
 }
 
@@ -1060,9 +1097,23 @@ pub(crate) struct Handlers {
     dock: Option<Box<dyn FnMut(DockPosition) + 'static>>,
     /// Pointer-transparent, last-painted child used for a dock area's preview.
     dock_preview: Option<WidgetId>,
+    /// The hidden chip naming each zone, by [`DockPosition::index`].
+    dock_labels: [Option<WidgetId>; 5],
+    /// Asked while a drag hovers the dock area or drop target, with the zone
+    /// under the pointer (`Center` for a plain drop target): false makes it no
+    /// target there for this drag, so a drop that would change nothing shows
+    /// no preview.
+    dock_accepts: Option<Box<dyn Fn(DockPosition) -> bool + 'static>>,
     /// fired with the new vertical offset after a scroll (SOUL §6.3) — the same
     /// handler wheel input and an inbound `ScrollUp`/`ScrollDown` action both reach.
     scroll: Option<Box<dyn FnMut(f32) + 'static>>,
+    /// A [`Splitter`]: its drag moves a guide line instead of looking for a
+    /// drop target, and the release reports how far.
+    splitter: Option<SplitterState>,
+    /// A row of a list or a tab's close button: it sits flush with its
+    /// neighbours, so its focus ring stays inside its edge, as a tab's or a
+    /// list item's does.
+    pub(crate) flush_row: bool,
 }
 
 /// One dynamic text slot: a signal-bound producer whose value mutates the retained
@@ -1424,6 +1475,9 @@ struct WidgetRuntime {
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
     tooltip_ids: Vec<WidgetId>,
+    /// Hosts of `hover_tooltips` that show only while a drag hovers a drop
+    /// target under them (see [`DropTip`]).
+    drop_tips: SecondaryMap<WidgetId, ()>,
     /// A tooltip that shows only while the window matches its query (see `Tab::tooltip_when`).
     tooltip_when: SecondaryMap<WidgetId, ResponsiveQuery>,
     /// The host window's logical size, which bounds tooltip placement: a root
@@ -1491,6 +1545,10 @@ struct WidgetRuntime {
     /// when the cursor leaves its laid-out rect; `hovered` is decorated as the
     /// current drop preview.
     drag_pointer: Option<DragPointerCapture>,
+    /// The glyphs a moving drag faded on its source, with their colors.
+    drag_veil: Vec<(WidgetId, usize, Color)>,
+    /// The splitter the pointer rests on, painted in its guide color.
+    splitter_hover: Option<WidgetId>,
     /// async SVG rasterizations submitted by this runtime and not yet received
     /// back (SOUL §8.1 image pipeline) — the `drain`/`settle` progress gate.
     svg_pending: usize,
@@ -1592,6 +1650,7 @@ pub fn reset(runtime: &Runtime) {
         rt.proximity_reveals.clear();
         rt.proximity_ids.clear();
         rt.hover_tooltips.clear();
+        rt.drop_tips.clear();
         rt.tooltip_ids.clear();
         rt.tooltip_when.clear();
         rt.ring = None;
@@ -1614,6 +1673,7 @@ pub fn reset(runtime: &Runtime) {
         rt.dialog_panels.clear();
         rt.dialog_pointer = None;
         rt.drag_pointer = None;
+        rt.splitter_hover = None;
         // In-flight rasterizations belong to the torn-down tree: bump the generation
         // so their completions are drained-and-dropped, never written into a reused
         // WidgetId's rect. `svg_pending` stays — the replies still arrive.
@@ -1632,6 +1692,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
     let removed_set: HashSet<WidgetId> = nodes.iter().copied().collect();
     let removed = |id: WidgetId| removed_set.contains(&id);
 
+    drag::abandon_drag(runtime, scene, removed);
     let ring = runtime.with(|rt| rt.borrow().ring.as_ref().map(|state| state.target));
     if ring.is_some_and(&removed) {
         let _ = strip_focus_decoration(runtime, scene, ring.expect("checked above"));
@@ -1707,6 +1768,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.spinners.remove(id);
             rt.proximity_reveals.remove(id);
             rt.hover_tooltips.remove(id);
+            rt.drop_tips.remove(id);
             rt.tooltip_when.remove(id);
             rt.text_layouts.remove(id);
             rt.edits.remove(id);

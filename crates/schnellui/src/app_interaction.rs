@@ -386,7 +386,9 @@ impl App {
                         None,
                     );
                 }
-                UiKey::Enter if !expanded => {
+                // Enter or Down opens a closed list, as a native combo box
+                // does; Down then walks into it.
+                UiKey::Enter | UiKey::Down { shift: false } if !expanded => {
                     return schnellui::widgets::dispatch_click(
                         &self.widgets,
                         &mut self.scene,
@@ -986,7 +988,21 @@ impl App {
         if self.context_menu_is_open() {
             return Some(self.dismiss_context_menu());
         }
+        // Escape on an option of an open list goes back to the field that
+        // opened it, as a pick does, so focus never stays on a row that
+        // closes under it.
+        let trigger = self
+            .focused_widget()
+            .filter(|id| {
+                self.scene.a11y(*id).is_some_and(|semantics| {
+                    a11y::Role::from_u16(semantics.role) == a11y::Role::ListBoxOption
+                })
+            })
+            .and_then(|id| crate::owning_combo_trigger(&self.scene, id));
         if schnellui::widgets::dismiss_open_dropdowns(&self.widgets, &mut self.scene, None) {
+            if let Some(trigger) = trigger {
+                let _ = self.focus_with(Some(trigger), false);
+            }
             self.show_focus_ring();
             return Some(true);
         }
@@ -1014,6 +1030,31 @@ impl App {
             .filter(|&id| schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id))
     }
 
+    /// Moves the keyboard's row of an open menu to the row the pointer
+    /// moved onto, so a menu never shows two current rows and the next
+    /// arrow steps from the one under the pointer. Only once the keys
+    /// hold a row: before that, hover alone marks the pointer's row.
+    fn follow_pointer_in_menu(&mut self, hit: Option<scene::WidgetId>) -> bool {
+        let Some(hit) = hit else {
+            return false;
+        };
+        let Some(focused) = self.focused_context_menu_row() else {
+            return false;
+        };
+        let rows = schnellui::widgets::context_menu_enabled_rows(&self.widgets, &self.scene);
+        let Some(row) = rows
+            .iter()
+            .copied()
+            .find(|&row| schnellui::widgets::is_in_subtree(&self.scene, hit, row))
+        else {
+            return false;
+        };
+        if row == focused {
+            return false;
+        }
+        self.focus(Some(row))
+    }
+
     /// Walks focus through the open menu's enabled rows: Down and Up step
     /// and wrap, Home and End jump to the ends. `None` for any other key.
     pub(crate) fn step_context_menu(&mut self, key: UiKey<'_>) -> Option<bool> {
@@ -1022,9 +1063,28 @@ impl App {
         let at = self
             .focused_context_menu_row()
             .and_then(|id| rows.iter().position(|&row| row == id));
+        // Before the keyboard has a row, arrows step from the row under the
+        // pointer, else from the chosen one, as a native menu of choices
+        // does: Down picks the next row rather than landing on the first.
+        // The host takes hover off before a navigation key arrives, so the
+        // row is found from where the pointer rests.
+        let pointed = self.pointer_hit.get().and_then(|hit| hit.hit);
+        let from = at
+            .or_else(|| {
+                let pointed = pointed?;
+                rows.iter()
+                    .position(|&row| schnellui::widgets::is_in_subtree(&self.scene, pointed, row))
+            })
+            .or_else(|| {
+                rows.iter().position(|&row| {
+                    self.scene.a11y(row).is_some_and(|a| {
+                        a11y::StateFlags(a.state).contains(a11y::StateFlags::SELECTED)
+                    })
+                })
+            });
         let next = match key {
-            UiKey::Down { .. } => at.map_or(0, |i| if i == last { 0 } else { i + 1 }),
-            UiKey::Up { .. } => at.map_or(last, |i| if i == 0 { last } else { i - 1 }),
+            UiKey::Down { .. } => from.map_or(0, |i| if i == last { 0 } else { i + 1 }),
+            UiKey::Up { .. } => from.map_or(last, |i| if i == 0 { last } else { i - 1 }),
             UiKey::Home { .. } => 0,
             UiKey::End { .. } => last,
             _ => return None,
@@ -1223,11 +1283,35 @@ impl App {
         let Some(hit) = resolve() else {
             return built_in;
         };
-        self.cursor_bindings
+        if let Some(binding) = self
+            .cursor_bindings
             .iter()
             .rev()
             .find(|binding| schnellui::widgets::is_in_subtree(&self.scene, hit, binding.widget))
-            .map_or(built_in, |binding| (binding.provider)())
+        {
+            return (binding.provider)();
+        }
+        if self.named_cursor_bindings.is_empty() {
+            return built_in;
+        }
+        // The nearest named ancestor of the hit picks the provider.
+        let mut current = Some(hit);
+        while let Some(id) = current {
+            let binding = self.scene.a11y(id).and_then(|a11y| {
+                self.named_cursor_bindings.iter().find(|binding| {
+                    binding.role == a11y.role
+                        && binding
+                            .name
+                            .as_deref()
+                            .is_none_or(|expected| a11y.name.as_deref() == Some(expected))
+                })
+            });
+            if let Some(binding) = binding {
+                return (binding.provider)();
+            }
+            current = self.scene.node(id).and_then(|node| node.parent);
+        }
+        built_in
     }
 
     /// Updates proximity-revealed controls for a logical pointer position.
@@ -1275,6 +1359,9 @@ impl App {
                 held,
             )
         };
+        let changed = changed
+            | schnellui::widgets::hover_splitter(&self.widgets, &mut self.scene, hit_for_hover)
+            | self.follow_pointer_in_menu(hit_for_hover);
         // Hover decoration is paint-only, so the hit still stands afterwards.
         // Remember it with the scene state it is valid for; `cursor_at` for the
         // same pointer position then skips a second walk.
@@ -1356,6 +1443,11 @@ impl App {
     /// Advances a captured content drag and its visible drop-target preview.
     pub fn update_drag(&mut self, point: scene::Point) -> bool {
         schnellui::widgets::update_drag(&self.widgets, &mut self.scene, point)
+    }
+
+    /// Whether a press on a drag source waits to become a drag or is one.
+    pub fn content_drag_pending(&self) -> bool {
+        schnellui::widgets::content_drag_source(&self.widgets).is_some()
     }
 
     /// Releases a possible/active content drag.
@@ -1449,6 +1541,19 @@ pub(crate) fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<
                 ancestor = scene.node(node).and_then(|n| n.parent);
             }
             Some(parent)
+        }
+        // Rows in a `List` (a settings nav, say) are one Tab stop too, even
+        // when they sit in a few levels of rows that indent them.
+        WidgetKind::Button => {
+            let mut ancestor = Some(parent);
+            for _ in 0..4 {
+                let node = ancestor?;
+                if scene.node(node)?.kind == WidgetKind::List {
+                    return Some(node);
+                }
+                ancestor = scene.node(node).and_then(|n| n.parent);
+            }
+            None
         }
         _ => None,
     }

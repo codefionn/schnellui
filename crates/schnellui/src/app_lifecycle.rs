@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// Tab stops on either side of a displaced focus that the replacement may
+/// hand it to.
+const KIN: usize = 6;
+
 impl App {
     /// Sets the logical→physical scale (SOUL §7.1 `--scale`). Affects shaping,
     /// painting, and the PNG's physical dimensions. For a mounted tree, set the scale
@@ -114,7 +118,7 @@ impl App {
         replacement: SubtreeReplacement,
     ) -> Result<scene::WidgetId, MissingSubtreeTarget> {
         let focus_after = replacement.focus_after;
-        let ring = self.focus_ring_shown();
+        let ring = replacement.focus_ring || self.focus_ring_shown();
         let region = self.region_focus_before(replacement.target);
         let root = self.replace_subtree_boxed(replacement.target, replacement.view)?;
         self.note_region_return(
@@ -237,13 +241,35 @@ impl App {
     /// `id` when it takes focus, otherwise its first focusable descendant in
     /// tab order. A reference often lands on a composite's wrapper node, such
     /// as the column around a combo box's field.
-    fn first_focusable_in(&self, id: scene::WidgetId) -> Option<scene::WidgetId> {
+    pub(crate) fn first_focusable_in(&self, id: scene::WidgetId) -> Option<scene::WidgetId> {
         a11y::with_tab_order(&self.scene, |order| {
             order
                 .iter()
                 .copied()
                 .find(|&candidate| schnellui::widgets::is_in_subtree(&self.scene, candidate, id))
         })
+    }
+
+    /// The focused control's role and name, and how many controls before it
+    /// in `nodes` share both: enough to find its counterpart in a rebuilt
+    /// branch that gives it no ref. `None` for a control without a name.
+    fn likeness_in(
+        &self,
+        nodes: &[scene::WidgetId],
+        focused: scene::WidgetId,
+    ) -> Option<(u16, String, usize)> {
+        let a11y = self.scene.a11y(focused)?;
+        let (role, name) = (a11y.role, a11y.name.clone()?);
+        let nth = nodes
+            .iter()
+            .take_while(|id| **id != focused)
+            .filter(|id| {
+                self.scene
+                    .a11y(**id)
+                    .is_some_and(|a| a.role == role && a.name.as_deref() == Some(name.as_str()))
+            })
+            .count();
+        Some((role, name, nth))
     }
 
     pub(crate) fn replace_subtree_boxed(
@@ -256,6 +282,20 @@ impl App {
             .resolve_ref(target)
             .ok_or_else(|| structural_update::missing(target))?;
         let removed_nodes = self.scene.subtree_nodes(old_root);
+        // Viewports with a restoration key keep their reading position
+        // through the swap, as they do across a full remount.
+        let keyed_offsets: Vec<(String, f32)> = removed_nodes
+            .iter()
+            .filter(|id| {
+                self.scene
+                    .node(**id)
+                    .is_some_and(|node| node.kind == WidgetKind::Scroll)
+            })
+            .filter_map(|id| {
+                let key = schnellui::widgets::scroll_restoration_key(&self.widgets, *id)?;
+                Some((key, self.scene.scroll_offset(*id).y))
+            })
+            .collect();
         // End-following viewports keep their pin through a subtree replacement
         // exactly as they do across a full remount (`inherit_scroll_offsets`):
         // record which ones rest at the end of the outgoing content, then
@@ -304,6 +344,7 @@ impl App {
         {
             let ring = self.focus_ring_shown();
             let reference = self.scene.component_ref(focused);
+            let likeness = self.likeness_in(&removed_nodes, focused);
             let opener = self
                 .modal_opener_of(focused)
                 .filter(|id| !removed_nodes.contains(id));
@@ -329,7 +370,40 @@ impl App {
                             .is_none()
                     })
             });
-            displaced_focus = Some((reference, opener, neighbour, ring, home_is_gone));
+            // The controls next to it in the branch, nearest first and the
+            // one before ahead of the one after, so a control that removes
+            // itself hands focus to the one it belonged with.
+            let kin = a11y::with_tab_order(&self.scene, |order| {
+                let position = order.iter().position(|id| *id == focused)?;
+                let before = order[..position].iter().rev();
+                let after = order[position + 1..].iter();
+                let near = |ids: &mut dyn Iterator<Item = &scene::WidgetId>| {
+                    ids.filter(|id| removed_nodes.contains(id))
+                        .take(KIN)
+                        .copied()
+                        .collect::<Vec<_>>()
+                };
+                let (before, after) = (near(&mut before.into_iter()), near(&mut after.into_iter()));
+                let mut kin = Vec::with_capacity(before.len() + after.len());
+                for index in 0..KIN {
+                    kin.extend(before.get(index).copied());
+                    kin.extend(after.get(index).copied());
+                }
+                Some(kin)
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|id| self.likeness_in(&removed_nodes, id))
+            .collect::<Vec<_>>();
+            displaced_focus = Some((
+                reference,
+                likeness,
+                kin,
+                opener,
+                neighbour,
+                ring,
+                home_is_gone,
+            ));
             let previous = self.focused_input_semantics();
             let _ = schnellui::widgets::dispatch_focus(
                 &self.widgets,
@@ -370,6 +444,18 @@ impl App {
         self.scene.set_component_ref(new_root, target);
         self.layout
             .sync_replacement(&self.scene, new_root, removed.parent);
+        if !keyed_offsets.is_empty() {
+            for id in self.scene.subtree_nodes(new_root) {
+                let Some(key) = schnellui::widgets::scroll_restoration_key(&self.widgets, id)
+                else {
+                    continue;
+                };
+                if let Some((_, offset)) = keyed_offsets.iter().find(|(k, _)| *k == key) {
+                    self.scene
+                        .set_scroll_offset(id, Point { x: 0.0, y: *offset });
+                }
+            }
+        }
         for id in follow_end_pinned {
             if self.scene.node(id).is_some() {
                 // Clamped onto the replacement real content end by the next
@@ -386,9 +472,31 @@ impl App {
         self.scene
             .mark_dirty(removed.parent.unwrap_or(new_root), scene::DirtyFlags::ALL);
         self.note_opened_modal(focus_before, &known);
-        if let Some((reference, opener, neighbour, ring, home_is_gone)) = displaced_focus {
+        if let Some((reference, likeness, kin, opener, neighbour, ring, home_is_gone)) =
+            displaced_focus
+        {
+            let new_nodes = self.scene.subtree_nodes(new_root);
+            let alike = |(role, name, nth): &(u16, String, usize)| {
+                new_nodes
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        self.scene.a11y(*id).is_some_and(|a| {
+                            a.role == *role && a.name.as_deref() == Some(name.as_str())
+                        })
+                    })
+                    .nth(*nth)
+            };
+            let focusable = |id: &scene::WidgetId| {
+                self.scene.a11y(*id).is_some_and(|a| {
+                    a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
+                })
+            };
+            // The same control: by its ref, else the one in the new branch
+            // with the focused one's role and name, counted alike.
             let same_identity = reference
                 .and_then(|reference| self.scene.resolve_ref(reference))
+                .or_else(|| likeness.as_ref().and_then(alike))
                 .filter(|id| schnellui::widgets::is_in_subtree(&self.scene, *id, new_root))
                 .filter(|id| {
                     self.scene.a11y(*id).is_some_and(|a| {
@@ -414,17 +522,27 @@ impl App {
                     self.closed_window_fallback(&windows)
                 })
                 .flatten();
+            // A control that went away with no counterpart: its nearest
+            // neighbour that the new branch still has. It comes before a
+            // rebuilt window's first control and any survivor outside the
+            // branch, so a keyboard user stays where they were.
+            let kin = kin
+                .iter()
+                .filter_map(alike)
+                .find(|id| focusable(id) && app_inherit::takes_focus(&self.scene, *id));
             let (heir, ring) = match (same_identity, opener) {
                 (Some(id), _) => (Some(id), ring),
                 // The ring follows how the window closed, not how it opened.
                 (None, Some(id)) => (Some(id), self.keyboard_modality),
+                (None, None) if ring && kin.is_some() => (kin, ring),
                 (None, None) if new_window.is_none() && closed_fallback.is_some() => {
                     (closed_fallback, self.keyboard_modality)
                 }
                 (None, None) => (
                     new_window.or_else(|| {
-                        let (id, after) =
-                            neighbour.filter(|(id, _)| self.scene.node(*id).is_some())?;
+                        let (id, after) = kin.map(|id| (id, true)).or_else(|| {
+                            neighbour.filter(|(id, _)| self.scene.node(*id).is_some())
+                        })?;
                         if ring {
                             Some(id)
                         } else {

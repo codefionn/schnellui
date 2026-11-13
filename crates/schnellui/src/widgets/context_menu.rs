@@ -46,6 +46,8 @@ enum ItemAction {
 const MENU_SHADOW: [(f32, u8); 3] = [(8.0, 0x18), (4.0, 0x28), (1.0, 0x40)];
 /// How far the shadow sits below the menu, as if lit from above.
 const MENU_SHADOW_DROP: f32 = 3.0;
+/// Width of the accent bar that marks a menu's chosen row.
+const SELECTED_BAR: f32 = 3.0;
 
 /// One row in a context menu.
 pub struct ContextMenuItem {
@@ -124,6 +126,7 @@ pub struct ContextMenu {
     items: Vec<ContextMenuItem>,
     text_size: Option<f32>,
     row_height: Option<f32>,
+    name: Option<Cow<'static, str>>,
 }
 
 impl ContextMenu {
@@ -142,6 +145,13 @@ impl ContextMenu {
     /// text size can keep rows as easy to hit as its neighbours' lists.
     pub fn row_height(mut self, height: f32) -> ContextMenu {
         self.row_height = Some(height);
+        self
+    }
+
+    /// Names the menu for assistive technology. By default it is named
+    /// after the control it opens from, as "Save menu".
+    pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> ContextMenu {
+        self.name = Some(name.into());
         self
     }
 
@@ -482,7 +492,16 @@ pub fn open_context_menu(
             content: menu_rect,
         },
     );
-    let menu_name = if editable {
+    let named = runtime.context_menu.with(|state| {
+        state
+            .borrow()
+            .menus
+            .get(source)
+            .and_then(|menu| menu.name.as_ref().map(|name| name.to_string()))
+    });
+    let menu_name = if let Some(name) = named {
+        name
+    } else if editable {
         "Text editing".to_string()
     } else {
         scene
@@ -573,15 +592,25 @@ pub fn open_context_menu(
         }
         {
             let paint = scene.paint_mut(id);
+            // The chosen row takes a lighter fill than the keyboard's row
+            // and a bar in the accent at its start, so the two never read
+            // alike while the keys walk the menu.
             paint.primitives.push(Primitive::SolidRect {
                 rect,
                 color: if item.selected {
-                    theme.selection
+                    crate::widgets::theme::mix_color(theme.surface_muted, theme.selection, 0.5)
                 } else {
                     Color::TRANSPARENT
                 },
                 corner_radius: 0.0,
             });
+            if item.selected {
+                paint.primitives.push(Primitive::SolidRect {
+                    rect: Rect::new(rect.x, rect.y + 4.0, SELECTED_BAR, rect.height - 8.0),
+                    color: theme.accent,
+                    corner_radius: SELECTED_BAR / 2.0,
+                });
+            }
             rasterize_and_push(
                 paint,
                 shaper,
@@ -602,6 +631,9 @@ pub fn open_context_menu(
         }
         scene.mark_dirty(id, DirtyFlags::PAINT);
         scene.mark_dirty(id, DirtyFlags::A11Y);
+        // Rows sit flush against each other and the menu's frame, so the
+        // keyboard ring stays inside the row instead of past the frame.
+        crate::widgets::with_handlers(runtime, id, |handlers| handlers.flush_row = true);
         runtime.context_menu.with(|state| {
             state.borrow_mut().actions.insert(
                 id,

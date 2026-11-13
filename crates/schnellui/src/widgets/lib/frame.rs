@@ -727,9 +727,25 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     let dy = target.y - min_y;
     if dx.abs() >= 0.001 || dy.abs() >= 0.001 {
         translate_primitives(&mut scene.paint_mut(id).primitives, dx, dy);
+        // A text field's glyph rows were placed on whole device pixels when
+        // it was painted. A move by a fractional amount keeps them there, or
+        // the atlas is sampled between texel rows and the text smears.
+        let field_scale = runtime.with(|rt| rt.borrow().edits.get(id).map(|e| e.scale));
+        if let Some(scale) = field_scale {
+            snap_glyph_rows(&mut scene.paint_mut(id).primitives, norm_scale(scale));
+        }
     }
     position_hover_tooltip(runtime, scene, id);
     selection::resize_tab_surface(runtime, scene, id);
+}
+
+/// Rounds the top of every glyph quad to a whole device pixel at `scale`.
+fn snap_glyph_rows(primitives: &mut [Primitive], scale: f32) {
+    for prim in primitives {
+        if let Primitive::GlyphQuad { rect, .. } = prim {
+            rect.y = (rect.y * scale).round() / scale;
+        }
+    }
 }
 
 /// Slides every primitive by `(dx, dy)`.
@@ -901,6 +917,55 @@ pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> boo
         // The dialog layer is returned by modal backdrop hit-testing. A
         // persistent layer still captures the pointer; it simply has no action.
         WidgetKind::DialogLayer => dialog::dispatch_backdrop(runtime, scene, id),
+        // A drag source's handle (a column) clicks when a press on it ends
+        // without a drag, if it was given a click handler.
+        WidgetKind::Column => {
+            let cb = runtime.with(|rt| {
+                let mut rt = rt.borrow_mut();
+                let handlers = rt.handlers.get_mut(id)?;
+                if handlers.drag_start.is_none() {
+                    return None;
+                }
+                handlers.click.take()
+            });
+            let Some(mut cb) = cb else {
+                return false;
+            };
+            cb();
+            runtime.with(|rt| {
+                if let Some(h) = rt.borrow_mut().handlers.get_mut(id) {
+                    h.click = Some(cb);
+                }
+            });
+            true
+        }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod glyph_row_tests {
+    use super::*;
+
+    #[test]
+    fn glyph_rows_land_on_whole_device_pixels() {
+        let quad = |y: f32| Primitive::GlyphQuad {
+            rect: Rect::new(3.25, y, 7.0, 9.0),
+            atlas_uv: Rect::new(0.0, 0.0, 7.0, 9.0),
+            color: Color::WHITE,
+        };
+        let mut primitives = [quad(202.5), quad(10.3)];
+        snap_glyph_rows(&mut primitives, 1.0);
+        let tops: Vec<f32> = primitives
+            .iter()
+            .map(|p| match p {
+                Primitive::GlyphQuad { rect, .. } => rect.y,
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(tops, [203.0, 10.0]);
+        let mut doubled = [quad(10.3)];
+        snap_glyph_rows(&mut doubled, 2.0);
+        assert!(matches!(doubled[0], Primitive::GlyphQuad { rect, .. } if rect.y == 10.5));
     }
 }

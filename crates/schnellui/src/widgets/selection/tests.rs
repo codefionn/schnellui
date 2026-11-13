@@ -609,6 +609,43 @@ fn unaccepted_clickable_tab_drag_falls_back_to_click_without_cursor_flip() {
 }
 
 #[test]
+fn a_selected_tab_dragged_off_itself_shows_that_its_release_does_nothing() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, _text, _atlas, tab) = build_one(
+        runtime,
+        Tab::new("Changes")
+            .selected(true)
+            .on_select(|| {})
+            .on_drag_start(|| {}),
+    );
+    layout.sync_tree(&scene, tab);
+    layout.compute(
+        &mut scene,
+        tab,
+        Size {
+            width: 300.0,
+            height: 100.0,
+        },
+    );
+    let rect = scene.layout(tab).unwrap().rect;
+    let from = Point {
+        x: rect.x + rect.width * 0.5,
+        y: rect.y + rect.height * 0.5,
+    };
+    let away = Point {
+        x: from.x,
+        y: rect.bottom() + 40.0,
+    };
+    assert!(crate::widgets::begin_drag(runtime, &scene, from));
+    assert!(crate::widgets::update_drag(runtime, &mut scene, away));
+    assert_eq!(
+        crate::widgets::cursor_at(runtime, &scene, away),
+        crate::widgets::CursorIcon::NotAllowed
+    );
+}
+
+#[test]
 fn closable_tab_builds_an_independent_accessible_close_target() {
     let runtime_handle = crate::widgets::Runtime::new();
     #[allow(unused_variables)]
@@ -648,6 +685,8 @@ fn closable_tab_builds_an_independent_accessible_close_target() {
     );
 
     let close_rect = scene.layout(close).unwrap().rect;
+    // Wide enough to hit without aiming.
+    assert!(close_rect.width >= super::TAB_CLOSE_MIN_WIDTH);
     let Primitive::SolidRect {
         rect: tab_surface, ..
     } = scene.paint(tab).unwrap().primitives[0]
@@ -832,7 +871,9 @@ fn capped_combobox_popup_scrolls_its_suggestions() {
         },
     );
     let popup = scene.node(wrapper).unwrap().children[1];
-    let viewport = scene.node(popup).unwrap().children[0];
+    // The viewport sits in a framed panel that takes its scrollbar in.
+    let backing = scene.node(popup).unwrap().children[0];
+    let viewport = scene.node(backing).unwrap().children[0];
     let semantics = scene.a11y(viewport).unwrap();
     assert_eq!(Role::from_u16(semantics.role), Role::ScrollView);
     assert_eq!(semantics.name.as_deref(), Some("Font suggestions"));
@@ -1179,16 +1220,26 @@ fn open_dropdown_popup_rows_share_the_trigger_width() {
     );
     let wkids = scene.node(wrap).unwrap().children.clone();
     let trigger = scene.layout(wkids[0]).unwrap().rect;
+    // The popup's outer edges line up with the trigger's.
+    let popup = scene.layout(wkids[1]).unwrap().rect;
+    assert!((popup.x - trigger.x).abs() <= 1.0 / 64.0);
+    assert!(
+        (popup.width - trigger.width).abs() <= 1.0 / 64.0,
+        "the popup spans the trigger's width: {} vs {}",
+        popup.width,
+        trigger.width
+    );
     let opts = dropdown_rows(&scene, wkids[1]);
+    let first = scene.layout(opts[0]).unwrap().rect;
     for &o in &opts {
         let r = scene.layout(o).unwrap().rect;
-        // 8px of extra room carries the chosen row's check mark
-        // (measured lengths sit on a 1/64 px grid, so allow one step)
+        // Every row shares one width, inside the popup's inset
+        // (measured lengths sit on a 1/64 px grid, so allow one step).
         assert!(
-            (r.width - (trigger.width + 8.0)).abs() <= 1.0 / 64.0,
-            "every option row spans the trigger's width plus check room: {} vs {}",
+            (r.width - first.width).abs() <= 1.0 / 64.0 && r.width < popup.width,
+            "every option row shares the popup's inner width: {} vs {}",
             r.width,
-            trigger.width + 8.0
+            first.width
         );
         // the painted surface spans the full row, not just the label
         match scene.paint(o).unwrap().primitives[0] {

@@ -110,6 +110,9 @@ pub enum TerminalCursorStyle {
     Block,
     Bar,
     Underline,
+    /// The outline of a block, as terminals draw the cursor of a pane or
+    /// window without keyboard focus. The cell keeps its own colors.
+    Hollow,
 }
 
 /// Retained cursor state. A blinking cursor paints when `blink_on` is true; the
@@ -1637,6 +1640,21 @@ fn rebuild_cursor(state: &mut TerminalGridState, rect: Rect) {
             color: cursor.color,
             corner_radius: 0.0,
         }),
+        TerminalCursorStyle::Hollow => {
+            let line = 1.0_f32.min(cell.width).min(cell.height);
+            for rect in [
+                Rect::new(cell.x, cell.y, cell.width, line),
+                Rect::new(cell.x, cell.bottom() - line, cell.width, line),
+                Rect::new(cell.x, cell.y, line, cell.height),
+                Rect::new(cell.x + cell.width - line, cell.y, line, cell.height),
+            ] {
+                cursor_primitives.push(Primitive::SolidRect {
+                    rect,
+                    color: cursor.color,
+                    corner_radius: 0.0,
+                });
+            }
+        }
         TerminalCursorStyle::Block => {}
     }
 }
@@ -2025,6 +2043,42 @@ mod tests {
         assert!(primitives
             .iter()
             .any(|primitive| matches!(primitive, Primitive::GlyphQuad { rect, .. } if rect.x >= 5.0 && rect.x < 15.0)));
+    }
+
+    #[test]
+    fn a_hollow_cursor_outlines_its_cell_and_leaves_the_cell_unfilled() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let metrics = TerminalCellMetrics::new(10.0, 20.0, 14.0);
+        let mut model = TerminalGridModel::with_colors(2, 1, Color::WHITE, Color::rgb(3, 4, 5));
+        let color = Color::rgb(70, 80, 90);
+        let mut cursor = TerminalCursor::new(TerminalGridPoint::new(0, 0), color);
+        cursor.style = TerminalCursorStyle::Hollow;
+        model.cursor = Some(cursor);
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let (mut scene, mut text, mut atlas, id) =
+            build_grid(runtime, TerminalGrid::new(model).metrics(metrics), rect);
+        emit_terminal_grids(runtime, &mut scene, &mut text, &mut atlas);
+
+        let edges: Vec<Rect> = scene
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::SolidRect { rect, color: c, .. } if *c == color => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            edges,
+            [
+                Rect::new(0.0, 0.0, 10.0, 1.0),
+                Rect::new(0.0, 19.0, 10.0, 1.0),
+                Rect::new(0.0, 0.0, 1.0, 20.0),
+                Rect::new(9.0, 0.0, 1.0, 20.0),
+            ]
+        );
     }
 
     #[test]

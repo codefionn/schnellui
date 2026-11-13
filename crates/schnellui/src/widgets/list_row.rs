@@ -295,6 +295,7 @@ impl View for ListRow {
                 a.state = state.0;
             }
         }
+        with_handlers(&ctx.runtime, id, |h| h.flush_row = true);
         let theme = theme_for(&ctx.runtime, id);
         let inv = 1.0 / norm_scale(ctx.scale);
         let title_phys = phys_size_px(this.title_size, ctx.scale);

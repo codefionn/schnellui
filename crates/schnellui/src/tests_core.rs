@@ -786,6 +786,56 @@ fn dynamic_cursor_provider_is_scoped_to_its_widget_subtree() {
     );
 }
 
+#[test]
+fn a_named_cursor_provider_finds_its_widget_after_a_remount() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::scene::ComponentRef;
+    use schnellui::widgets::{Column, CursorIcon, Image, Scroll, View as _};
+
+    let viewport = || {
+        Scroll::new()
+            .label("Files")
+            .size(200.0, 100.0)
+            .child(Image::new("page").size(200.0, 100.0))
+    };
+    let slot = ComponentRef::new();
+    // Registered before the widget exists, as a panel opened later is.
+    let mut app = App::mount_with_size(
+        Column::new().child(Image::new("empty").size(10.0, 10.0).with_ref(slot)),
+        320,
+        180,
+    );
+    app.frame();
+    let cursor = Rc::new(Cell::new(CursorIcon::Pointer));
+    let current = cursor.clone();
+    app.register_named_cursor_provider(Role::ScrollView, Some("Files"), move || current.get());
+    assert_eq!(
+        app.cursor_at(Point { x: 50.0, y: 50.0 }),
+        CursorIcon::Default
+    );
+    app.replace_subtree(slot, viewport().with_ref(slot))
+        .unwrap();
+    app.frame();
+    assert_eq!(
+        app.cursor_at(Point { x: 50.0, y: 50.0 }),
+        CursorIcon::Pointer
+    );
+    cursor.set(CursorIcon::ColResize);
+    app.replace_subtree(slot, viewport().with_ref(slot))
+        .unwrap();
+    app.frame();
+    assert_eq!(
+        app.cursor_at(Point { x: 50.0, y: 50.0 }),
+        CursorIcon::ColResize
+    );
+    assert_eq!(
+        app.cursor_at(Point { x: 300.0, y: 150.0 }),
+        CursorIcon::Default
+    );
+}
+
 /// The windowed-mode contract (SOUL §8): a `fill` root IS the viewport, and
 /// [`App::resize`] — what a winit `Resized` event calls — re-derives it, so the
 /// laid-out tree always matches the real window size.
@@ -4081,7 +4131,34 @@ mod overlays_in_a_window {
 
     #[test]
     fn a_tooltip_above_a_windows_top_edge_is_not_clipped_by_the_window() {
-        tooltip_clip_check((200.0, 20.0), (300.0, 160.0), false);
+        // In the right half, so the tooltip ends at the button's right edge and
+        // reaches left past the window's.
+        tooltip_clip_check((450.0, 20.0), (300.0, 160.0), false);
+    }
+
+    #[test]
+    fn a_tooltip_in_the_left_half_starts_at_its_buttons_left_edge() {
+        let mut app = App::mount_with_size(
+            Column::new().fill().child(
+                schnellui::widgets::Pad::all(200.0)
+                    .child(Button::new("Status").tooltip("A tooltip much wider than its button")),
+            ),
+            800,
+            600,
+        );
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Status")).unwrap();
+        let rect = app.scene().composited_rect(button);
+        let at = center(rect);
+        app.update_pointer_proximity(Point {
+            x: at.x + 1.0,
+            y: at.y,
+        });
+        app.frame();
+        app.update_pointer_proximity(at);
+        app.frame();
+        let tip = tooltip_bounds(&app, button);
+        assert!((tip.x - rect.x).abs() < 1.0, "{tip:?} beside {rect:?}");
     }
 
     #[test]
@@ -4440,4 +4517,603 @@ mod context_menu_flips_above {
         app.frame();
         assert!((menu_rect(&app).y - at.y).abs() < 0.01);
     }
+}
+
+#[test]
+fn a_list_row_wears_its_focus_ring_inside_its_edge() {
+    use schnellui::scene::Primitive;
+    use schnellui::widgets::{Column, ListRow};
+
+    let view = Column::new()
+        .child(ListRow::new("Project").width(200.0))
+        .child(ListRow::new("main").width(200.0));
+    let mut app = App::mount_with_size(view, 300, 200);
+    app.frame();
+    let id = app.find_widget(Role::Button, Some("Project")).unwrap();
+    assert!(app.focus(Some(id)));
+    app.frame();
+    let row = app.scene().layout(id).unwrap().rect;
+    let ring = app
+        .scene()
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .rev()
+        .find_map(|p| match *p {
+            Primitive::StrokeRect { rect, .. } => Some(rect),
+            _ => None,
+        })
+        .expect("a focus ring");
+    // The next row paints over anything below this one, so the ring stays
+    // inside the row's box.
+    assert!(
+        ring.y >= row.y && ring.bottom() <= row.bottom(),
+        "{ring:?} in {row:?}"
+    );
+}
+
+#[test]
+fn buttons_in_a_list_are_one_tab_stop_entered_at_the_chosen_one() {
+    use schnellui::widgets::{Button, Column, List, ListRow, Row};
+
+    let view = Column::new()
+        .child(Button::new("Before"))
+        .child(
+            List::new()
+                .child(ListRow::new("Font"))
+                .child(ListRow::new("Keyboard").selected(true))
+                // An indented row is still in the list.
+                .child(Row::new().child(ListRow::new("Hosts"))),
+        )
+        .child(Button::new("After"));
+    let mut app = App::mount_with_size(view, 300, 300);
+    app.frame();
+    let find = |app: &App, name: &str| app.find_widget(Role::Button, Some(name)).unwrap();
+    assert!(app.focus(Some(find(&app, "Before"))));
+    app.dispatch_key(UiKey::Tab { shift: false });
+    assert_eq!(app.focused_widget(), Some(find(&app, "Keyboard")));
+    app.dispatch_key(UiKey::Tab { shift: false });
+    assert_eq!(app.focused_widget(), Some(find(&app, "After")));
+    app.dispatch_key(UiKey::Tab { shift: true });
+    assert_eq!(app.focused_widget(), Some(find(&app, "Keyboard")));
+}
+
+#[test]
+fn a_named_key_handler_comes_first_and_a_declined_key_passes_on() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use schnellui::widgets::Button;
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let mut app = App::mount_with_size(Button::new("Font"), 200, 40);
+    // Registered first, for every button: it takes Escape only.
+    app.register_focused_key_handler(Role::Button, None, {
+        let heard = heard.clone();
+        move |key| {
+            heard.borrow_mut().push("any");
+            key == UiKey::Escape
+        }
+    });
+    // Registered later, for this one: it takes Down only.
+    app.register_focused_key_handler(Role::Button, Some("Font"), {
+        let heard = heard.clone();
+        move |key| {
+            heard.borrow_mut().push("named");
+            matches!(key, UiKey::Down { .. })
+        }
+    });
+    app.frame();
+    let id = app.find_widget(Role::Button, Some("Font")).unwrap();
+    assert!(app.focus(Some(id)));
+    app.dispatch_key(UiKey::Down { shift: false });
+    assert_eq!(*heard.borrow(), ["named"], "the named handler took Down");
+    heard.borrow_mut().clear();
+    app.dispatch_key(UiKey::Escape);
+    assert_eq!(*heard.borrow(), ["named", "any"], "Escape passed on");
+}
+
+#[test]
+fn a_ring_on_a_control_flush_with_the_window_bottom_stays_inside_it() {
+    use schnellui::layout::EdgeInsets;
+    use schnellui::scene::Primitive;
+    use schnellui::widgets::{Button, Column, Pad};
+
+    let view = Column::new().size(200.0, 40.0).child(
+        Pad::insets(EdgeInsets {
+            left: 20.0,
+            top: 20.0,
+            ..EdgeInsets::default()
+        })
+        .child(Button::new("Branch").width(80.0).height(20.0)),
+    );
+    let mut app = App::mount_with_size(view, 200, 40);
+    app.frame();
+    let id = app.find_widget(Role::Button, Some("Branch")).unwrap();
+    assert!(app.focus(Some(id)));
+    app.frame();
+    let ring = app
+        .scene()
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .rev()
+        .find_map(|p| match *p {
+            Primitive::StrokeRect { rect, .. } => Some(rect),
+            _ => None,
+        })
+        .expect("a focus ring");
+    assert!(ring.bottom() <= 40.0, "{ring:?} runs past the window");
+    assert!(
+        ring.y < 20.0,
+        "{ring:?} still sits outside the button at the top"
+    );
+}
+
+#[test]
+fn a_hovered_splitter_paints_its_line_and_grip_in_the_guide_color() {
+    use schnellui::scene::{Color, Point, Primitive, Size};
+    use schnellui::widgets::{Column, Row, Splitter};
+
+    let (line, guide, grip) = (
+        Color::rgb(1, 2, 3),
+        Color::rgb(200, 0, 0),
+        Color::rgb(9, 9, 9),
+    );
+    let view = Row::new()
+        .size(300.0, 100.0)
+        .child(Column::new().size(100.0, 100.0))
+        .child(
+            Splitter::new(
+                "Resize panes",
+                Size {
+                    width: 6.0,
+                    height: 100.0,
+                },
+                true,
+            )
+            .line(2.0, line, guide)
+            .grip(grip),
+        )
+        .child(Column::new().size(100.0, 100.0));
+    let mut app = App::mount_with_size(view, 300, 100);
+    app.frame();
+    let id = app.find_widget(Role::Group, Some("Resize panes")).unwrap();
+    let rect = app.scene().layout(id).unwrap().rect;
+    let colors = |app: &App| -> Vec<Color> {
+        app.scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::SolidRect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        colors(&app),
+        vec![line, grip],
+        "the line and its grip at rest"
+    );
+    assert!(app.update_pointer_proximity(Point {
+        x: rect.x + rect.width / 2.0,
+        y: 50.0,
+    }));
+    assert_eq!(colors(&app), vec![guide, guide], "hover lights both");
+    assert!(app.update_pointer_proximity(Point { x: 250.0, y: 50.0 }));
+    assert_eq!(colors(&app), vec![line, grip], "leaving restores them");
+}
+
+#[test]
+fn a_splitter_drag_moves_a_guide_and_reports_the_distance_on_release() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use schnellui::scene::{Color, Point, Primitive, Size};
+    use schnellui::widgets::{Column, CursorIcon, DragRelease, Row, Splitter};
+
+    let moved = Rc::new(RefCell::new(Vec::new()));
+    let view = Row::new()
+        .size(300.0, 100.0)
+        .child(Column::new().size(100.0, 100.0))
+        .child(
+            Splitter::new(
+                "Resize panes",
+                Size {
+                    width: 6.0,
+                    height: 100.0,
+                },
+                true,
+            )
+            .line(2.0, Color::rgb(1, 2, 3), Color::rgb(200, 0, 0))
+            .range(40.0, 60.0)
+            .on_resize({
+                let moved = moved.clone();
+                move |distance| moved.borrow_mut().push(distance)
+            }),
+        );
+    let mut app = App::mount_with_size(view, 300, 100);
+    app.frame();
+    let id = app.find_widget(Role::Group, Some("Resize panes")).unwrap();
+    let rect = app.scene().layout(id).unwrap().rect;
+    let at = Point {
+        x: rect.x + rect.width / 2.0,
+        y: 50.0,
+    };
+    assert_eq!(app.cursor_at(at), CursorIcon::ColResize);
+    let rects = |app: &App| -> Vec<f32> {
+        app.scene()
+            .paint(id)
+            .unwrap()
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::SolidRect { rect, .. } => Some(rect.x),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(rects(&app).len(), 1, "the line alone at rest");
+
+    assert!(app.begin_drag(at));
+    assert!(app.update_drag(Point {
+        x: at.x + 30.0,
+        ..at
+    }));
+    let shown = rects(&app);
+    assert_eq!(shown.len(), 2, "the guide joins the line");
+    assert!((shown[1] - shown[0] - 30.0).abs() < 0.01);
+    assert_eq!(
+        app.cursor_at(Point {
+            x: at.x + 30.0,
+            ..at
+        }),
+        CursorIcon::ColResize
+    );
+    // Past its range the guide stops at the end of it.
+    assert!(app.update_drag(Point {
+        x: at.x + 200.0,
+        ..at
+    }));
+    let shown = rects(&app);
+    assert!((shown[1] - shown[0] - 60.0).abs() < 0.01);
+    assert_eq!(
+        app.end_drag(Point {
+            x: at.x + 200.0,
+            ..at
+        }),
+        DragRelease::Drop { accepted: true }
+    );
+    assert_eq!(*moved.borrow(), [60.0]);
+    assert_eq!(rects(&app).len(), 1, "the guide goes on release");
+
+    // A press that never moves resizes nothing.
+    assert!(app.begin_drag(at));
+    app.end_drag(at);
+    assert_eq!(moved.borrow().len(), 1);
+}
+
+#[test]
+fn a_disabled_button_shows_the_not_allowed_cursor() {
+    use schnellui::scene::Point;
+    use schnellui::widgets::{Button, CursorIcon, Row};
+
+    let view = Row::new()
+        .gap(20.0)
+        .child(Button::new("on").on_click(|| {}))
+        .child(Button::new("off").disabled(true).on_click(|| {}));
+    let mut app = App::mount_with_size(view, 300, 80);
+    app.frame();
+    let center = |name: &str| {
+        let id = app.find_widget(Role::Button, Some(name)).unwrap();
+        let rect = app.scene().layout(id).unwrap().rect;
+        Point {
+            x: rect.x + rect.width / 2.0,
+            y: rect.y + rect.height / 2.0,
+        }
+    };
+    assert_eq!(app.cursor_at(center("on")), CursorIcon::Pointer);
+    assert_eq!(app.cursor_at(center("off")), CursorIcon::NotAllowed);
+}
+
+#[test]
+fn an_icon_only_button_keeps_the_size_it_was_given() {
+    use schnellui::widgets::{Button, Row};
+
+    let view = Row::new().child(
+        Button::new("A long accessible name for a small button")
+            .icon_only()
+            .width(20.0)
+            .height(20.0),
+    );
+    let mut app = App::mount_with_size(view, 400, 80);
+    app.frame();
+    let id = app
+        .find_widget(
+            Role::Button,
+            Some("A long accessible name for a small button"),
+        )
+        .unwrap();
+    let rect = app.scene().layout(id).unwrap().rect;
+    assert_eq!((rect.width, rect.height), (20.0, 20.0));
+}
+
+#[test]
+fn a_press_on_a_drag_sources_content_drags_it_and_a_still_press_clicks_nothing() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use widgets::{Column, DragRelease, DragSource};
+    let (starts, ends) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let view = Column::new().child(
+        DragSource::new("Pane 1")
+            .on_drag_start({
+                let starts = starts.clone();
+                move || starts.set(starts.get() + 1)
+            })
+            .on_drag_end({
+                let ends = ends.clone();
+                move |_| ends.set(ends.get() + 1)
+            })
+            .child(widgets::Text::new("pane title")),
+    );
+    let mut app = App::mount_with_size(view, 400, 120);
+    app.frame();
+    let source = app.find_widget(Role::Group, Some("Pane 1")).unwrap();
+    let text = app.scene().node(source).unwrap().children[0];
+    let rect = app.scene().layout(text).unwrap().rect;
+    let from = Point {
+        x: rect.x + 10.0,
+        y: rect.y + rect.height * 0.5,
+    };
+
+    assert!(app.begin_drag(from));
+    assert_eq!(app.end_drag(from), DragRelease::Click(source));
+    assert_eq!(starts.get(), 0);
+
+    assert!(app.begin_drag(from));
+    assert!(app.update_drag(Point {
+        x: from.x + 40.0,
+        y: from.y
+    }));
+    assert_eq!(starts.get(), 1);
+    let _ = app.end_drag(Point {
+        x: from.x + 40.0,
+        y: from.y,
+    });
+    assert_eq!(ends.get(), 1);
+}
+
+#[test]
+fn a_dock_area_that_refuses_the_drag_shows_no_preview_and_takes_no_drop() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use widgets::{Button, DockArea, DragRelease, Row};
+    let docked = Rc::new(Cell::new(false));
+    let view = Row::new()
+        .gap(40.0)
+        .child(Button::new("source").on_drag_start(|| {}))
+        .child(
+            DockArea::new("own pane")
+                .size(220.0, 120.0)
+                .accepts(|_| false)
+                .on_dock({
+                    let docked = docked.clone();
+                    move |_| docked.set(true)
+                })
+                .child(Button::new("pane content")),
+        );
+    let mut app = App::mount_with_size(view, 400, 160);
+    app.frame();
+    let centre = |app: &App, role: Role, name: &str| {
+        let id = app.find_widget(role, Some(name)).unwrap();
+        let rect = app.scene().layout(id).unwrap().rect;
+        (
+            id,
+            Point {
+                x: rect.x + rect.width * 0.9,
+                y: rect.y + rect.height * 0.5,
+            },
+        )
+    };
+    let (_, from) = centre(&app, Role::Button, "source");
+    let (dock, to) = centre(&app, Role::Group, "own pane");
+    let preview = *app.scene().node(dock).unwrap().children.last().unwrap();
+    assert!(app.begin_drag(from));
+    let _ = app.update_drag(to);
+    assert!(app
+        .scene()
+        .paint(preview)
+        .is_none_or(|paint| paint.primitives.is_empty()));
+    assert!(matches!(
+        app.end_drag(to),
+        DragRelease::Drop { accepted: false }
+    ));
+    assert!(!docked.get());
+}
+
+/// A dock area names the zone under the drag in a chip shown only while
+/// the drag hovers that zone, and the drag's source fades its label until
+/// the drag ends.
+#[test]
+fn a_dock_area_names_the_hovered_zone_and_the_source_fades_while_dragged() {
+    use widgets::{Button, DockArea, DockPosition, DragRelease, Row};
+    let view = Row::new()
+        .gap(40.0)
+        .child(Button::new("source").on_drag_start(|| {}))
+        .child(
+            DockArea::new("pane")
+                .size(220.0, 120.0)
+                .zone_label(DockPosition::Right, "Split right")
+                .zone_label(DockPosition::Center, "Swap")
+                .on_dock(|_| {})
+                .child(Button::new("pane content")),
+        );
+    let mut app = App::mount_with_size(view, 400, 160);
+    app.frame();
+    let at = |app: &App, role: Role, name: &str, x: f32| {
+        let id = app.find_widget(role, Some(name)).unwrap();
+        let rect = app.scene().layout(id).unwrap().rect;
+        (
+            id,
+            Point {
+                x: rect.x + rect.width * x,
+                y: rect.y + rect.height * 0.5,
+            },
+        )
+    };
+    let (source, from) = at(&app, Role::Button, "source", 0.5);
+    let (dock, right) = at(&app, Role::Group, "pane", 0.95);
+    let (_, middle) = at(&app, Role::Group, "pane", 0.5);
+    let preview = *app.scene().node(dock).unwrap().children.last().unwrap();
+    let shown = |app: &App| {
+        app.scene()
+            .node(preview)
+            .unwrap()
+            .children
+            .iter()
+            .filter(|chip| app.scene().is_visible(**chip))
+            .count()
+    };
+    let glyph_alpha = |app: &App| {
+        app.scene()
+            .paint(source)
+            .unwrap()
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                scene::Primitive::GlyphQuad { color, .. } => Some(color.a),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let resting = glyph_alpha(&app);
+    assert_eq!(shown(&app), 0);
+    assert!(app.begin_drag(from));
+    let _ = app.update_drag(right);
+    assert_eq!(shown(&app), 1);
+    assert!(glyph_alpha(&app) < resting, "the dragged label fades");
+    let _ = app.update_drag(middle);
+    assert_eq!(shown(&app), 1);
+    assert!(matches!(
+        app.end_drag(middle),
+        DragRelease::Drop { accepted: true }
+    ));
+    assert_eq!(shown(&app), 0);
+    assert_eq!(glyph_alpha(&app), resting);
+}
+
+/// A replaced branch gives focus back to its control with the same role
+/// and name, and a viewport with a restoration key keeps its offset.
+#[test]
+fn a_replaced_branch_keeps_focus_on_the_same_control_and_a_keyed_offset() {
+    use schnellui::scene::ComponentRef;
+    use widgets::{Button, Column, Scroll};
+    let region = ComponentRef::new();
+    let content = || {
+        let mut list = Column::new();
+        for index in 0..30 {
+            list = list.child(Button::new(format!("row {index}")));
+        }
+        Scroll::new()
+            .label("rows")
+            .restoration_key("rows")
+            .size(200.0, 120.0)
+            .child(list)
+    };
+    let mut app = App::mount_with_size(
+        Column::new().child(Column::new().child(content()).with_ref(region)),
+        240,
+        160,
+    );
+    app.frame();
+    let row = app.find_widget(Role::Button, Some("row 12")).unwrap();
+    app.focus(Some(row));
+    let scroll = app.find_widget(Role::ScrollView, Some("rows")).unwrap();
+    let offset = app.scene().scroll_offset(scroll).y;
+    assert!(offset > 0.0, "focusing row 12 scrolls it into view");
+    app.apply_subtree_replacement(SubtreeReplacement::new(region, content(), "rebuild"))
+        .unwrap();
+    app.frame();
+    let row = app.find_widget(Role::Button, Some("row 12"));
+    assert_eq!(app.focused_widget(), row);
+    let scroll = app.find_widget(Role::ScrollView, Some("rows")).unwrap();
+    assert_eq!(app.scene().scroll_offset(scroll).y, offset);
+}
+
+/// A control that removes itself with the rebuild hands keyboard focus to
+/// the control before it in the same branch, not to a survivor outside it.
+#[test]
+fn a_control_that_removes_itself_hands_focus_to_its_neighbour() {
+    use schnellui::scene::ComponentRef;
+    use widgets::{Button, Column};
+    let region = ComponentRef::new();
+    let content = |warning: bool| {
+        let mut column = Column::new().child(Button::new("Engine"));
+        if warning {
+            column = column.child(Button::new("Use a sidecar"));
+        }
+        column.child(Button::new("Other"))
+    };
+    let mut app = App::mount_with_size(
+        Column::new()
+            .child(Button::new("Outside"))
+            .child(Column::new().child(content(true)).with_ref(region)),
+        240,
+        160,
+    );
+    app.frame();
+    let engine = app.find_widget(Role::Button, Some("Engine")).unwrap();
+    app.focus(Some(engine));
+    assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+    assert_eq!(
+        app.focused_widget(),
+        app.find_widget(Role::Button, Some("Use a sidecar"))
+    );
+    app.apply_subtree_replacement(SubtreeReplacement::new(region, content(false), "rebuild"))
+        .unwrap();
+    app.frame();
+    assert_eq!(
+        app.focused_widget(),
+        app.find_widget(Role::Button, Some("Engine"))
+    );
+}
+
+/// A tab's close button closes on release over it: a press slid off it
+/// closes nothing, and a press let go where it started closes the tab.
+#[test]
+fn a_press_slid_off_a_tab_close_button_closes_nothing() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use widgets::{DragRelease, Tab, TabBar};
+    let closed = Rc::new(Cell::new(0));
+    let close = closed.clone();
+    let view = TabBar::new()
+        .child(Tab::new("one").selected(true).on_select(|| {}))
+        .child(
+            Tab::new("two")
+                .on_select(|| {})
+                .on_close(move || close.set(close.get() + 1)),
+        );
+    let mut app = App::mount_with_size(view, 400, 80);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Close two")).unwrap();
+    let rect = app.scene().layout(button).unwrap().rect;
+    let on = Point {
+        x: rect.x + rect.width * 0.5,
+        y: rect.y + rect.height * 0.5,
+    };
+    let off = Point {
+        x: on.x,
+        y: on.y + 60.0,
+    };
+    assert!(app.begin_drag(on));
+    let _ = app.update_drag(off);
+    assert!(!matches!(app.end_drag(off), DragRelease::Click(_)));
+    assert_eq!(closed.get(), 0);
+    assert!(app.begin_drag(on));
+    assert_eq!(app.end_drag(on), DragRelease::Click(button));
 }

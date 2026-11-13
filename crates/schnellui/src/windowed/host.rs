@@ -263,8 +263,19 @@ impl WindowedApp {
         };
         let anchor = self.app.context_menu_anchor(source);
         let can_paste = self.clipboard.read_text().is_ok();
-        self.app
+        if !self
+            .app
             .open_context_menu_anchored(source, anchor, can_paste)
+        {
+            return false;
+        }
+        // A menu the keys opened starts with its first row current, so it
+        // shows which row Enter runs, as a native menu does.
+        let _ = self.app.step_context_menu(UiKey::Home {
+            shift: false,
+            ctrl: false,
+        });
+        true
     }
 
     pub(super) fn text_press_action(
@@ -739,12 +750,13 @@ impl WindowedApp {
         let before = self.interaction_snapshot(point);
         let mut applied = Vec::with_capacity(replacements.len());
         let mut focus_after = None;
-        let ring = self.app.focus_ring_shown();
+        let mut ring = self.app.focus_ring_shown();
         for replacement in replacements {
             let target = replacement.target;
             let reason = replacement.reason;
             if replacement.focus_after.is_some() {
                 focus_after = replacement.focus_after;
+                ring |= replacement.focus_ring;
             }
             let region = self.app.region_focus_before(target);
             let escape_return = replacement.escape_return;
@@ -802,9 +814,20 @@ impl WindowedApp {
             });
         }
 
+        // As `App::apply_subtree_replacement` does: a ref on a container
+        // focuses its first control, so a combo box's wrapper focuses its
+        // field rather than leaving nothing focused.
         if let Some(target) = focus_after {
             if let Some(widget) = self.app.scene().resolve_ref(target) {
-                let _ = self.app.focus_after_replacement(widget, ring);
+                let widget = self.app.first_focusable_in(widget).unwrap_or(widget);
+                // A control the keyboard moved focus to shows it, as one
+                // reached by Tab does, even when nothing wore a ring before,
+                // such as a terminal. A terminal itself never wears one.
+                let keyed = self.app.keyboard_modality
+                    && self.app.scene().node(widget).is_some_and(|node| {
+                        node.kind != schnellui::scene::WidgetKind::TerminalGrid
+                    });
+                let _ = self.app.focus_after_replacement(widget, ring || keyed);
             }
         }
 
@@ -1352,8 +1375,10 @@ impl WindowedApp {
         // pointer until the pointer moves again.
         let _ = self.app.hold_pointer_hover();
         // As the windowed host does: a raw surface with its own key handler
-        // (a terminal grid) gets the key first.
-        if let Some(raw) = debug_raw_key(&name, &request) {
+        // (a terminal grid) gets the key first, unless a menu is open.
+        if let Some(raw) =
+            debug_raw_key(&name, &request).filter(|_| !self.app.context_menu_is_open())
+        {
             let result = self.app.dispatch_focused_input(FocusedInputEvent::Key(raw));
             if self.apply_focused_input_result(result) {
                 self.settle_debug_command();
@@ -1452,6 +1477,27 @@ impl WindowedApp {
                     .app
                     .dispatch_ime(crate::RawImeEvent::Commit(text.to_owned()));
                 self.apply_focused_input_result(result)
+            }
+            // As in the window: Shift+F10 and the Menu key open the focused
+            // control's menu.
+            "f10" if request.shift => self.open_focused_context_menu(),
+            "context_menu" | "menu" => self.open_focused_context_menu(),
+            // A function key a raw surface did not take, above, goes to
+            // the application's shortcuts, as in the window.
+            function
+                if function.len() > 1
+                    && function.starts_with('f')
+                    && function[1..]
+                        .parse::<u8>()
+                        .is_ok_and(|n| (1..=12).contains(&n)) =>
+            {
+                let number = function[1..].parse::<u8>().unwrap_or(1);
+                self.app.dispatch_shortcut(crate::Shortcut::key(
+                    crate::ShortcutKey::F(number),
+                    request.ctrl,
+                    request.shift,
+                    false,
+                ))
             }
             _ => return DebugReply::error(422, format!("unsupported key {:?}", request.key)),
         };
@@ -2183,6 +2229,18 @@ fn debug_raw_key(name: &str, request: &DebugKey) -> Option<RawKeyEvent> {
         "page_up" => (NamedKey::PageUp, KeyCode::PageUp),
         "page_down" => (NamedKey::PageDown, KeyCode::PageDown),
         "escape" => (NamedKey::Escape, KeyCode::Escape),
+        "f1" => (NamedKey::F1, KeyCode::F1),
+        "f2" => (NamedKey::F2, KeyCode::F2),
+        "f3" => (NamedKey::F3, KeyCode::F3),
+        "f4" => (NamedKey::F4, KeyCode::F4),
+        "f5" => (NamedKey::F5, KeyCode::F5),
+        "f6" => (NamedKey::F6, KeyCode::F6),
+        "f7" => (NamedKey::F7, KeyCode::F7),
+        "f8" => (NamedKey::F8, KeyCode::F8),
+        "f9" => (NamedKey::F9, KeyCode::F9),
+        "f10" => (NamedKey::F10, KeyCode::F10),
+        "f11" => (NamedKey::F11, KeyCode::F11),
+        "f12" => (NamedKey::F12, KeyCode::F12),
         _ => return None,
     };
     let text = match named {

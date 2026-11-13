@@ -539,6 +539,7 @@ pub struct Badge {
     pub(crate) text: Cow<'static, str>,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) tone: BadgeTone,
+    pub(crate) text_size: f32,
 }
 
 /// What a [`Badge`] signals, which picks its fill. Red is for things that
@@ -563,7 +564,14 @@ impl Badge {
             text: text.into(),
             name: None,
             tone: BadgeTone::default(),
+            text_size: BADGE_TEXT_SIZE,
         }
+    }
+    /// Sets the label's size, for a badge that names something at a
+    /// distance, such as a drop zone. The padding stays.
+    pub fn text_size(mut self, size: f32) -> Badge {
+        self.text_size = size;
+        self
     }
     /// Sets what the badge signals; see [`BadgeTone`].
     pub fn tone(mut self, tone: BadgeTone) -> Badge {
@@ -596,7 +604,7 @@ impl View for Badge {
         }
         // Shape once → pill background + label glyphs inset by the badge padding.
         let inv = 1.0 / norm_scale(ctx.scale);
-        let phys = phys_size_px(BADGE_TEXT_SIZE, ctx.scale);
+        let phys = phys_size_px(this.text_size, ctx.scale);
         let shaped = ctx.text.shape(&text, phys, None);
         let ts = Size {
             width: shaped.width * inv,

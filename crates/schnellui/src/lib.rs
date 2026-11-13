@@ -358,6 +358,15 @@ struct CursorBinding {
     provider: CursorProvider,
 }
 
+/// A cursor provider for whichever widget has `role` and `name`, found again
+/// on every query, so it outlives remounts and subtree replacement the way a
+/// focused input handler does.
+struct NamedCursorBinding {
+    role: u16,
+    name: Option<String>,
+    provider: CursorProvider,
+}
+
 /// Keyboard modifier state attached to raw focused input events.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RawModifiers {
@@ -418,6 +427,10 @@ pub enum RawWheelDelta {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RawPointerAction {
     Move,
+    /// The pointer left the surface, for another widget or out of the
+    /// window, without a button held. Sent once, so a surface that draws
+    /// its own hover can clear it.
+    Leave,
     Button {
         button: RawPointerButton,
         state: RawInputState,
@@ -598,9 +611,13 @@ pub struct App {
     /// compatibility key handlers above, these receive releases, pointer,
     /// focus, IME and clipboard events.
     focused_input_bindings: Vec<FocusedInputBinding>,
+    /// The raw surface the last hover move went to, which hears
+    /// [`RawPointerAction::Leave`] when the pointer moves off it.
+    hover_surface: Option<scene::WidgetId>,
     /// Dynamic cursor sources for application-defined surfaces such as embedded
     /// browser and terminal viewports. Bindings are scoped to one mounted subtree.
     cursor_bindings: Vec<CursorBinding>,
+    named_cursor_bindings: Vec<NamedCursorBinding>,
     /// logical viewport (SOUL §7.3 fixed viewport).
     size: Size,
     /// logical→physical scale (SOUL §7.1 `--scale`). Text is shaped/rasterized at
@@ -646,6 +663,9 @@ pub struct App {
     theme_factory: Option<Box<dyn FnMut() -> Box<dyn View>>>,
     theme_mode: ThemeMode,
     color_scheme: ColorScheme,
+    /// Told every platform color scheme [`App::apply_color_scheme`] receives, whatever the
+    /// theme mode does with it.
+    color_scheme_observer: Option<Box<dyn FnMut(ColorScheme)>>,
     active_theme: Theme,
     theme_transition_duration: Duration,
     theme_transition: Option<ActiveThemeTransition>,
@@ -663,9 +683,6 @@ pub struct App {
     /// when the keyboard closed it, whatever the ring did when it opened.
     keyboard_modality: bool,
     /// The docked regions that returned focus on Escape, each with the control that had focus
-    /// Told every platform color scheme [`App::apply_color_scheme`] receives, whatever the
-    /// theme mode does with it.
-    color_scheme_observer: Option<Box<dyn FnMut(ColorScheme)>>,
     /// when the region appeared.
     region_returns: Vec<RegionReturn>,
     /// The dialog panel the last left press landed in, `None` when it landed

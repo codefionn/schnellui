@@ -453,6 +453,12 @@ impl WindowedApp {
         if is_control_key(&event.logical_key, event.physical_key) {
             self.control_pressed = event.state == ElementState::Pressed;
         }
+        // A key press makes the keyboard the way focus moves from here, so
+        // a control a shortcut focuses wears the ring, even when the key
+        // went to a raw surface such as a terminal.
+        if event.state == ElementState::Pressed {
+            self.app.keyboard_modality = true;
+        }
         // Any key that does something (a highlight move, Enter, Space, a
         // typed character, a shortcut) takes hover from the resting pointer,
         // so a key the pointer happens to rest on does not look pressed.
@@ -485,7 +491,11 @@ impl WindowedApp {
         // Full-fidelity raw surfaces see modifiers, releases, repeats,
         // F/keypad identities and layout text before any browser-like
         // SchnellUI shortcut or editing behavior can consume them.
-        if self.dispatch_raw_clipboard_chord(&event) || self.dispatch_raw_key(&event) {
+        // An open menu takes the keys before a raw surface does, so Escape
+        // and the arrows reach the menu a terminal's pane opened.
+        if !self.app.context_menu_is_open()
+            && (self.dispatch_raw_clipboard_chord(&event) || self.dispatch_raw_key(&event))
+        {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -624,6 +634,11 @@ impl WindowedApp {
         let result = if captured {
             self.app
                 .dispatch_focused_pointer(p, modifiers, RawPointerAction::Move, true)
+        } else if self.app.content_drag_pending() {
+            // A tab or pane dragged over a terminal that reports the mouse
+            // goes on to its drop target: the surface under it only hears
+            // that the pointer left.
+            self.app.leave_hover_surface_unless(None, p, modifiers)
         } else {
             self.app.dispatch_hover_pointer(p, modifiers)
         };
@@ -695,6 +710,20 @@ impl WindowedApp {
             x: f32::NEG_INFINITY,
             y: f32::NEG_INFINITY,
         }) {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        let modifiers = raw_modifiers(self.modifiers, self.control_pressed);
+        let left = self.app.leave_hover_surface_unless(
+            None,
+            Point {
+                x: f32::NEG_INFINITY,
+                y: f32::NEG_INFINITY,
+            },
+            modifiers,
+        );
+        if self.apply_focused_input_result(left) {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -834,7 +863,20 @@ impl WindowedApp {
                 )
             });
             if let Some(id) = source {
-                redraw |= self.app.pointer_focus(Some(id));
+                // Only a text field takes focus from a secondary press: its
+                // Cut, Copy and Paste act on it. Any other source, such as a
+                // tab or a drag handle, leaves focus where it was, so the
+                // menu closing gives the keys back to that control.
+                let editable = self.app.scene().node(id).is_some_and(|node| {
+                    matches!(
+                        node.kind,
+                        schnellui::scene::WidgetKind::TextInput
+                            | schnellui::scene::WidgetKind::TextArea
+                    )
+                });
+                if editable {
+                    redraw |= self.app.pointer_focus(Some(id));
+                }
                 let can_paste = self.clipboard.read_text().is_ok();
                 redraw |= self.app.open_context_menu(id, p, can_paste);
             }
@@ -966,11 +1008,28 @@ impl WindowedApp {
                             // Dismissal waits for the release.
                             self.backdrop_press = backdrop;
                         } else if let Some(id) = hit {
-                            redraw |= schnellui::widgets::dispatch_click(
-                                &self.app.widgets.clone(),
-                                self.app.scene_mut(),
+                            // A menu button opens its menu through the app,
+                            // which anchors it; the widget click alone has
+                            // no menu to open.
+                            redraw |= if schnellui::widgets::context_menu_trigger_source(
+                                &self.app.widgets,
                                 id,
-                            );
+                            )
+                            .is_some()
+                            {
+                                // The button takes focus, without a ring, so
+                                // the keys reach the menu and not a terminal
+                                // that held focus: Down walks its rows, Esc
+                                // closes it.
+                                let focused = self.app.focus_after_replacement(id, false);
+                                focused | self.app.dispatch_click(id)
+                            } else {
+                                schnellui::widgets::dispatch_click(
+                                    &self.app.widgets.clone(),
+                                    self.app.scene_mut(),
+                                    id,
+                                )
+                            };
                         }
                     }
                 }

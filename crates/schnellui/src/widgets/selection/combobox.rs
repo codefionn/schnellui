@@ -242,7 +242,7 @@ impl View for ComboBox {
                     ctx.text
                         .shape(
                             option.label.as_ref(),
-                            phys_size_px(BUTTON_TEXT_SIZE, ctx.scale),
+                            phys_size_px(this.text_size, ctx.scale),
                             None,
                         )
                         .width
@@ -256,8 +256,19 @@ impl View for ComboBox {
             // Rows go into a capped scroll viewport when a height limit is set.
             let rows = match (this.max_popup_height, scroll_label) {
                 (Some(height), Some(name)) => {
-                    let scroll =
-                        Box::new(crate::widgets::Scroll::new().label(name)).build(ctx, Some(popup));
+                    // The viewport is as wide as the field; its scrollbar's
+                    // gutter comes out of the rows, so it never hangs past
+                    // the field's right edge. A framed panel behind it takes
+                    // the gutter in, so the scrollbar sits inside the list.
+                    let backing = Box::new(crate::widgets::Panel::new().padding(0.0).radius(2.0))
+                        .build(ctx, Some(popup));
+                    let scroll = Box::new(
+                        crate::widgets::Scroll::new()
+                            .label(name)
+                            .scrollbar(true)
+                            .min_width(shared_width),
+                    )
+                    .build(ctx, Some(backing));
                     ctx.layout.set_flex(
                         scroll,
                         FlexChild {
@@ -269,12 +280,19 @@ impl View for ComboBox {
                 }
                 _ => popup,
             };
+            let row_width = if rows == popup {
+                shared_width
+            } else {
+                (shared_width - crate::layout::SCROLLBAR_GUTTER).max(0.0)
+            };
             let mut option_rows = Vec::with_capacity(this.options.len());
             for mut option in this.options {
                 let label = option.label.as_ref().to_owned();
                 let matches =
                     normalized.is_empty() || exact || label.to_lowercase().contains(&normalized);
-                option.min_width = shared_width;
+                option.min_width = row_width;
+                // Rows at the field's own text size, as a dropdown's are.
+                option.text_size = Some(this.text_size);
                 let option_id = Box::new(option).build(ctx, Some(rows));
                 ctx.layout.set_visible(ctx.scene, option_id, matches);
                 let lowercase = label.to_lowercase();
@@ -287,7 +305,8 @@ impl View for ComboBox {
 
             let custom = if this.allow_free_text {
                 let mut custom = DropdownOption::new(format!("Use “{}”", this.value));
-                custom.min_width = shared_width;
+                custom.min_width = row_width;
+                custom.text_size = Some(this.text_size);
                 if let Some(mut callback) = this.on_accept_free_text.take() {
                     let runtime = ctx.runtime.clone();
                     custom = custom.on_select(move || {

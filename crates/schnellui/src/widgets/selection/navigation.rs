@@ -157,6 +157,7 @@ pub struct Tab {
     pub(crate) on_drag_end: Option<Box<dyn FnMut(bool) + 'static>>,
     pub(crate) on_drop: Option<ClickHandler>,
     pub(crate) on_close: Option<ClickHandler>,
+    pub(crate) close_in_tab_order: bool,
     pub(crate) context_menu: Option<ContextMenu>,
 }
 
@@ -178,6 +179,7 @@ impl Tab {
             on_drag_end: None,
             on_drop: None,
             on_close: None,
+            close_in_tab_order: true,
             context_menu: None,
         }
     }
@@ -282,6 +284,15 @@ impl Tab {
     }
     /// Adds a trailing close button and runs `f` when it is activated. The close
     /// target is independent from selection and drag gestures on the tab itself.
+    /// Whether Tab stops on the close button. A bar whose tabs take focus
+    /// one at a time can leave the other tabs' buttons out, so Tab does not
+    /// pass a close button for every tab; the pointer and assistive
+    /// technology still reach them.
+    pub fn close_in_tab_order(mut self, stops: bool) -> Tab {
+        self.close_in_tab_order = stops;
+        self
+    }
+
     pub fn on_close(mut self, f: impl FnMut() + 'static) -> Tab {
         self.on_close = Some(Box::new(f));
         self
@@ -413,13 +424,18 @@ impl View for Tab {
                 semantics.name = Some(format!("Close {label}"));
                 let mut actions = ActionFlags::default();
                 actions.insert(ActionFlags::CLICK);
-                actions.insert(ActionFlags::FOCUS);
+                if this.close_in_tab_order {
+                    actions.insert(ActionFlags::FOCUS);
+                }
                 semantics.actions = actions.0;
             }
             // Keep density-sensitive padding around the fixed-size glyph. Scaling
             // the target's entire width made compact themes squeeze the × into
             // the label's trailing characters.
-            let close_width = 2.0 * (TAB_CLOSE_HALF + theme_for(runtime, close).shape.pad(PAD_H));
+            // At least 24 px wide, the least pointer target WCAG 2.5.8 asks
+            // for, however compact the theme.
+            let close_width = (2.0 * (TAB_CLOSE_HALF + theme_for(runtime, close).shape.pad(PAD_H)))
+                .max(TAB_CLOSE_MIN_WIDTH);
             let close_height = tab_height;
             let close_rect = Rect::new(0.0, 0.0, close_width, close_height);
             let center = Point {
@@ -464,8 +480,14 @@ impl View for Tab {
                     height: close_height,
                 }),
             );
+            // The close button fills the tab's height, flush with the strip
+            // and the tab's underline, so its ring stays inside it.
+            // A close lands on release over the button, as a drag source's
+            // click does: a press slid off it closes nothing.
             with_handlers(&ctx.runtime, close, |handlers| {
-                handlers.click = Some(on_close)
+                handlers.click = Some(on_close);
+                handlers.drag_start = Some(Box::new(|| {}));
+                handlers.flush_row = true;
             });
             ctx.runtime.with(|runtime| {
                 runtime.borrow_mut().tab_close_buttons.insert(id, close);

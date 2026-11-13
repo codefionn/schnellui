@@ -466,6 +466,7 @@ impl App {
                 .iter()
                 .map(|binding| binding.widget),
         );
+        self.named_cursor_bindings = std::mem::take(&mut previous.named_cursor_bindings);
         self.cursor_bindings = std::mem::take(&mut previous.cursor_bindings)
             .into_iter()
             .filter_map(|mut binding| {

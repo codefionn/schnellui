@@ -398,11 +398,13 @@ pub fn emit_button_paint(
 
 /// How far a disabled button's frame moves from the divider color toward
 /// the outline.
-const DISABLED_FRAME_SHARE: f32 = 0.5;
+const DISABLED_FRAME_SHARE: f32 = 0.3;
 
 /// How far a disabled button's label fades from the muted text color toward
-/// the disabled fill.
-const DISABLED_LABEL_FADE: f32 = 0.1;
+/// the disabled fill. Little: thin glyphs read lighter than their color, and
+/// at 0.3 a label on a light fill fell near 2:1, too faint to read what the
+/// button would do.
+const DISABLED_LABEL_FADE: f32 = 0.12;
 
 /// Height of capital letters as a share of the font size, close to that of
 /// the bundled sans faces.

@@ -348,9 +348,10 @@ impl View for Dropdown {
             ctx.layout
                 .set_container(rows, ContainerStyle::new(Container::Column));
             for mut opt in this.options {
-                // As wide as the trigger's text box plus room for the check
-                // mark that marks the chosen row.
-                opt.min_width = shared_width + OPTION_CHECK_ROOM;
+                // The popup's outer edges line up with the trigger's: its
+                // rows fill the trigger's width less the popup's inset. The
+                // trigger's caret room holds the chosen row's check mark.
+                opt.min_width = (shared_width - 2.0 * inset).max(OPTION_CHECK_ROOM);
                 opt.text_size = this.text_size;
                 Box::new(opt).build(ctx, Some(rows));
             }

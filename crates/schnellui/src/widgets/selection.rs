@@ -51,6 +51,9 @@ const TAB_DISCLOSURE_STROKE: f32 = 1.75;
 const TAB_DISCLOSURE_SPREAD: f32 = 2.0;
 const TAB_CLOSE_HALF: f32 = 3.5;
 const TAB_CLOSE_STROKE: f32 = 1.5;
+/// The least width of a tab's close button: the 24 px pointer target of
+/// WCAG 2.5.8.
+const TAB_CLOSE_MIN_WIDTH: f32 = 24.0;
 
 /// Visual treatment for a [`Tab`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

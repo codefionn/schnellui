@@ -322,13 +322,6 @@ renderer and a windowed one can share one scene and each stay current.
 - a dirty overlay root changed its level or order (`overlay_unchanged`);
 - a scroll region cannot be rebuilt in place.
 
-Atlases are shared with other renderers. `sync_atlas` reads the glyph atlas write log
-through `GlyphAtlas::delta_since(generation)` and uploads nothing, one sub-rect or the
-whole texture. A different atlas id forces a full upload. `ensure_image_atlas` does the
-same for the image atlas. `SurfaceRenderer::invalidate_atlases` and
-`reconcile_remount_atlases` handle remounts.
-
-Uploads are counted. `Renderer::last_upload_bytes` and `SurfaceRenderer::last_upload_bytes`
 Child indices make the scroll re-walk proportional to what is visible. A full
 gather gives every node with 16 or more children inside scroll content (or a
 `Scroll` with that many) a `ChildIndex` ([`types.rs`](../crates/schnellui/src/render_wgpu/types.rs)):
@@ -372,11 +365,24 @@ about 430 µs in `upload_scene` at 5000 rows and 7.5 ms at 50,000 rows. With the
 index it takes about 14 µs at both sizes. Building the indices makes a full gather of
 that list 10 to 20 percent slower: about 510 µs instead of 455 µs at 5000 rows.
 
+Atlases are shared with other renderers. `sync_atlas` reads the glyph atlas write log
+through `GlyphAtlas::delta_since(generation)` and uploads nothing, one sub-rect or the
+whole texture. A different atlas id forces a full upload. `ensure_image_atlas` does the
+same for the image atlas. `SurfaceRenderer::invalidate_atlases` and
+`reconcile_remount_atlases` handle remounts.
+
+Uploads are counted. `Renderer::last_upload_bytes` and `SurfaceRenderer::last_upload_bytes`
 return `UploadBytes` (`instance_bytes` and `other_bytes`, which holds uniforms and
 atlas texels). The counter is always on, and a frame with nothing painted reports
 zero. The crate's tests also read `GpuUploadWork` (full gathers, nodes patched, scroll
 regions, grown slots) to prove a paint change did not fall back to a full gather
 ([`retained_tests.rs`](../crates/schnellui/src/render_wgpu/retained_tests.rs)).
+
+An incremental update only notes the instance spans it changed in the CPU mirrors.
+`GpuCore::flush_uploads` writes them once the frame's edits are done and joins spans
+that touch or sit within `UPLOAD_MERGE_GAP` (8) instances of each other. Each
+`write_buffer` costs a staging allocation and a copy command, so 2000 adjacent nodes
+that change colour go out as one write. Two nodes far apart stay two small writes.
 
 Overlays (dropdown lists, dialogs, context menus) are deferred out of the base walk
 and drawn after it, in `(level, order)` order, as separate layers.
@@ -385,12 +391,6 @@ and drawn after it, in `(level, order)` order, as separate layers.
 from layout and paint. Parent links resolve inherited properties for rendering,
 pointer and wheel targeting, and accessibility bounds. Changes invalidate geometry
 indexes and dirty affected accessibility nodes without requesting a layout pass.
-An incremental update only notes the instance spans it changed in the CPU mirrors.
-`GpuCore::flush_uploads` writes them once the frame's edits are done and joins spans
-that touch or sit within `UPLOAD_MERGE_GAP` (8) instances of each other. Each
-`write_buffer` costs a staging allocation and a copy command, so 2000 adjacent nodes
-that change colour go out as one write. Two nodes far apart stay two small writes.
-
 
 Both renderers have a persistent GPU picture cache split into 128-pixel tiles
 ([`tile_cache.rs`](../crates/schnellui/src/render_wgpu/tile_cache.rs)). Each tile has a
@@ -461,13 +461,6 @@ refresh interval between input and pixels.
   without allocating once it has grown. `shape` and `shape_with` return a fresh value
   and are for cold paths. `TextShaper::detached` is a font-less stand-in used for a
   shaper that will be dropped.
-- `GlyphAtlas` ([`types.rs`](../crates/schnellui/src/text/types.rs)) is a shelf-packed R8
-  texture. Every written rect bumps `generation` and goes into a bounded write log.
-  When a glyph does not fit, the rasterizer calls `grow` (doubling the height up to a
-  cap) only if `can_ever_fit` says growth can help. Growth bumps the generation and
-  drops the log, so renderers re-upload fully. `has_headroom` tells callers whether an
-  atlas is too full to carry over.
-
 
   The shaper holds two font collections. One has the embedded faces plus the system
   fonts, for named families and glyph fallback. The other has the embedded faces
@@ -523,6 +516,13 @@ refresh interval between input and pixels.
   full stack (`TextShaper::set_full_stack_only`), and
   `uncovered_text_takes_the_short_family_stack` checks which texts take the short
   path.
+- `GlyphAtlas` ([`types.rs`](../crates/schnellui/src/text/types.rs)) is a shelf-packed R8
+  texture. Every written rect bumps `generation` and goes into a bounded write log.
+  When a glyph does not fit, the rasterizer calls `grow` (doubling the height up to a
+  cap) only if `can_ever_fit` says growth can help. Growth bumps the generation and
+  drops the log, so renderers re-upload fully. `has_headroom` tells callers whether an
+  atlas is too full to carry over.
+
 The text engine (shaper and atlas) outlives the tree it was built for:
 
 - Theme rebuilds. `rebuild_with_theme` ([`app_theme.rs`](../crates/schnellui/src/app_theme.rs))

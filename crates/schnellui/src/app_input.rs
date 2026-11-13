@@ -135,6 +135,24 @@ impl App {
         true
     }
 
+    /// Registers a dynamic pointer cursor for the subtree of whichever widget
+    /// has `role` and `name`, matched on each query like
+    /// [`App::register_focused_input_handler`], so the provider keeps working
+    /// after the widget is rebuilt or only appears later. Bindings by widget
+    /// from [`App::register_cursor_provider`] come first.
+    pub fn register_named_cursor_provider(
+        &mut self,
+        role: a11y::Role,
+        name: Option<&str>,
+        provider: impl Fn() -> widgets::CursorIcon + 'static,
+    ) {
+        self.named_cursor_bindings.push(NamedCursorBinding {
+            role: role.as_u16(),
+            name: name.map(str::to_owned),
+            provider: Box::new(provider),
+        });
+    }
+
     /// Enables or disables continuous native redraws for streaming content.
     pub fn set_continuous_redraw(&mut self, enabled: bool) {
         self.continuous_redraw = enabled;
@@ -208,17 +226,29 @@ impl App {
     }
 
     pub(crate) fn dispatch_focused_key_handler(&mut self, key: UiKey<'_>) -> bool {
-        // Match by borrowing the focused node's name, so routing a key to a
-        // terminal never copies its accessible name.
-        let index = self
-            .focused_widget()
-            .and_then(|id| self.scene.a11y(id))
-            .and_then(|a| {
-                self.focused_key_bindings
-                    .iter()
-                    .position(|binding| binding_matches(binding.role, binding.name.as_deref(), a))
-            });
-        index.is_some_and(|index| (self.focused_key_bindings[index].handler)(key))
+        // Handlers registered for the focused widget's name come before those
+        // for its whole role, and a handler that declines the key passes it
+        // on to the next one that matches. Matching borrows the focused
+        // node's name, so routing a key to a terminal never copies it.
+        let Some(id) = self.focused_widget() else {
+            return false;
+        };
+        for named in [true, false] {
+            for index in 0..self.focused_key_bindings.len() {
+                let binding = &self.focused_key_bindings[index];
+                if binding.name.is_some() != named {
+                    continue;
+                }
+                let matches = self
+                    .scene
+                    .a11y(id)
+                    .is_some_and(|a| binding_matches(binding.role, binding.name.as_deref(), a));
+                if matches && (self.focused_key_bindings[index].handler)(key) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Offers an event to the full-fidelity handler registered for the current
@@ -373,18 +403,48 @@ impl App {
         window_position: Point,
         modifiers: RawModifiers,
     ) -> FocusedInputResult {
-        let Some(target) =
-            schnellui::widgets::hit_test(&self.widgets, &self.scene, window_position)
-                .and_then(|hit| self.focused_input_target_from(hit))
-        else {
-            return FocusedInputResult::Ignored;
+        let target = schnellui::widgets::hit_test(&self.widgets, &self.scene, window_position)
+            .and_then(|hit| self.focused_input_target_from(hit));
+        let left = self.leave_hover_surface_unless(target, window_position, modifiers);
+        let Some(target) = target else {
+            return left;
         };
+        self.hover_surface = Some(target);
         self.dispatch_pointer_to(
             target,
             window_position,
             modifiers,
             RawPointerAction::Move,
             false,
+        )
+    }
+
+    /// Tells the surface under the last hover move that the pointer left
+    /// it, unless it is `still` under it. Called with None when the pointer
+    /// leaves the window.
+    pub(crate) fn leave_hover_surface_unless(
+        &mut self,
+        still: Option<WidgetId>,
+        window_position: Point,
+        modifiers: RawModifiers,
+    ) -> FocusedInputResult {
+        let Some(previous) = self.hover_surface else {
+            return FocusedInputResult::Ignored;
+        };
+        if still == Some(previous) {
+            return FocusedInputResult::Ignored;
+        }
+        self.hover_surface = None;
+        if self.scene.layout(previous).is_none() {
+            return FocusedInputResult::Ignored;
+        }
+        // Captured, so the position outside its rect still reaches it.
+        self.dispatch_pointer_to(
+            previous,
+            window_position,
+            modifiers,
+            RawPointerAction::Leave,
+            true,
         )
     }
 

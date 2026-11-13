@@ -4,7 +4,11 @@ const DRAG_THRESHOLD: f32 = 5.0;
 const DROP_RING_WIDTH: f32 = 3.0;
 const DROP_RING_PRIMS: usize = 4;
 const DOCK_PREVIEW_PRIMS: usize = 5;
-const DOCK_EDGE_FRACTION: f32 = 0.28;
+const DOCK_EDGE_FRACTION: f32 = 0.25;
+/// Alpha of the dock preview's wash over the half or whole pane it marks.
+const DOCK_WASH_ALPHA: u8 = 40;
+/// Share of their alpha, out of 256, the glyphs of a dragged source keep.
+const VEIL_KEEP: u16 = 100;
 
 fn handler_ancestor(
     runtime: &Runtime,
@@ -115,7 +119,28 @@ fn under_decorations(runtime: &Runtime, scene: &mut Scene, paint: impl FnOnce(&m
 }
 
 fn strip_drop_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
+    show_drop_tip(runtime, scene, hover.target, false);
+    show_zone_label(runtime, scene, hover, false);
     under_decorations(runtime, scene, |scene| strip_preview_lines(scene, hover));
+}
+
+/// Shows or hides the chip that names the hovered zone of a dock area, if
+/// it has one. A drop on a pane's tab bar joins it whatever the zone says,
+/// so none shows there.
+fn show_zone_label(runtime: &Runtime, scene: &mut Scene, hover: DropHover, visible: bool) {
+    if hover.preview_prims != DOCK_PREVIEW_PRIMS || (visible && hover.over_bar) {
+        return;
+    }
+    let label = runtime.with(|rt| {
+        rt.borrow()
+            .handlers
+            .get(hover.target)
+            .and_then(|handlers| handlers.dock_labels[hover.position.index()])
+    });
+    if let Some(label) = label.filter(|&label| scene.node(label).is_some()) {
+        scene.set_visible(label, visible);
+        scene.mark_dirty(label, DirtyFlags::PAINT);
+    }
 }
 
 fn strip_preview_lines(scene: &mut Scene, hover: DropHover) {
@@ -191,13 +216,65 @@ fn tab_bar_band(scene: &Scene, root: WidgetId, rect: Rect) -> Option<Rect> {
     (!band.is_empty()).then(|| Rect::new(rect.x, band.y, rect.width, band.height))
 }
 
-fn dock_preview_rect(rect: Rect, position: DockPosition) -> Rect {
+fn is_drop_target(runtime: &Runtime, scene: &Scene, hit: WidgetId) -> bool {
+    handler_ancestor(runtime, scene, hit, |handlers| {
+        handlers.drop.is_some() || handlers.dock.is_some()
+    })
+    .is_some()
+}
+
+/// The tab of `bar` at `index`, if the strip has one.
+fn tab_at(runtime: &Runtime, bar: WidgetId, index: usize) -> Option<WidgetId> {
+    runtime.with(|rt| {
+        rt.borrow()
+            .tab_reorder_items
+            .iter()
+            .find(|(_, item)| item.bar == bar && item.index == index)
+            .map(|(id, _)| id)
+    })
+}
+
+/// The tab of `bar` in whose row `point` lies: the one under it, or the last
+/// tab when the point is past the end of the row.
+fn tab_under_point(
+    runtime: &Runtime,
+    scene: &Scene,
+    bar: WidgetId,
+    point: Point,
+) -> Option<(WidgetId, TabReorderItem)> {
+    runtime.with(|rt| {
+        let rt = rt.borrow();
+        let mut last: Option<(WidgetId, TabReorderItem)> = None;
+        for (id, item) in rt.tab_reorder_items.iter() {
+            if item.bar != bar {
+                continue;
+            }
+            let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
+                continue;
+            };
+            if point.y < rect.y || point.y > rect.bottom() {
+                continue;
+            }
+            if point.x >= rect.x && point.x <= rect.right() {
+                return Some((id, *item));
+            }
+            if point.x > rect.right() && last.is_none_or(|(_, l)| item.index > l.index) {
+                last = Some((id, *item));
+            }
+        }
+        last
+    })
+}
+
+pub(super) fn dock_preview_rect(rect: Rect, position: DockPosition) -> Rect {
     match position {
+        // The box the middle zone covers, so where it shows is where a
+        // drop swaps.
         DockPosition::Center => Rect::new(
-            rect.x + rect.width * 0.08,
-            rect.y + rect.height * 0.08,
-            rect.width * 0.84,
-            rect.height * 0.84,
+            rect.x + rect.width * DOCK_EDGE_FRACTION,
+            rect.y + rect.height * DOCK_EDGE_FRACTION,
+            rect.width * (1.0 - 2.0 * DOCK_EDGE_FRACTION),
+            rect.height * (1.0 - 2.0 * DOCK_EDGE_FRACTION),
         ),
         DockPosition::Left => Rect::new(rect.x, rect.y, rect.width * 0.5, rect.height),
         DockPosition::Right => Rect::new(
@@ -223,11 +300,18 @@ fn resolve_drop_hover(
     source: WidgetId,
 ) -> Option<DropHover> {
     let hit = hit_test(runtime, scene, point)?;
-    if let (Some((_, source_item)), Some((target, target_item))) = (
-        tab_reorder_item_ancestor(runtime, scene, source),
-        tab_reorder_item_ancestor(runtime, scene, hit),
-    ) {
-        if source_item.bar == target_item.bar && source != target {
+    let source_item = tab_reorder_item_ancestor(runtime, scene, source);
+    let target_item = match (source_item, tab_reorder_item_ancestor(runtime, scene, hit)) {
+        (_, Some(found)) => Some(found),
+        // Over a tab's close button, which sits on the tab without being
+        // part of it, or on the empty strip after the last tab.
+        (Some((_, item)), None) if !is_drop_target(runtime, scene, hit) => {
+            tab_under_point(runtime, scene, item.bar, point)
+        }
+        _ => None,
+    };
+    if let (Some((_, source_item)), Some((target, target_item))) = (source_item, target_item) {
+        if source_item.bar == target_item.bar {
             let after_target = scene
                 .layout(target)
                 .is_some_and(|layout| point.x >= layout.rect.x + layout.rect.width * 0.5);
@@ -237,15 +321,30 @@ fn resolve_drop_hover(
             } else {
                 insertion
             };
+            // A spot that leaves the order as it is marks nothing.
+            if to == source_item.index {
+                return None;
+            }
+            // The marker goes on the near edge of the tab that will follow
+            // the dragged one, so after one tab and before the next mark
+            // the same spot. Only past the last tab is it on a right edge.
+            let next = after_target
+                .then(|| tab_at(runtime, target_item.bar, target_item.index + 1))
+                .flatten();
+            let (preview, after) = match next {
+                Some(next) => (next, false),
+                None => (target, after_target),
+            };
             return Some(DropHover {
                 target,
-                preview: target,
+                preview,
                 position: DockPosition::Center,
                 over_bar: false,
                 reorder: Some(TabReorderHover {
                     bar: source_item.bar,
                     from: source_item.index,
                     to,
+                    after,
                 }),
                 preview_prims: DROP_RING_PRIMS,
             });
@@ -277,6 +376,16 @@ fn resolve_drop_hover(
     } else {
         DockPosition::Center
     };
+    let accepted = runtime.with(|rt| {
+        rt.borrow()
+            .handlers
+            .get(target)
+            .and_then(|handlers| handlers.dock_accepts.as_ref())
+            .is_none_or(|accepts| accepts(position))
+    });
+    if !accepted {
+        return None;
+    }
     Some(DropHover {
         target,
         preview: if is_dock {
@@ -303,6 +412,36 @@ fn resolve_drop_hover(
 
 fn apply_drop_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
     under_decorations(runtime, scene, |scene| push_preview(runtime, scene, hover));
+    show_zone_label(runtime, scene, hover, true);
+    if hover.reorder.is_none() {
+        show_drop_tip(runtime, scene, hover.target, true);
+    }
+}
+
+/// Shows or hides the [`DropTip`] over a drop target: the target itself or
+/// one of its nearest ancestors.
+fn show_drop_tip(runtime: &Runtime, scene: &mut Scene, target: WidgetId, visible: bool) {
+    let mut current = Some(target);
+    for _ in 0..4 {
+        let Some(id) = current else {
+            return;
+        };
+        let changed = runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            if !rt.drop_tips.contains_key(id) {
+                return None;
+            }
+            let tip = rt.hover_tooltips.get_mut(id)?;
+            Some(super::interaction::show_tooltip(scene, id, tip, visible))
+        });
+        if let Some(changed) = changed {
+            if changed {
+                scene.mark_dirty(id, DirtyFlags::PAINT);
+            }
+            return;
+        }
+        current = scene.node(id).and_then(|node| node.parent);
+    }
 }
 
 fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
@@ -319,7 +458,7 @@ fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
             None => dock_preview_rect(layout.rect, hover.position),
         }
     } else {
-        let Some(rect) = paint_bounds(runtime, scene, hover.target) else {
+        let Some(rect) = paint_bounds(runtime, scene, hover.preview) else {
             return;
         };
         rect
@@ -330,16 +469,51 @@ fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
             .primitives
             .push(Primitive::SolidRect {
                 rect,
-                color: Color::rgba(
-                    theme_for(runtime, hover.preview).attention.r,
-                    theme_for(runtime, hover.preview).attention.g,
-                    theme_for(runtime, hover.preview).attention.b,
-                    58,
-                ),
+                // A light wash: the pane's content stays readable under it,
+                // and the outline marks the edge.
+                // Weighted for the linear-light blend, so a light scheme's
+                // wash reads as strongly as a dark one's.
+                color: {
+                    let theme = theme_for(runtime, hover.preview);
+                    let accent = theme.accent;
+                    crate::widgets::theme::wash_over(
+                        Color::rgba(accent.r, accent.g, accent.b, DOCK_WASH_ALPHA),
+                        theme.surface,
+                    )
+                },
                 corner_radius: 5.0,
             });
     }
     if rect.is_empty() {
+        return;
+    }
+    // A reorder marks where the tab lands: a bar on the hovered tab's near
+    // edge instead of a ring around it, which reads as focus.
+    if let Some(reorder) = hover.reorder {
+        // Inside the tab, so nothing clips the bar's 5 px.
+        let x = if reorder.after {
+            rect.right() - 2.5
+        } else {
+            rect.x + 2.5
+        };
+        let color = theme_for(runtime, hover.preview).accent;
+        let pd = scene.paint_mut(hover.preview);
+        // Four lines, as many as a ring, so leaving removes them alike.
+        for dx in [-1.0, -0.5, 0.5, 1.0] {
+            pd.primitives.push(Primitive::Line {
+                from: Point {
+                    x: x + dx,
+                    y: rect.y + 2.0,
+                },
+                to: Point {
+                    x: x + dx,
+                    y: rect.bottom() - 2.0,
+                },
+                width: DROP_RING_WIDTH,
+                color,
+            });
+        }
+        scene.mark_dirty(hover.preview, DirtyFlags::PAINT);
         return;
     }
     let half = DROP_RING_WIDTH * 0.5;
@@ -347,7 +521,9 @@ fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
     let y0 = rect.y + half;
     let x1 = rect.right() - half;
     let y1 = rect.bottom() - half;
-    let color = theme_for(runtime, hover.preview).attention;
+    // The accent, as focus and selection use: a drop target is a place to
+    // go, not a warning.
+    let color = theme_for(runtime, hover.preview).accent;
     let pd = scene.paint_mut(hover.preview);
     for (from, to) in [
         (Point { x: x0, y: y0 }, Point { x: x1, y: y0 }),
@@ -363,6 +539,101 @@ fn push_preview(runtime: &Runtime, scene: &mut Scene, hover: DropHover) {
         });
     }
     scene.mark_dirty(hover.preview, DirtyFlags::PAINT);
+}
+
+/// Fades the labels and icons of what a drag that just started moving
+/// carries, so it reads as picked up: a pane's title strip, a tab.
+/// Glyphs draw above every fill, so a veil laid over them would not show;
+/// their own colors change instead. Splitters and links keep theirs.
+fn lay_veil(runtime: &Runtime, scene: &mut Scene, source: WidgetId) {
+    if splitter_offset(runtime, source, Point { x: 0.0, y: 0.0 }).is_some()
+        || runtime.with(|rt| is_active_rich_link(&rt.borrow(), source))
+    {
+        return;
+    }
+    let mut saved = Vec::new();
+    let mut nodes = scene.subtree_nodes(source);
+    // A tab's close button sits beside it in their shared row; it fades
+    // with the tab, so the whole tab reads as lifted.
+    let row = scene
+        .node(source)
+        .filter(|node| node.kind == WidgetKind::Tab)
+        .and_then(|node| node.parent);
+    if let Some(row) = row {
+        let closes: Vec<WidgetId> = scene
+            .node(row)
+            .map(|node| node.children.iter().copied().collect())
+            .unwrap_or_default();
+        nodes.extend(closes.into_iter().filter(|id| {
+            scene
+                .node(*id)
+                .is_some_and(|node| node.kind == WidgetKind::Button)
+        }));
+    }
+    for id in nodes {
+        let Some(paint) = scene.paint(id) else {
+            continue;
+        };
+        if !paint.primitives.iter().any(|primitive| {
+            matches!(
+                primitive,
+                Primitive::GlyphQuad { .. } | Primitive::Line { .. }
+            )
+        }) {
+            continue;
+        }
+        for (index, primitive) in scene.paint_mut(id).primitives.iter_mut().enumerate() {
+            if let Primitive::GlyphQuad { color, .. } | Primitive::Line { color, .. } = primitive {
+                saved.push((id, index, *color));
+                color.a = (u16::from(color.a) * VEIL_KEEP / 256) as u8;
+            }
+        }
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+    }
+    runtime.with(|rt| rt.borrow_mut().drag_veil = saved);
+}
+
+/// Clears what a drag leaves on the parts of the tree that stay, when its
+/// source or target is about to go with a replaced branch: the drop preview
+/// on a target that stays, and the faded glyphs.
+pub(super) fn abandon_drag(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    removed: impl Fn(WidgetId) -> bool,
+) {
+    let Some(capture) = runtime.with(|rt| rt.borrow().drag_pointer) else {
+        return;
+    };
+    let ends = removed(capture.source)
+        || capture
+            .hovered
+            .is_some_and(|hover| removed(hover.target) || removed(hover.preview));
+    if !ends {
+        return;
+    }
+    if let Some(hover) = capture
+        .hovered
+        .filter(|hover| !removed(hover.target) && !removed(hover.preview))
+    {
+        strip_drop_preview(runtime, scene, hover);
+    }
+    lift_veil(runtime, scene);
+}
+
+/// Gives back the colors [`lay_veil`] faded, on the nodes still there.
+fn lift_veil(runtime: &Runtime, scene: &mut Scene) {
+    let saved = runtime.with(|rt| std::mem::take(&mut rt.borrow_mut().drag_veil));
+    for (id, index, original) in saved {
+        if scene.node(id).is_none() {
+            continue;
+        }
+        if let Some(Primitive::GlyphQuad { color, .. } | Primitive::Line { color, .. }) =
+            scene.paint_mut(id).primitives.get_mut(index)
+        {
+            *color = original;
+            scene.mark_dirty(id, DirtyFlags::PAINT);
+        }
+    }
 }
 
 /// Captures a press that starts on a widget configured with
@@ -466,7 +737,21 @@ pub fn update_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> bool {
                 }
             });
         }
+        // Hover lifts first: taking it off later would paint the source's
+        // labels back in their resting colors over the veil.
+        super::interaction::update_control_hover(runtime, scene, None);
+        lay_veil(runtime, scene, capture.source);
         changed = true;
+    }
+
+    // A splitter's drag moves its guide; it has no drop target.
+    let delta = Point {
+        x: point.x - capture.origin.x,
+        y: point.y - capture.origin.y,
+    };
+    if let Some(offset) = splitter_offset(runtime, capture.source, delta) {
+        emit_splitter(runtime, scene, capture.source, Some(offset));
+        return true;
     }
 
     let hovered = resolve_drop_hover(runtime, scene, point, capture.source)
@@ -498,8 +783,12 @@ pub fn cancel_drag(runtime: &Runtime, scene: &mut Scene) -> bool {
     }) else {
         return false;
     };
+    lift_veil(runtime, scene);
     if let Some(hover) = capture.hovered {
         strip_drop_preview(runtime, scene, hover);
+    }
+    if splitter_offset(runtime, capture.source, Point { x: 0.0, y: 0.0 }).is_some() {
+        emit_splitter(runtime, scene, capture.source, None);
     }
     let callback = runtime.with(|rt| {
         rt.borrow_mut()
@@ -538,6 +827,15 @@ pub fn end_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> DragRelea
     if !capture.active {
         return DragRelease::Click(capture.source);
     }
+    let delta = Point {
+        x: point.x - capture.origin.x,
+        y: point.y - capture.origin.y,
+    };
+    if let Some(offset) = splitter_offset(runtime, capture.source, delta) {
+        release_splitter(runtime, scene, capture.source, offset);
+        return DragRelease::Drop { accepted: true };
+    }
+    lift_veil(runtime, scene);
     if let Some(hover) = capture.hovered {
         strip_drop_preview(runtime, scene, hover);
     }
@@ -614,7 +912,17 @@ pub fn end_drag(runtime: &Runtime, scene: &mut Scene, point: Point) -> DragRelea
                 .get(capture.source)
                 .is_some_and(|handlers| handlers.click.is_some())
         });
-        if clickable {
+        // A tab let go off every target is chosen, as a click on it. Any
+        // other control clicks only when the pointer came back onto it: a
+        // press slid off a close button closes nothing.
+        let tab = scene
+            .node(capture.source)
+            .is_some_and(|node| node.kind == WidgetKind::Tab);
+        let back_on_it = hit_test(runtime, scene, point).is_some_and(|hit| {
+            std::iter::successors(Some(hit), |id| scene.node(*id).and_then(|node| node.parent))
+                .any(|id| id == capture.source)
+        });
+        if clickable && (tab || back_on_it) {
             DragRelease::Click(capture.source)
         } else {
             DragRelease::Drop { accepted: false }

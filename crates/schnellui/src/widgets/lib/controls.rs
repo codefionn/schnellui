@@ -103,6 +103,318 @@ impl View for DragHandle {
     }
 }
 
+/// What a [`Splitter`] keeps between its build and the end of a drag.
+pub(crate) struct SplitterState {
+    /// The line runs top to bottom and moves along x; else it runs left to
+    /// right and moves along y.
+    vertical: bool,
+    /// How far the line may move back (left or up) and on (right or down).
+    range: (f32, f32),
+    line: f32,
+    color: Color,
+    guide: Color,
+    /// A short bar across the middle of the line that marks it as a handle.
+    grip: Color,
+    on_resize: Option<Box<dyn FnMut(f32) + 'static>>,
+}
+
+/// The grip's length along the line and its thickness across it.
+const GRIP_LENGTH: f32 = 40.0;
+const GRIP_THICKNESS: f32 = 4.0;
+
+/// The edge between two panes, drawn as a line across its box. Dragging it
+/// moves a guide line with the pointer, within [`Splitter::range`], and the
+/// release calls [`Splitter::on_resize`] once with the distance moved. The
+/// owner then lays the panes out anew; nothing is resized while the pointer
+/// moves, so a drag costs one repaint of the guide per move.
+pub struct Splitter {
+    name: Cow<'static, str>,
+    size: Size,
+    state: SplitterState,
+}
+
+impl Splitter {
+    /// A splitter of `size`. A `vertical` one stands between panes side by
+    /// side; else between stacked panes.
+    pub fn new(name: impl Into<Cow<'static, str>>, size: Size, vertical: bool) -> Self {
+        Self {
+            name: name.into(),
+            size,
+            state: SplitterState {
+                vertical,
+                range: (0.0, 0.0),
+                line: 1.0,
+                color: Color::TRANSPARENT,
+                guide: Color::TRANSPARENT,
+                grip: Color::TRANSPARENT,
+                on_resize: None,
+            },
+        }
+    }
+
+    /// The line's thickness and color, and the color of the guide a drag moves.
+    pub fn line(mut self, thickness: f32, color: Color, guide: Color) -> Self {
+        self.state.line = thickness.max(0.0);
+        self.state.color = color;
+        self.state.guide = guide;
+        self
+    }
+
+    /// Paints a short rounded bar of `color` across the middle of the line,
+    /// so the edge reads as something to drag before the pointer finds it.
+    pub fn grip(mut self, color: Color) -> Self {
+        self.state.grip = color;
+        self
+    }
+
+    /// How far a drag may move the line back (left or up) and on (right or down).
+    pub fn range(mut self, back: f32, on: f32) -> Self {
+        self.state.range = (back.max(0.0), on.max(0.0));
+        self
+    }
+
+    /// Called on release with the distance the line moved, negative back.
+    /// Not called when it ends where it started.
+    pub fn on_resize(mut self, f: impl FnMut(f32) + 'static) -> Self {
+        self.state.on_resize = Some(Box::new(f));
+        self
+    }
+}
+
+/// Paints a splitter's line, and its guide `offset` away during a drag.
+/// A hovered or dragged splitter paints its line in the guide color.
+pub(crate) fn emit_splitter(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+    offset: Option<f32>,
+) {
+    let rect = scene.layout(id).map(|layout| layout.rect);
+    let line = runtime.with(|rt| {
+        let rt = rt.borrow();
+        let hovered = rt.splitter_hover == Some(id);
+        rt.handlers
+            .get(id)
+            .and_then(|handlers| handlers.splitter.as_ref())
+            .map(|state| {
+                (
+                    state.vertical,
+                    state.line,
+                    state.color,
+                    state.guide,
+                    state.grip,
+                    hovered,
+                )
+            })
+    });
+    let (Some(rect), Some((vertical, thickness, color, guide, grip, hovered))) = (rect, line)
+    else {
+        return;
+    };
+    let lit = hovered || offset.is_some();
+    let paint = scene.paint_mut(id);
+    paint.primitives.clear();
+    push_splitter_line(
+        &mut paint.primitives,
+        rect,
+        vertical,
+        thickness,
+        if lit { guide } else { color },
+        if lit && grip.a != 0 { guide } else { grip },
+        0.0,
+    );
+    if let Some(offset) = offset.filter(|&offset| offset != 0.0) {
+        paint.primitives.push(Primitive::SolidRect {
+            rect: splitter_line_rect(rect, vertical, thickness, offset),
+            color: guide,
+            corner_radius: 0.0,
+        });
+    }
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+}
+
+/// Where a splitter's line of `thickness` sits in `rect`, `offset` along.
+fn splitter_line_rect(rect: Rect, vertical: bool, thickness: f32, offset: f32) -> Rect {
+    if vertical {
+        Rect::new(
+            rect.x + ((rect.width - thickness) / 2.0).floor() + offset,
+            rect.y,
+            thickness,
+            rect.height,
+        )
+    } else {
+        Rect::new(
+            rect.x,
+            rect.y + ((rect.height - thickness) / 2.0).floor() + offset,
+            rect.width,
+            thickness,
+        )
+    }
+}
+
+/// The line and, when it has a color, the grip across its middle.
+fn push_splitter_line(
+    primitives: &mut Vec<Primitive>,
+    rect: Rect,
+    vertical: bool,
+    thickness: f32,
+    color: Color,
+    grip: Color,
+    offset: f32,
+) {
+    primitives.push(Primitive::SolidRect {
+        rect: splitter_line_rect(rect, vertical, thickness, offset),
+        color,
+        corner_radius: 0.0,
+    });
+    if grip.a == 0 {
+        return;
+    }
+    let across = GRIP_THICKNESS.min(if vertical { rect.width } else { rect.height });
+    let along = GRIP_LENGTH.min(if vertical { rect.height } else { rect.width });
+    let grip_rect = if vertical {
+        Rect::new(
+            rect.x + ((rect.width - across) / 2.0).floor() + offset,
+            rect.y + ((rect.height - along) / 2.0).floor(),
+            across,
+            along,
+        )
+    } else {
+        Rect::new(
+            rect.x + ((rect.width - along) / 2.0).floor(),
+            rect.y + ((rect.height - across) / 2.0).floor() + offset,
+            along,
+            across,
+        )
+    };
+    primitives.push(Primitive::SolidRect {
+        rect: grip_rect,
+        color: grip,
+        corner_radius: across / 2.0,
+    });
+}
+
+/// Moves the splitter hover to the splitter `hit` names, if any, and repaints
+/// the splitters it left and reached. A splitter being dragged keeps it.
+/// Returns whether paint changed.
+pub(crate) fn hover_splitter(runtime: &Runtime, scene: &mut Scene, hit: Option<WidgetId>) -> bool {
+    let (old, new) = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let is_splitter = |id: WidgetId| {
+            rt.handlers
+                .get(id)
+                .is_some_and(|handlers| handlers.splitter.is_some())
+        };
+        let dragged = rt
+            .drag_pointer
+            .map(|capture| capture.source)
+            .filter(|&source| is_splitter(source));
+        let new = dragged.or(hit.filter(|&id| is_splitter(id)));
+        let old = rt.splitter_hover;
+        rt.splitter_hover = new;
+        (old, new)
+    });
+    if old == new {
+        return false;
+    }
+    let dragging = runtime.with(|rt| rt.borrow().drag_pointer.is_some());
+    for id in [old, new].into_iter().flatten() {
+        // A drag repaints its own guide; leave its paint alone.
+        if !(dragging && Some(id) == new) {
+            emit_splitter(runtime, scene, id, None);
+        }
+    }
+    true
+}
+
+/// The distance a splitter's guide moves for a drag of `delta`, inside its
+/// range. `None` when `id` is no splitter.
+pub(crate) fn splitter_offset(runtime: &Runtime, id: WidgetId, delta: Point) -> Option<f32> {
+    runtime.with(|rt| {
+        let rt = rt.borrow();
+        let state = rt.handlers.get(id)?.splitter.as_ref()?;
+        let moved = if state.vertical { delta.x } else { delta.y };
+        Some(moved.clamp(-state.range.0, state.range.1).round())
+    })
+}
+
+/// The cursor over a splitter, `None` over anything else.
+pub(crate) fn splitter_cursor(runtime: &Runtime, id: WidgetId) -> Option<CursorIcon> {
+    runtime.with(|rt| {
+        let rt = rt.borrow();
+        let state = rt.handlers.get(id)?.splitter.as_ref()?;
+        Some(if state.vertical {
+            CursorIcon::ColResize
+        } else {
+            CursorIcon::RowResize
+        })
+    })
+}
+
+/// Ends a splitter's drag: the guide goes and `on_resize` hears the distance.
+pub(crate) fn release_splitter(runtime: &Runtime, scene: &mut Scene, id: WidgetId, offset: f32) {
+    emit_splitter(runtime, scene, id, None);
+    if offset == 0.0 {
+        return;
+    }
+    let callback = runtime.with(|rt| {
+        rt.borrow_mut()
+            .handlers
+            .get_mut(id)
+            .and_then(|handlers| handlers.splitter.as_mut())
+            .and_then(|state| state.on_resize.take())
+    });
+    if let Some(mut callback) = callback {
+        callback(offset);
+        runtime.with(|rt| {
+            if let Some(state) = rt
+                .borrow_mut()
+                .handlers
+                .get_mut(id)
+                .and_then(|handlers| handlers.splitter.as_mut())
+            {
+                state.on_resize = Some(callback);
+            }
+        });
+    }
+}
+
+impl View for Splitter {
+    fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
+        let this = *self;
+        let id = ctx.scene.insert(WidgetKind::Icon, parent);
+        {
+            let semantics = ctx.scene.a11y_mut(id);
+            semantics.role = Role::Group.as_u16();
+            semantics.name = Some(this.name.into_owned());
+        }
+        let size = this.size;
+        ctx.layout.set_measure(id, Box::new(move |_available| size));
+        let (vertical, thickness, color, grip) = (
+            this.state.vertical,
+            this.state.line,
+            this.state.color,
+            this.state.grip,
+        );
+        with_handlers(&ctx.runtime, id, |handlers| {
+            // A drag source, so a press past the threshold captures the pointer.
+            handlers.drag_start = Some(Box::new(|| {}));
+            handlers.splitter = Some(this.state);
+        });
+        // Before layout the line sits at the box's own origin; layout moves it.
+        push_splitter_line(
+            &mut ctx.scene.paint_mut(id).primitives,
+            Rect::new(0.0, 0.0, size.width, size.height),
+            vertical,
+            thickness,
+            color,
+            grip,
+            0.0,
+        );
+        id
+    }
+}
+
 /// Visual emphasis for a [`Button`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ButtonAppearance {
@@ -128,6 +440,7 @@ pub struct Button {
     pub(crate) on_drag_start: Option<ClickHandler>,
     pub(crate) on_drag_end: Option<Box<dyn FnMut(bool) + 'static>>,
     pub(crate) on_drop: Option<ClickHandler>,
+    pub(crate) accepts_drop: Option<Box<dyn Fn() -> bool + 'static>>,
     pub(crate) disabled: bool,
     pub(crate) width: Option<f32>,
     pub(crate) height: Option<f32>,
@@ -150,6 +463,7 @@ impl Button {
             on_drag_start: None,
             on_drag_end: None,
             on_drop: None,
+            accepts_drop: None,
             disabled: false,
             width: None,
             height: None,
@@ -209,6 +523,13 @@ impl Button {
     /// an active drag hovers it.
     pub fn on_drop(mut self, f: impl FnMut() + 'static) -> Button {
         self.on_drop = Some(Box::new(f));
+        self
+    }
+
+    /// Asked while a drag hovers this drop target: false makes it no target
+    /// for that drag, with no preview and no drop.
+    pub fn accepts_drop(mut self, f: impl Fn() -> bool + 'static) -> Button {
+        self.accepts_drop = Some(Box::new(f));
         self
     }
 
@@ -329,6 +650,21 @@ impl View for Button {
         );
         // Shape tokens are baked here (theme reads are build-time, SOUL §8.1);
         // a theme change remounts, so the closure never goes stale.
+        // An icon-only button paints no label, so the hidden label's size
+        // never stretches the explicit size it was given: a 20 px toolbar
+        // button stays 20 px instead of growing to the label's line height.
+        let ts = if this.show_label {
+            ts
+        } else {
+            Size {
+                width: if this.width.is_some() { 0.0 } else { ts.width },
+                height: if this.height.is_some() {
+                    0.0
+                } else {
+                    ts.height
+                },
+            }
+        };
         let intrinsic = sized_button_intrinsic(
             &ctx.runtime,
             id,
@@ -370,6 +706,11 @@ impl View for Button {
                 handlers.drag_start = this.on_drag_start;
                 handlers.drag_end = this.on_drag_end;
                 handlers.drop = this.on_drop;
+                handlers.dock_accepts =
+                    this.accepts_drop
+                        .map(|accepts| -> Box<dyn Fn(DockPosition) -> bool> {
+                            Box::new(move |_| accepts())
+                        });
             });
         }
         id

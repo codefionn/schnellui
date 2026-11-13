@@ -918,6 +918,84 @@ fn a_selected_menu_item_wears_the_selection_fill_and_state() {
 }
 
 #[test]
+fn down_in_a_pointer_opened_menu_steps_from_the_chosen_row() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("History").on_select(|| {}))
+        .item(
+            ContextMenuItem::new("Review")
+                .selected(true)
+                .on_select(|| {}),
+        )
+        .item(ContextMenuItem::new("Change").on_select(|| {}));
+    let mut app = App::mount_with_size(Button::new("Mode").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Mode")).unwrap();
+    assert!(app.dispatch_click(button));
+    app.frame();
+    let change = app.find_widget(Role::MenuItem, Some("Change")).unwrap();
+    assert!(app.dispatch_key(UiKey::Down { shift: false }));
+    assert_eq!(app.focused_widget(), Some(change));
+}
+
+#[test]
+fn down_in_a_pointer_opened_menu_steps_from_the_hovered_row() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("History").on_select(|| {}))
+        .item(
+            ContextMenuItem::new("Review")
+                .selected(true)
+                .on_select(|| {}),
+        )
+        .item(ContextMenuItem::new("Change").on_select(|| {}));
+    let mut app = App::mount_with_size(Button::new("Mode").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Mode")).unwrap();
+    assert!(app.dispatch_click(button));
+    app.frame();
+    let history = app.find_widget(Role::MenuItem, Some("History")).unwrap();
+    let review = app.find_widget(Role::MenuItem, Some("Review")).unwrap();
+    let rect = app.scene().layout(history).unwrap().rect;
+    app.update_pointer_proximity(scene::Point {
+        x: rect.x + 4.0,
+        y: rect.y + rect.height / 2.0,
+    });
+    app.frame();
+    // The host takes hover off for a navigation key before it arrives.
+    app.hold_pointer_hover();
+    assert!(app.dispatch_key(UiKey::Down { shift: false }));
+    assert_eq!(app.focused_widget(), Some(review));
+}
+
+#[test]
+fn moving_the_pointer_onto_a_menu_row_moves_the_keyboard_row() {
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new()
+        .item(ContextMenuItem::new("History").on_select(|| {}))
+        .item(ContextMenuItem::new("Review").on_select(|| {}))
+        .item(ContextMenuItem::new("Change").on_select(|| {}));
+    let mut app = App::mount_with_size(Button::new("Mode").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Mode")).unwrap();
+    assert!(app.dispatch_click(button));
+    app.frame();
+    assert!(app.dispatch_key(UiKey::Down { shift: false }));
+    let history = app.find_widget(Role::MenuItem, Some("History")).unwrap();
+    assert_eq!(app.focused_widget(), Some(history));
+    let change = app.find_widget(Role::MenuItem, Some("Change")).unwrap();
+    let rect = app.scene().layout(change).unwrap().rect;
+    app.update_pointer_proximity(scene::Point {
+        x: rect.x + 4.0,
+        y: rect.y + rect.height / 2.0,
+    });
+    assert_eq!(app.focused_widget(), Some(change));
+}
+
+#[test]
 fn combobox_search_filters_retained_rows_without_a_remount() {
     use std::cell::RefCell;
     use std::rc::Rc;

@@ -635,7 +635,10 @@ fn toggle_halo_and_ring_are_concentric_with_the_control() {
             runtime,
             ThemeProvider::new(
                 theme,
+                // Taller than the toggle, so its ring has room above and
+                // below inside the window.
                 Row::new()
+                    .size(400.0, 80.0)
                     .gap(12.0)
                     .align(Align::Center)
                     .child(toggle)
@@ -800,4 +803,25 @@ fn opening_a_buttons_menu_hides_its_tooltip() {
     dismiss_context_menu(runtime, &mut scene);
     update_pointer_proximity(runtime, &mut scene, Point { x: 12.0, y: 10.0 });
     assert_eq!(shown(runtime), Some(true), "back once it closes");
+}
+
+/// One ring at a time: a ring put on a control takes it off any other, even
+/// when focus moved without the blur that strips it, as after a remount.
+#[test]
+fn applying_a_focus_ring_takes_it_off_the_last_control() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, _l, _text, _atlas, root) = build_one(
+        runtime,
+        Column::new()
+            .child(Button::new("one"))
+            .child(Button::new("two")),
+    );
+    let one = scene.node(root).unwrap().children[0];
+    let two = scene.node(root).unwrap().children[1];
+    apply_focus_ring(runtime, &mut scene, one);
+    assert_eq!(ring_lines(&scene, one), FOCUS_RING_PRIMS);
+    apply_focus_ring(runtime, &mut scene, two);
+    assert_eq!(ring_lines(&scene, one), 0);
+    assert_eq!(ring_lines(&scene, two), FOCUS_RING_PRIMS);
 }

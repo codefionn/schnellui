@@ -4,6 +4,8 @@ pub struct DockArea {
     child: Option<AnyView>,
     name: Cow<'static, str>,
     on_dock: Option<Box<dyn FnMut(DockPosition) + 'static>>,
+    accepts: Option<Box<dyn Fn(DockPosition) -> bool + 'static>>,
+    labels: [Option<Cow<'static, str>>; 5],
     style: ContainerStyle,
 }
 
@@ -13,8 +15,22 @@ impl DockArea {
             child: None,
             name: name.into(),
             on_dock: None,
+            accepts: None,
+            labels: [None, None, None, None, None],
             style: ContainerStyle::new(Container::Stack),
         }
+    }
+
+    /// Says what a drop on `position` does ("Split right", "Swap"): a chip in
+    /// the middle of that zone's preview while a drag hovers it. Needs
+    /// [`DockArea::size`], which places the chips.
+    pub fn zone_label(
+        mut self,
+        position: DockPosition,
+        label: impl Into<Cow<'static, str>>,
+    ) -> DockArea {
+        self.labels[position.index()] = Some(label.into());
+        self
     }
 
     pub fn child(mut self, child: impl View) -> DockArea {
@@ -24,6 +40,14 @@ impl DockArea {
 
     pub fn on_dock(mut self, callback: impl FnMut(DockPosition) + 'static) -> DockArea {
         self.on_dock = Some(Box::new(callback));
+        self
+    }
+
+    /// Asked while a drag hovers, with the zone under the pointer: false
+    /// makes that zone no target for the drag, as for a tab dropped on its
+    /// own panes, which would change nothing. Without it every drag is taken.
+    pub fn accepts(mut self, accepts: impl Fn(DockPosition) -> bool + 'static) -> DockArea {
+        self.accepts = Some(Box::new(accepts));
         self
     }
 
@@ -68,14 +92,214 @@ impl View for DockArea {
             let mut preview_style = ContainerStyle::new(Container::Stack);
             preview_style.fixed_size = preview_size;
             ctx.layout.set_container(preview, preview_style);
+            // Its own layer, so the zone's wash lies over the pane's text
+            // instead of under its opaque cells, the middle zone as plainly
+            // as the edges.
+            ctx.scene
+                .set_overlay_level(preview, ZONE_PREVIEW_OVERLAY_LEVEL);
+            let mut labels = [None; 5];
+            if let Some(size) = preview_size {
+                let area = Rect::new(0.0, 0.0, size.width, size.height);
+                for position in DockPosition::ALL {
+                    let Some(text) = this.labels[position.index()].clone() else {
+                        continue;
+                    };
+                    let zone = super::drag::dock_preview_rect(area, position);
+                    let chip = Pad::insets(EdgeInsets {
+                        top: zone.y,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: zone.x,
+                    })
+                    .child(
+                        Row::new()
+                            .size(zone.width, zone.height)
+                            .justify(Justify::Center)
+                            .align(Align::Center)
+                            .child(Badge::new(text).tone(BadgeTone::Accent).text_size(15.0)),
+                    );
+                    let chip = Box::new(chip).build(ctx, Some(preview));
+                    // Shown only while a drag hovers its zone: hidden, it is
+                    // left out of paint, hit tests and the accessibility tree.
+                    ctx.scene.set_visible(chip, false);
+                    // Its own layer, so the pane's text draws under the chip
+                    // rather than through it.
+                    ctx.scene.set_overlay_level(chip, ZONE_LABEL_OVERLAY_LEVEL);
+                    labels[position.index()] = Some(chip);
+                }
+            }
             with_handlers(&ctx.runtime, id, |handlers| {
                 handlers.dock = Some(callback);
                 handlers.dock_preview = Some(preview);
+                handlers.dock_accepts = this.accepts;
+                handlers.dock_labels = labels;
             });
         }
         id
     }
 }
+
+/// A container that makes its whole box a pointer drag source, as a pane's
+/// title strip is: a press anywhere on its content that is not itself a
+/// drag source (a button's click still lands) starts a possible drag, which
+/// becomes one past the usual threshold. It takes no focus, so it adds no
+/// Tab stop; keyboard users need another way to the same action.
+pub struct DragSource {
+    child: Option<AnyView>,
+    name: Cow<'static, str>,
+    on_drag_start: Option<ClickHandler>,
+    on_drag_end: Option<Box<dyn FnMut(bool) + 'static>>,
+    on_click: Option<ClickHandler>,
+    context_menu: Option<crate::widgets::ContextMenu>,
+}
+
+impl DragSource {
+    pub fn new(name: impl Into<Cow<'static, str>>) -> DragSource {
+        DragSource {
+            child: None,
+            name: name.into(),
+            on_drag_start: None,
+            on_drag_end: None,
+            on_click: None,
+            context_menu: None,
+        }
+    }
+
+    pub fn child(mut self, child: impl View) -> DragSource {
+        self.child = Some(Box::new(child));
+        self
+    }
+
+    /// Runs when the drag starts moving.
+    pub fn on_drag_start(mut self, callback: impl FnMut() + 'static) -> DragSource {
+        self.on_drag_start = Some(Box::new(callback));
+        self
+    }
+
+    /// Runs after a drag that moved ends, with whether a target took it.
+    pub fn on_drag_end(mut self, callback: impl FnMut(bool) + 'static) -> DragSource {
+        self.on_drag_end = Some(Box::new(callback));
+        self
+    }
+
+    /// Runs when a press on the handle is let go on it without a drag.
+    pub fn on_click(mut self, callback: impl FnMut() + 'static) -> DragSource {
+        self.on_click = Some(Box::new(callback));
+        self
+    }
+
+    /// The menu a secondary click on the handle opens.
+    pub fn context_menu(mut self, menu: crate::widgets::ContextMenu) -> DragSource {
+        self.context_menu = Some(menu);
+        self
+    }
+}
+
+impl View for DragSource {
+    fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
+        let this = *self;
+        // A column, which takes its child's size; a stack would not.
+        let id = ctx.scene.insert(WidgetKind::Column, parent);
+        {
+            let semantics = ctx.scene.a11y_mut(id);
+            semantics.role = Role::Group.as_u16();
+            semantics.name = Some(this.name.into_owned());
+        }
+        ctx.layout
+            .set_container(id, ContainerStyle::new(Container::Column));
+        if let Some(child) = this.child {
+            child.build(ctx, Some(id));
+        }
+        with_handlers(&ctx.runtime, id, |handlers| {
+            handlers.drag_start = this.on_drag_start;
+            handlers.drag_end = this.on_drag_end;
+            if this.on_click.is_some() {
+                handlers.click = this.on_click;
+            }
+        });
+        if let Some(menu) = this.context_menu {
+            crate::widgets::context_menu::register_context_menu(&ctx.runtime, id, menu);
+        }
+        id
+    }
+}
+
+/// Names what a drop on its child does ("New tab", "Move into this tab"):
+/// a chip beside the child, shown only while a drag hovers a drop target in
+/// it. Pane zones say this with [`DockArea::zone_label`]; this is for a
+/// plain drop target, such as a button or a tab. Pointer hover alone never
+/// shows it.
+pub struct DropTip {
+    child: Option<AnyView>,
+    label: Cow<'static, str>,
+}
+
+impl DropTip {
+    pub fn new(label: impl Into<Cow<'static, str>>) -> DropTip {
+        DropTip {
+            child: None,
+            label: label.into(),
+        }
+    }
+
+    pub fn child(mut self, child: impl View) -> DropTip {
+        self.child = Some(Box::new(child));
+        self
+    }
+}
+
+impl View for DropTip {
+    fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
+        let this = *self;
+        // A column takes its child's size, so the chip is placed against it.
+        let id = ctx.scene.insert(WidgetKind::Column, parent);
+        ctx.scene.a11y_mut(id).role = Role::Group.as_u16();
+        ctx.layout
+            .set_container(id, ContainerStyle::new(Container::Column));
+        if let Some(child) = this.child {
+            child.build(ctx, Some(id));
+        }
+        // An empty mark at the column's corner anchors its paint, which
+        // otherwise holds only the chip, when layout moves it.
+        let anchor = node_rect(ctx.scene, id, Size::default());
+        ctx.scene
+            .paint_mut(id)
+            .primitives
+            .push(Primitive::SolidRect {
+                rect: anchor,
+                color: Color::TRANSPARENT,
+                corner_radius: 0.0,
+            });
+        register_hover_tooltip(
+            &ctx.runtime,
+            ctx.scene,
+            ctx.text,
+            ctx.atlas,
+            id,
+            &this.label,
+            Size::default(),
+            ctx.scale,
+        );
+        elevate_tooltip_host(ctx.scene, id);
+        let theme = theme_for(&ctx.runtime, id);
+        ctx.runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            // In the accent, as the zone chips are: it names a drop, not a
+            // control.
+            if let Some(tip) = rt.hover_tooltips.get_mut(id) {
+                tip.background_color = theme.accent;
+                tip.text_color = theme.on_accent;
+            }
+            rt.drop_tips.insert(id, ());
+        });
+        id
+    }
+}
+
+/// The layer of a dock zone's chip: over the panes, under popups and tooltips.
+const ZONE_LABEL_OVERLAY_LEVEL: u8 = 5;
+/// The layer of a dock zone's wash: under its chip.
+const ZONE_PREVIEW_OVERLAY_LEVEL: u8 = 4;
 
 /// A padded single-child container (SOUL §8.1).
 pub struct Pad {

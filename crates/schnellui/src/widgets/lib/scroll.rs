@@ -802,7 +802,10 @@ pub fn dispatch_key_activate(
     let activates = match kind {
         WidgetKind::Button => true,
         WidgetKind::Link => key == ActivateKey::Enter,
-        WidgetKind::Checkbox | WidgetKind::Switch | WidgetKind::Radio => key == ActivateKey::Space,
+        WidgetKind::Checkbox | WidgetKind::Radio => key == ActivateKey::Space,
+        // A switch acts at once, as a button does, so Enter flips it too,
+        // as in native toolkits.
+        WidgetKind::Switch => true,
         WidgetKind::Tab
         | WidgetKind::ListItem
         | WidgetKind::Dropdown

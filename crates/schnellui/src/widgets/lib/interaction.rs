@@ -258,10 +258,12 @@ fn surface_radius(runtime: &Runtime, scene: &Scene, owner: WidgetId) -> f32 {
 }
 
 /// The ring `rect` grown by `-inset` (outset), with its left and right edges
-/// held inside the clip that `id` paints under. Only those two sides: a
-/// viewport scrolls vertically, so the reveal makes the room above and below,
-/// where the horizontal clip is fixed. Returns the rect, radius and inset for
-/// [`push_ring_stroke`]; unchanged when the ring fits.
+/// held inside the clip that `id` paints under. Above and below, a viewport
+/// scrolls, so the reveal makes the room there; outside any viewport nothing
+/// can, and the top and bottom are held inside the clip and the window too,
+/// so a control flush with the window's edge (a status bar) keeps its whole
+/// ring. Returns the rect, radius and inset for [`push_ring_stroke`];
+/// unchanged when the ring fits.
 fn clamp_ring_to_clip_sides(
     scene: &Scene,
     id: WidgetId,
@@ -270,17 +272,40 @@ fn clamp_ring_to_clip_sides(
     inset: f32,
 ) -> (Rect, f32, f32) {
     let (min_x, max_x) = clip_sides(scene, id);
+    let (min_y, max_y) = fixed_clip_rows(scene, id);
     let (left, right) = (rect.x + inset, rect.right() - inset);
-    if left >= min_x && right <= max_x {
+    let (top, bottom) = (rect.y + inset, rect.bottom() - inset);
+    if left >= min_x && right <= max_x && top >= min_y && bottom <= max_y {
         return (rect, radius, inset);
     }
-    let grown = Rect::new(
-        left.max(min_x),
-        rect.y + inset,
-        (right.min(max_x) - left.max(min_x)).max(0.0),
-        rect.height - 2.0 * inset,
-    );
+    let (left, right) = (left.max(min_x), right.min(max_x));
+    let (top, bottom) = (top.max(min_y), bottom.min(max_y));
+    let grown = Rect::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0));
     (grown, radius - inset, 0.0)
+}
+
+/// The top and bottom a ring of `id` may reach, in its layout space: the
+/// clip's and the window's when no scroll viewport holds `id`, unbounded
+/// inside one.
+fn fixed_clip_rows(scene: &Scene, id: WidgetId) -> (f32, f32) {
+    let mut node = scene.node(id).and_then(|node| node.parent);
+    while let Some(parent) = node {
+        if scene.node(parent).map(|node| node.kind) == Some(WidgetKind::Scroll) {
+            return (f32::NEG_INFINITY, f32::INFINITY);
+        }
+        node = scene.node(parent).and_then(|node| node.parent);
+    }
+    let (offset, clip) = scene.composite_context(id);
+    let (mut top, mut bottom) = (clip.y, clip.bottom());
+    if let Some(window) = scene
+        .root()
+        .and_then(|root| scene.layout(root))
+        .map(|layout| layout.rect)
+    {
+        top = top.max(window.y);
+        bottom = bottom.min(window.bottom());
+    }
+    (top - offset.y, bottom - offset.y)
 }
 
 /// Strips a previously-appended focus ring — the trailing [`FOCUS_RING_PRIMS`]
@@ -311,6 +336,12 @@ pub(crate) fn apply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: WidgetI
     if scene.node(id).is_none() {
         return;
     }
+    // One ring at a time: the ring another control still wears goes first,
+    // or it would stay painted after its record is overwritten below.
+    let worn = runtime.with(|rt| rt.borrow().ring.as_ref().map(|ring| ring.target));
+    if let Some(other) = worn.filter(|&other| other != id) {
+        remove_focus_ring(runtime, scene, other);
+    }
     strip_focus_decoration(runtime, scene, id);
     let Some(component) = interaction_component(scene, id) else {
         return;
@@ -323,8 +354,33 @@ pub(crate) fn apply_focus_ring(runtime: &Runtime, scene: &mut Scene, id: WidgetI
     // The keyboard cursor in an open option list is the row hover wash, so
     // keys and pointer mark the row Enter picks the same way; the chosen
     // row keeps its tint and check mark.
+    // It wears the ring too, as a menu row does, so the keyboard's row
+    // reads apart from the chosen one, whose tint is close to the wash.
     if scene.node(id).map(|node| node.kind) == Some(WidgetKind::DropdownOption) {
+        let ring = style.border;
         style = theme.interaction_style(component, InteractionState::Hover);
+        style.border = ring;
+    }
+    // A menu row under the keyboard gets the pointer's wash under its ring,
+    // so the row Enter runs reads as plainly as a hovered one.
+    if scene
+        .a11y(id)
+        .is_some_and(|a| Role::from_u16(a.role) == Role::MenuItem)
+    {
+        // The pointer's wash on this row comes off: the ring's own wash
+        // takes its place, and the two stacked would sink the text.
+        let hovered =
+            runtime.with(|rt| rt.borrow().hover.as_ref().map(|hover| hover.target)) == Some(id);
+        if hovered {
+            strip_hover_decoration(runtime, scene);
+        }
+        let hover = theme.interaction_style(component, InteractionState::Hover);
+        // As strong as a hovered menu row's wash.
+        let wash = hover.background.map(|mut wash| {
+            wash.a = wash.a.saturating_add(wash.a / 2);
+            wash
+        });
+        style.background = style.background.or(wash);
     }
     // A field that failed validation keeps saying so while it has focus: the
     // ring would otherwise cover its error outline.
@@ -389,7 +445,13 @@ pub fn set_focus_ring_visible(
             })
         }
     } else {
-        remove_focus_ring(runtime, scene, id)
+        // The ring marks focus, which `id` now holds: one left on another
+        // control is stale.
+        let worn = runtime.with(|rt| rt.borrow().ring.as_ref().map(|ring| ring.target));
+        let stale = worn
+            .filter(|&other| other != id)
+            .is_some_and(|other| remove_focus_ring(runtime, scene, other));
+        remove_focus_ring(runtime, scene, id) | stale
     }
 }
 
@@ -1027,7 +1089,13 @@ fn apply_interaction_style(
         // its edge. Rows, tabs and options sit flush against their
         // neighbours, which would paint over an outset ring, so theirs stays
         // inside. A field's ring replaces its border, so it is not doubled.
-        let outset = border_width == FOCUS_RING_W && ring_outsets(component, kind);
+        let flush_row = runtime.with(|rt| {
+            rt.borrow()
+                .handlers
+                .get(id)
+                .is_some_and(|handlers| handlers.flush_row)
+        });
+        let outset = border_width == FOCUS_RING_W && ring_outsets(component, kind) && !flush_row;
         let inset = if outset {
             -(FOCUS_RING_W + FOCUS_RING_GAP)
         } else if kind == Some(WidgetKind::Scroll) && border_width == FOCUS_RING_W {
@@ -1122,6 +1190,22 @@ pub(crate) fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: W
         return false;
     };
     let mut style = interaction_style_for(runtime, id, component, InteractionState::Hover);
+    // A menu row's wash is half again as strong as a control's: on the menu's
+    // own surface the plain wash is the only mark of the row a click runs.
+    if scene
+        .a11y(id)
+        .is_some_and(|a| Role::from_u16(a.role) == Role::MenuItem)
+    {
+        // The keyboard's row already wears this wash under its ring; a
+        // second one on top would sink its text.
+        let ringed =
+            runtime.with(|rt| rt.borrow().ring.as_ref().map(|ring| ring.target)) == Some(id);
+        if ringed {
+            style.background = None;
+        } else if let Some(wash) = style.background.as_mut() {
+            wash.a = wash.a.saturating_add(wash.a / 2);
+        }
+    }
     // A link is text: a wash or box around one word reads as focus. It
     // answers hover by deepening its ink toward the body text instead.
     if scene
@@ -1551,17 +1635,38 @@ pub fn cursor_at_with(
         return cursor;
     }
     if let Some(capture) = runtime.with(|rt| rt.borrow().drag_pointer) {
+        if let Some(cursor) = splitter_cursor(runtime, capture.source) {
+            return cursor;
+        }
+        // A moving drag holds what it carries over a target that takes it.
+        // Elsewhere a clickable source's release falls back to its click,
+        // and any other source's drops nothing, which the cursor says.
         if capture.active {
+            if capture.hovered.is_some() {
+                return CursorIcon::Grabbing;
+            }
+            // As the release falls back: an unselected tab's click selects
+            // it wherever it lands, another control's only back over it.
+            // Anywhere else a release does nothing, which the cursor says,
+            // and so it does for a tab that is already selected.
+            let selects_tab = scene
+                .node(capture.source)
+                .is_some_and(|node| node.kind == WidgetKind::Tab)
+                && !scene
+                    .a11y(capture.source)
+                    .is_some_and(|a| StateFlags(a.state).contains(StateFlags::SELECTED));
             let clickable = runtime.with(|rt| {
                 rt.borrow()
                     .handlers
                     .get(capture.source)
                     .is_some_and(|handlers| handlers.click.is_some())
-            });
+            }) && (selects_tab
+                || hit()
+                    .is_some_and(|hit| crate::widgets::is_in_subtree(scene, hit, capture.source)));
             return if clickable {
                 CursorIcon::Pointer
             } else {
-                CursorIcon::Grabbing
+                CursorIcon::NotAllowed
             };
         }
     }
@@ -1582,7 +1687,15 @@ pub fn cursor_at_with(
             .map(|a| StateFlags(a.state).contains(StateFlags::DISABLED))
             .unwrap_or(false);
         if disabled {
-            return CursorIcon::Default;
+            // A disabled button says it will not act, as on the web.
+            return if node.kind == WidgetKind::Button {
+                CursorIcon::NotAllowed
+            } else {
+                CursorIcon::Default
+            };
+        }
+        if let Some(cursor) = splitter_cursor(runtime, id) {
+            return cursor;
         }
         let (clickable, draggable) = runtime.with(|rt| {
             let rt = rt.borrow();
@@ -1641,8 +1754,11 @@ pub(crate) fn hover_target_at(
             && semantics
                 .map(|a| {
                     let actions = ActionFlags(a.actions);
+                    // A button out of the Tab order, such as a close button
+                    // of a tab that takes focus one at a time, still answers
+                    // the pointer.
                     actions.contains(ActionFlags::FOCUS)
-                        || (Role::from_u16(a.role) == Role::MenuItem
+                        || (matches!(Role::from_u16(a.role), Role::MenuItem | Role::Button)
                             && actions.contains(ActionFlags::CLICK))
                 })
                 .unwrap_or(false);
@@ -1671,7 +1787,11 @@ fn shares_nodes(scene: &Scene, a: WidgetId, b: WidgetId) -> bool {
     contains(scene, a, b) || contains(scene, b, a)
 }
 
-fn update_control_hover(runtime: &Runtime, scene: &mut Scene, hit: Option<WidgetId>) -> bool {
+pub(super) fn update_control_hover(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    hit: Option<WidgetId>,
+) -> bool {
     let next = hover_target_at(runtime, scene, hit);
     let current = runtime.with(|rt| rt.borrow().hover.as_ref().map(|hover| hover.target));
     if current == next {
@@ -1772,7 +1892,10 @@ fn update_pointer_state(
     held: bool,
     may_show_tooltips: bool,
 ) -> bool {
-    let control_changed = update_control_hover(runtime, scene, hit);
+    // While something is dragged, controls under the pointer neither light
+    // up nor show tooltips: only drop targets answer, with their preview.
+    let dragging = runtime.with(|rt| rt.borrow().drag_pointer.is_some_and(|c| c.active));
+    let control_changed = update_control_hover(runtime, scene, hit.filter(|_| !dragging));
     let proximity_changed = runtime.with(|registry| {
         let mut registry = registry.borrow_mut();
         let registry = &mut *registry;
@@ -1799,6 +1922,10 @@ fn update_pointer_state(
             }
         }
         for &id in &registry.tooltip_ids {
+            // A drop tip shows only for a drag, which shows and hides it.
+            if registry.drop_tips.contains_key(id) {
+                continue;
+            }
             let Some(tooltip) = registry.hover_tooltips.get_mut(id) else {
                 continue;
             };
@@ -1816,6 +1943,7 @@ fn update_pointer_state(
                 tooltip,
                 allowed
                     && !held
+                    && !dragging
                     && (may_show_tooltips || tooltip.visible)
                     && !own_menu_open
                     && rect.contains(point)
@@ -1869,7 +1997,7 @@ pub fn hide_hover_tooltips(runtime: &Runtime, scene: &mut Scene) -> bool {
 }
 
 /// Shows or hides one tooltip by recolouring its retained primitives.
-fn show_tooltip(
+pub(super) fn show_tooltip(
     scene: &mut Scene,
     id: WidgetId,
     tooltip: &mut crate::widgets::HoverTooltipState,

@@ -879,7 +879,7 @@ fn semantic_cursors_cover_controls_editing_and_disabled_state() {
     );
     assert_eq!(
         cursor_for(runtime, Button::new("Unavailable").disabled(true)),
-        CursorIcon::Default
+        CursorIcon::NotAllowed
     );
     assert_eq!(
         cursor_for(runtime, TextInput::new("draft")),

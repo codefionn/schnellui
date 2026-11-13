@@ -151,7 +151,9 @@ pub struct BrowserPointerEvent {
 impl From<RawPointerEvent> for BrowserPointerEvent {
     fn from(value: RawPointerEvent) -> Self {
         let kind = match value.action {
-            RawPointerAction::Move => BrowserPointerKind::Move,
+            // A move to the point outside the view, so the page sees the
+            // pointer go.
+            RawPointerAction::Move | RawPointerAction::Leave => BrowserPointerKind::Move,
             RawPointerAction::Button { button, state } => BrowserPointerKind::Button {
                 button: button.into(),
                 pressed: state == RawInputState::Pressed,
