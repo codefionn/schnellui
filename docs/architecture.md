@@ -292,11 +292,11 @@ renderer and a windowed one can share one scene and each stay current.
   offset, clip, primitive count or live counts, the node falls back to `update_node`.
   A full gather drops every prefix; a scroll re-walk drops those of the fragments it
   stamped. `GpuUploadWork::ranges_patched` and `primitives_encoded` count the work.
-- Scroll re-gather. A dirty `Scroll` node re-walks its whole content run
-  (`regather_scroll`) because its offset moved every descendant. The CPU cost is the
-  number of nodes under the scroll node, and the upload is the visible instances.
-  Scroll translation participates in the inherited property tree, but updating
-  instance coordinates still costs the number of nodes under that viewport.
+- Scroll re-gather. A dirty `Scroll` node re-walks its content (`regather_scroll`)
+  because its offset moved every descendant, and rebuilds its run of slots. The walk
+  skips children that drew nothing before and draw nothing now, using child indices
+  (below), so a scroll step visits the visible nodes plus the ones entering or leaving
+  the viewport. The upload is the visible instances.
 - Epoch check. If `retained_paint_epoch == scene.paint_epoch()`, nothing was painted
   and no work is needed, even when the frame pass already cleared the lists.
 
@@ -322,6 +322,49 @@ same for the image atlas. `SurfaceRenderer::invalidate_atlases` and
 `reconcile_remount_atlases` handle remounts.
 
 Uploads are counted. `Renderer::last_upload_bytes` and `SurfaceRenderer::last_upload_bytes`
+Child indices make the scroll re-walk proportional to what is visible. A full
+gather gives every node with 16 or more children inside scroll content (or a
+`Scroll` with that many) a `ChildIndex` ([`types.rs`](../crates/schnellui/src/render_wgpu/types.rs)):
+a segment tree of the bounds each child's subtree can draw into. Bounds are in the
+content coordinates of the nearest `Scroll`, which are window coordinates minus the
+offset that scroll hands its children, so a scroll step changes the query, not the
+bounds. A node's bounds are its primitives; a text leaf with a layout box uses that
+box, because `leaf_culled` drops it whole outside the clip; a nested `Scroll` uses its
+viewport, which clips its content at any offset. The index keeps a window: the
+children whose bounds reach the clip, compared with a slack of 2 px plus 1e-5 of the
+coordinate size, so float rounding can only keep too many. At an indexed node the
+re-walk pushes the old window merged with the children the new clip reaches and keeps
+the latter. A 50,000-row list scrolled by one row visits 141 nodes, the same as a
+5000-row one.
+
+This works because of three invariants:
+
+- A child outside its index's window emits no instances, and every fragment in its
+  subtree has an empty slot. The full gather pads a slot only to the power of two
+  above its live count, which is zero for those fragments. A re-walk gives every
+  fragment it visits an exact slot, and a child only leaves the window during a walk
+  that visits it.
+- A fragment outside a window (`GpuCore::dormant`, a walk up the index chain) may keep
+  a stale offset, clip and slot position. Nothing reads them. Repaints of dormant
+  nodes are skipped, a dormant `Scroll` skips its re-walk, and a walk that brings the
+  node back into a window refreshes it. The run planners (`plan_content`,
+  `plan_chrome`) pack the slots of the fragments the walk visited, in the order it
+  recorded them (`walk_seq`, `exit_seq`). Skipped slots are empty, so the packed
+  slots still tile the run.
+- Bounds only grow until the next full gather. Before the re-walks, `try_incremental`
+  unions every repainted node's new bounds into its leaf (only the dirty ranges for a
+  ranged edit) and up the index chain. If a leaf outside the window now reaches the
+  clip, the index's scroll is queued for a re-walk, which brings the child in.
+
+A scroll whose content holds an overlay root still falls back to a full gather, as
+before. Composite translations and clips are structural changes, so they also come
+with a full gather. Nodes with fewer than 16 children are walked whole, so a scroll of
+a few wide rows, or a list nested as a chain of narrow nodes, costs the nodes under it.
+At 1920x1080 a one-row step over a list of rows with a bar and a six-glyph label took
+about 430 µs in `upload_scene` at 5000 rows and 7.5 ms at 50,000 rows. With the
+index it takes about 14 µs at both sizes. Building the indices makes a full gather of
+that list 10 to 20 percent slower: about 510 µs instead of 455 µs at 5000 rows.
+
 return `UploadBytes` (`instance_bytes` and `other_bytes`, which holds uniforms and
 atlas texels). The counter is always on, and a frame with nothing painted reports
 zero. The crate's tests also read `GpuUploadWork` (full gathers, nodes patched, scroll
@@ -335,20 +378,65 @@ and drawn after it, in `(level, order)` order, as separate layers.
 from layout and paint. Parent links resolve inherited properties for rendering,
 pointer and wheel targeting, and accessibility bounds. Changes invalidate geometry
 indexes and dirty affected accessibility nodes without requesting a layout pass.
+An incremental update only notes the instance spans it changed in the CPU mirrors.
+`GpuCore::flush_uploads` writes them once the frame's edits are done and joins spans
+that touch or sit within `UPLOAD_MERGE_GAP` (8) instances of each other. Each
+`write_buffer` costs a staging allocation and a copy command, so 2000 adjacent nodes
+that change colour go out as one write. Two nodes far apart stay two small writes.
+
 
 Both renderers have a persistent GPU picture cache split into 128-pixel tiles
-([`tile_cache.rs`](../crates/schnellui/src/render_wgpu/tile_cache.rs)). Each tile hashes
-its intersecting instances, compositing order, and relevant atlas identities and
-revisions. An unchanged frame bypasses hashing and raster work. A changed tile is
-scissored into a scratch texture and copied into the resident picture. Removed or
-moved content changes the old tile's dependencies, clearing its vacated pixels.
+([`tile_cache.rs`](../crates/schnellui/src/render_wgpu/tile_cache.rs)). Each tile has a
+fingerprint: the hashes of the instances that touch it, folded in draw order, seeded
+with the scale and the clear colour. An instance's hash covers its bytes and its layer
+tag, and for glyphs and images the atlas identity and revision. An unchanged frame
+skips fingerprinting and raster work. `merge_dirty_tiles` groups the changed tiles
+into rectangles. Each rectangle is one scissored draw into a scratch texture and one
+copy into the resident picture, so a full repaint draws the scene once. Removed or
+moved content changes the old tile's fingerprint, which clears its vacated pixels.
 `last_tile_cache_stats` reports hits and rasterized tiles. Native surfaces receive a
 copy of the cached picture; surfaces without `COPY_DST` support use full raster.
 
-This cache still scans all instances for each tile on changed frames. It has one
-picture rather than separate slices by update frequency. Dirty frames clear the
-scratch attachment as a whole, and property edits still gather instance coordinates.
-These costs remain candidates for further performance work.
+Fingerprinting follows what the upload changed. The tile cache keeps one entry per
+instance of each CPU mirror, index for index: the instance's hash and the tiles its
+clipped bounds touch. The atlas key is left out of the stored hash and mixed in when
+the hash is folded. `GpuCore::flush_uploads` records the merged spans it wrote in
+`changed_spans`. On every `encode`, `TileCache::sync_instances` re-hashes only the
+instances in those spans. A slot that grows, or a scroll run that changes size,
+reports everything from the splice to the end of the buffer, so instances that only
+moved are re-hashed too. The cache also compares the layer boundaries (`base_quads`,
+`base_chrome_start`, `base_glyphs`, `base_images`, `overlay_layers`) with the ones it
+last saw, and re-hashes every entry from the lowest boundary that moved, since an
+instance's layer tag can change without its bytes changing. Each re-hashed or dropped
+entry marks the tiles under its old and its new span. `fingerprint_tiles` restarts
+only the marked tiles from the seed and folds into them the stored hashes of the
+entries that touch them; the other tiles keep last frame's fingerprint.
+
+The cache re-hashes every instance and refolds every tile when it cannot trust its
+entries. That happens on its first frame, which includes the first frame after a
+surface resize because resize builds a new `TileCache`. It also happens after a full
+gather (`GpuCore::gather_serial` moved), after a scale change, and when the cache
+missed an upload: `GpuCore::upload_serial` is not one past the upload it last
+applied, as when `SurfaceRenderer::render` uploads and then cannot acquire the
+surface. A new clear colour, glyph atlas key or image atlas key refolds every tile
+from the stored hashes without re-hashing. `TileCache::instances_hashed` counts the
+instances the last frame hashed, and the tests in
+[`retained_tests.rs`](../crates/schnellui/src/render_wgpu/retained_tests.rs) assert
+that one recoloured node out of 14,000 instances hashes one instance, and that the
+cached picture equals a full repaint after random edits, splices, layer shifts,
+atlas writes and skipped draws.
+
+At 1920x1080 with 14,000 instances, fingerprinting a one-node colour change fell from
+about 300 µs to about 20 µs. What remains is a scan of every stored span to find the
+entries that touch a marked tile. The scan reads 16 bytes per instance and hashes
+nothing, but a changed frame is still linear in the instance count. The
+cache has one picture rather than separate slices by update frequency. Dirty frames
+clear the scratch attachment as a whole, and property edits still gather instance
+coordinates. These costs remain candidates for further performance work.
+
+The window surface asks for a `desired_maximum_frame_latency` of 1. With 2, a drag or
+a scroll that redraws every refresh keeps one finished frame queued, which adds a
+refresh interval between input and pixels.
 
 ## Text
 
@@ -770,8 +858,8 @@ with the evidence.
   New static child types are text, column, row, stack and spacer. Other widget
   changes and attribute removals request a rebuild. Templates own data descriptors,
   not preallocated scene nodes shared between applications.
-- Tile caching currently uses one picture. Changed-frame dependency checks scan
-  tiles against instances. Scroll and property updates gather changed instance
+- Tile caching currently uses one picture. Changed-frame dependency checks hash
+  every instance. Scroll and property updates gather changed instance
   coordinates; they do not yet composite independently cached scroll slices.
 - No interned primitive scene, GPU indirection cache, or indirect draws. `PaintData`
   owns primitives and GPU buffers hold direct quad, glyph and image instances.

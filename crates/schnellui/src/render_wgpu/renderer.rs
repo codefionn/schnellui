@@ -22,7 +22,7 @@ pub struct Renderer {
 
     pub(crate) core: GpuCore,
 
-    tiles: TileCache,
+    pub(crate) tiles: TileCache,
     readback: wgpu::Buffer,
 }
 
@@ -364,7 +364,10 @@ impl SurfaceRenderer {
             width,
             height,
             present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            // One queued frame at most. A second one only adds a refresh interval
+            // between input and pixels while the pointer drags or text scrolls;
+            // a frame here takes well under a refresh interval to produce.
+            desired_maximum_frame_latency: 1,
             alpha_mode,
             view_formats: vec![],
         };

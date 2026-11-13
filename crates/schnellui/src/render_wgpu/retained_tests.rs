@@ -831,7 +831,9 @@ fn ranged_edits_match_a_full_gather() {
 }
 
 /// The retained instances of `inc` must hold, node by node, what a full gather puts
-/// in `full`, and its slots must tile each buffer in draw order without overlap.
+/// in `full`, and its non-empty slots must tile each buffer in draw order. An empty
+/// slot's position carries no data: a scroll re-walk leaves those of the nodes it
+/// skips (outside a child index window) where they were.
 fn assert_same_instances(inc: &Renderer, full: &Renderer, what: &str) {
     let (a, b) = (&inc.core, &full.core);
     for (&id, &fb) in &b.fragments.by_node {
@@ -866,13 +868,17 @@ fn assert_same_instances(inc: &Renderer, full: &Renderer, what: &str) {
         // order, which is also buffer order.
         for &fi in &t.order[buf as usize] {
             let r = t.frags[fi as usize].range(buf);
+            seen += 1;
+            if r.is_empty() {
+                assert!(r.end >= r.start, "{what}: {buf:?} slot {r:?} is inverted");
+                continue;
+            }
             assert!(
-                r.start >= cursor && r.end >= r.start,
+                r.start == cursor,
                 "{what}: {buf:?} slot {r:?} overlaps or precedes {cursor}: {:?} (list pos {seen})",
                 t.frags[fi as usize]
             );
             cursor = r.end;
-            seen += 1;
         }
         assert!(seen > 0);
         assert_eq!(
@@ -1204,4 +1210,877 @@ fn tile_cache_matches_transparent_overlay_reorder_and_rotated_clip() {
         fresh.render_rgba8(&scene, &atlas)
     );
     assert_eq!(renderer.last_tile_cache_stats().rasterized, 6);
+}
+
+#[test]
+fn repaint_of_adjacent_nodes_is_one_instance_write() {
+    let Some(mut renderer) = try_renderer(1920, 1080) else {
+        return;
+    };
+    let atlas = doc_atlas();
+    let (mut scene, leaves) = grid_scene();
+    let prims = grid_prims;
+    renderer.render_rgba8(&scene, &atlas);
+    scene.clear_dirty();
+
+    // Every node changes colour: 2000 one-quad slots that sit side by side in
+    // the quad buffer. They go to the GPU as one write, not 2000.
+    for (i, leaf) in leaves.iter().enumerate() {
+        scene.replace_primitives(*leaf, prims(i, Color::rgb(200, 30, 30)));
+    }
+    let incremental = renderer.render_rgba8(&scene, &atlas);
+    let work = renderer.core.last_upload_work;
+    assert_eq!(work.full_gathers, 0);
+    assert_eq!(work.nodes_patched, 2000);
+    assert_eq!(work.instance_writes, 1);
+    assert_eq!(work.instances_written, 2000);
+    assert_eq!(renderer.last_tile_cache_stats().hits, 0);
+
+    let mut fresh = try_renderer(1920, 1080).expect("a second renderer");
+    assert_eq!(incremental, fresh.render_rgba8(&scene, &atlas));
+
+    // Two nodes far apart in the buffer stay two small writes.
+    scene.clear_dirty();
+    for i in [3, 1500] {
+        scene.replace_primitives(leaves[i], prims(i, Color::WHITE));
+    }
+    renderer.render_rgba8(&scene, &atlas);
+    let work = renderer.core.last_upload_work;
+    assert_eq!((work.instance_writes, work.instances_written), (2, 2));
+    assert_eq!(renderer.last_tile_cache_stats().rasterized, 2);
+}
+
+/// Node `i` of a 2000-node grid filling 1920x1080: a bar and six glyphs.
+fn grid_prims(i: usize, color: Color) -> Vec<Primitive> {
+    let x = (i % 15) as f32 * 128.0;
+    let y = (i / 15) as f32 * 8.0;
+    let mut prims = vec![Primitive::SolidRect {
+        rect: Rect::new(x, y, 120.0, 7.0),
+        color,
+        corner_radius: 0.0,
+    }];
+    for g in 0..6 {
+        prims.push(Primitive::GlyphQuad {
+            rect: Rect::new(x + 2.0 + g as f32 * 5.0, y + 1.0, 4.0, 5.0),
+            atlas_uv: Rect::new(0.0, 0.0, 4.0, 5.0),
+            color: Color::WHITE,
+        });
+    }
+    prims
+}
+
+/// 2000 sibling nodes of [`grid_prims`], 14,000 instances.
+fn grid_scene() -> (Scene, Vec<WidgetId>) {
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    let leaves = (0..2000)
+        .map(|i| {
+            let leaf = scene.insert(WidgetKind::Column, Some(root));
+            scene.replace_primitives(leaf, grid_prims(i, Color::WHITE));
+            leaf
+        })
+        .collect();
+    (scene, leaves)
+}
+
+/// The tile cache re-hashes what the upload changed, not the scene: one recoloured
+/// node of 14,000 instances hashes its one quad, and a node that outgrows its slot
+/// at the end of the buffer hashes only the instances from its splice on.
+#[test]
+fn one_changed_node_hashes_its_instances_not_the_scene() {
+    let Some(mut renderer) = try_renderer(1920, 1080) else {
+        return;
+    };
+    let atlas = doc_atlas();
+    let (mut scene, leaves) = grid_scene();
+    renderer.render_rgba8(&scene, &atlas);
+    let core = &renderer.core;
+    let total = core.quad_scratch.len() + core.glyph_scratch.len() + core.image_scratch.len();
+    assert!(total >= 14_000, "{total} instances");
+    assert_eq!(renderer.tiles.instances_hashed, total);
+    scene.clear_dirty();
+
+    renderer.render_rgba8(&scene, &atlas);
+    assert_eq!(renderer.tiles.instances_hashed, 0, "nothing painted");
+
+    scene.replace_primitives(leaves[1000], grid_prims(1000, Color::rgb(200, 30, 30)));
+    let recoloured = renderer.render_rgba8(&scene, &atlas);
+    assert_eq!(renderer.core.last_upload_work.full_gathers, 0);
+    assert_eq!(renderer.tiles.instances_hashed, 1, "the node's one quad");
+    assert_eq!(renderer.last_tile_cache_stats().rasterized, 1);
+    let mut fresh = try_renderer(1920, 1080).expect("a second renderer");
+    assert!(recoloured == fresh.render_rgba8(&scene, &atlas));
+    scene.clear_dirty();
+
+    // The last node gains six glyphs: its glyph slot of 8 overflows and splices.
+    let last = leaves.len() - 1;
+    let mut grown = grid_prims(last, Color::WHITE);
+    grown.extend(
+        grid_prims(last, Color::WHITE)
+            .into_iter()
+            .skip(1)
+            .map(|p| match p {
+                Primitive::GlyphQuad { rect, atlas_uv, .. } => Primitive::GlyphQuad {
+                    rect: Rect::new(rect.x + 32.0, rect.y, rect.width, rect.height),
+                    atlas_uv,
+                    color: Color::rgb(0, 200, 255),
+                },
+                other => other,
+            }),
+    );
+    scene.replace_primitives(leaves[last], grown);
+    let grown = renderer.render_rgba8(&scene, &atlas);
+    let work = renderer.core.last_upload_work;
+    assert_eq!((work.full_gathers, work.grown_slots), (0, 1));
+    let hashed = renderer.tiles.instances_hashed;
+    assert!((12..=32).contains(&hashed), "hashed {hashed}");
+    let mut fresh = try_renderer(1920, 1080).expect("a second renderer");
+    assert!(grown == fresh.render_rgba8(&scene, &atlas));
+}
+
+/// A nested scroll's scrollbar is the last quad of the buffer. Scrolling the outer
+/// viewport clips it away, so the incremental upload cuts it off the end of the
+/// mirror without writing anything: its old tile must still be repainted.
+#[test]
+fn tile_cache_clears_instances_cut_from_the_end_of_a_buffer() {
+    let (Some(mut renderer), Some(mut fresh)) = (try_renderer(384, 384), try_renderer(384, 384))
+    else {
+        return;
+    };
+    let atlas = doc_atlas();
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    let outer = scene.insert(WidgetKind::Scroll, Some(root));
+    let inner = scene.insert(WidgetKind::Scroll, Some(outer));
+    for (id, rect) in [
+        (outer, Rect::new(0.0, 0.0, 384.0, 384.0)),
+        (inner, Rect::new(0.0, 0.0, 384.0, 40.0)),
+    ] {
+        scene.set_layout(
+            id,
+            LayoutBox {
+                rect,
+                content: Rect::new(0.0, 0.0, 384.0, 1000.0),
+            },
+        );
+    }
+    scene.replace_primitives(
+        inner,
+        [Primitive::SolidRect {
+            rect: Rect::new(300.0, 10.0, 20.0, 20.0),
+            color: Color::WHITE,
+            corner_radius: 0.0,
+        }],
+    );
+    let before = renderer.render_rgba8(&scene, &atlas);
+    assert!(before != fresh.render_rgba8(&Scene::new(), &atlas));
+    let quads = renderer.core.quad_scratch.len();
+    scene.clear_dirty();
+
+    scene.set_scroll_offset(outer, Point { x: 0.0, y: 100.0 });
+    let after = renderer.render_rgba8(&scene, &atlas);
+    let work = renderer.core.last_upload_work;
+    assert_eq!((work.full_gathers, work.scroll_regions), (0, 1));
+    assert!(
+        renderer.core.quad_scratch.len() < quads,
+        "the mirror shrank"
+    );
+    assert_eq!(renderer.last_tile_cache_stats().rasterized, 1);
+    assert!(after == fresh.render_rgba8(&scene, &atlas));
+}
+
+/// Appends 13 to 36 random primitives to `id`, so its slots usually overflow and
+/// splice the mirrors, moving every slot and layer boundary behind it.
+fn grow_node(world: &mut World, rng: &mut Rng, id: WidgetId) {
+    let mut prims = world
+        .scene
+        .paint(id)
+        .map_or_else(Vec::new, |p| p.primitives.clone());
+    while prims.len() < 13 {
+        prims.extend(random_prims(rng, world.image));
+    }
+    for _ in 0..3 {
+        prims.extend(random_prims(rng, world.image));
+    }
+    world.scene.replace_primitives(id, prims);
+}
+
+/// A live child of `parent`, or any live node.
+fn child_of(world: &World, rng: &mut Rng, parent: WidgetId) -> WidgetId {
+    match world.scene.node(parent).map(|n| n.children.clone()) {
+        Some(children) if !children.is_empty() => children[rng.below(children.len())],
+        _ => world.nodes[rng.below(world.nodes.len())],
+    }
+}
+
+/// Random edits on a surface of 3x3 or more tiles: after every frame the tile
+/// cache's picture must equal a full repaint of a full gather. This is the test
+/// that catches a missed invalidation. Besides `mutate`, the steps grow nodes past
+/// their slots in the base layer and inside an overlay (the splice moves the layer
+/// boundaries behind it), write both atlases, upload a frame without drawing it,
+/// draw a different scene, rescale and resize.
+#[test]
+fn tile_cache_matches_a_full_repaint_on_random_edits() {
+    for seed in [0x7115_CA5E_0000_0001, 0xA11A_5000_FEED_0002] {
+        tile_equivalence(seed, 220);
+    }
+}
+
+fn tile_equivalence(seed: u64, steps: usize) {
+    let (Some(mut inc), Some(mut full)) = (try_renderer(384, 384), try_renderer(384, 384)) else {
+        return;
+    };
+    let mut atlas = doc_atlas();
+    let mut rng = Rng(seed);
+    let mut world = build_world(&mut rng);
+    let mut other = build_world(&mut Rng(seed ^ 0xFFFF_0000));
+    let (mut size, mut scale) = ((384, 384), 3.0);
+    inc.set_scale(scale);
+    full.set_scale(scale);
+    let (mut partial, mut grown, mut shifted) = (0, 0, 0);
+    for step in 0..steps {
+        let op = match rng.below(100) {
+            0..=54 => mutate(&mut world, &mut rng),
+            55..=64 => {
+                let id = child_of(&world, &mut rng, world.nodes[1]);
+                grow_node(&mut world, &mut rng, id);
+                "grow in base"
+            }
+            65..=74 => {
+                let o = world.overlays[rng.below(world.overlays.len())];
+                let id = child_of(&world, &mut rng, o);
+                grow_node(&mut world, &mut rng, id);
+                "grow in overlay"
+            }
+            75..=79 => {
+                let value = rng.below(256) as u8;
+                atlas.write_coverage(
+                    schnellui::text::AtlasRect {
+                        x: 0,
+                        y: 0,
+                        width: 4,
+                        height: 8,
+                    },
+                    &[value; 32],
+                );
+                "glyph atlas write"
+            }
+            80..=84 => {
+                let rect = schnellui::scene::TexelRect {
+                    x: world.image.0 as u32,
+                    y: world.image.1 as u32,
+                    width: 2,
+                    height: 2,
+                };
+                let texels: Vec<u8> = (0..16).map(|_| rng.below(256) as u8).collect();
+                assert!(world.scene.images_mut().write_rect(rect, &texels));
+                "image atlas write"
+            }
+            85..=89 => {
+                // A window frame that uploads and then fails to acquire its
+                // surface: the tile cache never sees that upload's spans.
+                mutate(&mut world, &mut rng);
+                let _ = inc
+                    .core
+                    .upload_scene(&world.scene, &atlas, size.0, size.1, scale);
+                if rng.below(2) == 0 {
+                    world.scene.clear_dirty();
+                }
+                mutate(&mut world, &mut rng);
+                "upload without draw"
+            }
+            90..=93 => {
+                let got = inc.render_rgba8(&other.scene, &atlas);
+                full.core.invalidate_retained();
+                full.tiles.invalidate();
+                let want = full.render_rgba8(&other.scene, &atlas);
+                assert!(got == want, "step {step}: the other scene differs");
+                other.scene.clear_dirty();
+                "other scene"
+            }
+            94..=96 => {
+                scale = if scale == 3.0 { 2.5 } else { 3.0 };
+                inc.set_scale(scale);
+                full.set_scale(scale);
+                "rescale"
+            }
+            _ => {
+                size = if size == (384, 384) {
+                    (400, 330)
+                } else {
+                    (384, 384)
+                };
+                inc.resize(size.0, size.1);
+                full.resize(size.0, size.1);
+                "resize"
+            }
+        };
+        let layers_before = inc.core.overlay_layers.clone();
+        let got = inc.render_rgba8(&world.scene, &atlas);
+        let work = inc.core.last_upload_work;
+        let core = &inc.core;
+        let total = core.quad_scratch.len() + core.glyph_scratch.len() + core.image_scratch.len();
+        if work.full_gathers == 0 && inc.tiles.instances_hashed < total {
+            partial += 1;
+            grown += usize::from(work.grown_slots > 0);
+            shifted += usize::from(core.overlay_layers != layers_before);
+        }
+        full.core.invalidate_retained();
+        full.tiles.invalidate();
+        let want = full.render_rgba8(&world.scene, &atlas);
+        assert!(
+            got == want,
+            "step {step} ({op}): the tile cache's picture differs from a full repaint"
+        );
+        if rng.below(3) != 0 {
+            world.scene.clear_dirty();
+        }
+    }
+    eprintln!(
+        "tile seed {seed:#x}: {partial} frames hashed part of the scene, {grown} of them \
+         grew a slot, {shifted} moved overlay boundaries"
+    );
+    assert!(partial > steps / 3, "partial re-hash exercised: {partial}");
+    assert!(
+        grown > 10 && shifted > 5,
+        "splices and layer shifts exercised"
+    );
+}
+
+// --- scroll re-walk cost ----------------------------------------------------------
+
+const LIST_W: u32 = 1920;
+const LIST_H: u32 = 1080;
+
+/// Row `i`'s colour: distinct for neighbouring rows, so a scroll step changes bytes.
+fn list_color(i: usize) -> Color {
+    Color::rgb(
+        (i * 37 % 251) as u8,
+        (i * 91 % 241) as u8,
+        (i * 53 % 239) as u8,
+    )
+}
+
+/// A `rows`-row list filling a 1920x1080 viewport: `Scroll > Column > row`, each row
+/// a bar in its own colour with a six-glyph `Text` label as its child.
+fn long_list(rows: usize) -> (Scene, WidgetId, Vec<WidgetId>) {
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    let scroll = scene.insert(WidgetKind::Scroll, Some(root));
+    let column = scene.insert(WidgetKind::Column, Some(scroll));
+    let height = rows as f32 * ROW_H;
+    let viewport = Rect::new(0.0, 0.0, LIST_W as f32, LIST_H as f32);
+    scene.set_layout(
+        scroll,
+        LayoutBox {
+            rect: viewport,
+            content: Rect::new(0.0, 0.0, LIST_W as f32, height),
+        },
+    );
+    scene.set_layout(
+        column,
+        LayoutBox {
+            rect: Rect::new(0.0, 0.0, LIST_W as f32, height),
+            content: Rect::ZERO,
+        },
+    );
+    let mut ids = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let y = i as f32 * ROW_H;
+        let row = scene.insert(WidgetKind::Row, Some(column));
+        scene.set_layout(
+            row,
+            LayoutBox {
+                rect: Rect::new(0.0, y, LIST_W as f32, ROW_H),
+                content: Rect::ZERO,
+            },
+        );
+        scene.replace_primitives(
+            row,
+            [Primitive::SolidRect {
+                rect: Rect::new(0.0, y, 400.0, ROW_H - 1.0),
+                color: list_color(i),
+                corner_radius: 0.0,
+            }],
+        );
+        let label = scene.insert(WidgetKind::Text, Some(row));
+        scene.set_layout(
+            label,
+            LayoutBox {
+                rect: Rect::new(2.0, y + 2.0, 30.0, 8.0),
+                content: Rect::ZERO,
+            },
+        );
+        scene.replace_primitives(label, row_prims(i, list_color(i + 1)).split_off(1));
+        ids.push(row);
+    }
+    (scene, scroll, ids)
+}
+
+/// One-row scroll steps over a 5000- and a 50,000-row list visit the rows in or
+/// leaving the viewport plus a small constant, not every row, and big jumps visit
+/// the old and the new window. Pixels equal a fresh renderer after each phase.
+#[test]
+fn scroll_step_walks_the_visible_rows_not_the_list() {
+    let atlas = doc_atlas();
+    // 1080 / 16 = 67.5 rows show; each row is two nodes.
+    let window = (LIST_H as f32 / ROW_H) as usize + 2;
+    let mut walked_by_size = Vec::new();
+    for rows in [5000, 50_000] {
+        let (Some(mut r), Some(mut fresh)) =
+            (try_renderer(LIST_W, LIST_H), try_renderer(LIST_W, LIST_H))
+        else {
+            return;
+        };
+        let (mut scene, scroll, _) = long_list(rows);
+        let _ = r.render_rgba8(&scene, &atlas);
+        scene.clear_dirty();
+        let mut most = 0;
+        for step in 1..=4 {
+            scene.set_scroll_offset(
+                scroll,
+                Point {
+                    x: 0.0,
+                    y: step as f32 * ROW_H,
+                },
+            );
+            let _ = r.core.upload_scene(&scene, &atlas, LIST_W, LIST_H, 1.0);
+            let work = r.core.last_upload_work;
+            assert_eq!((work.full_gathers, work.scroll_regions), (0, 1));
+            most = most.max(work.walked_nodes);
+            scene.clear_dirty();
+        }
+        assert!(
+            most <= 2 * (window + 2) + 8,
+            "{rows} rows: a one-row step walked {most} nodes"
+        );
+        let got = r.render_rgba8(&scene, &atlas);
+        assert!(
+            got == fresh.render_rgba8(&scene, &atlas),
+            "{rows} rows: step"
+        );
+        scene.clear_dirty();
+
+        // A jump to the middle, then past the end: the old and the new window.
+        for y in [rows as f32 * ROW_H / 2.0, rows as f32 * ROW_H * 2.0] {
+            scene.set_scroll_offset(scroll, Point { x: 0.0, y });
+            let got = r.render_rgba8(&scene, &atlas);
+            let work = r.core.last_upload_work;
+            assert_eq!(work.full_gathers, 0);
+            assert!(
+                work.walked_nodes <= 4 * (window + 2) + 8,
+                "{rows} rows: a jump walked {} nodes",
+                work.walked_nodes
+            );
+            fresh.core.invalidate_retained();
+            assert!(
+                got == fresh.render_rgba8(&scene, &atlas),
+                "{rows} rows: jump"
+            );
+            scene.clear_dirty();
+        }
+        walked_by_size.push(most);
+    }
+    assert_eq!(
+        walked_by_size[0], walked_by_size[1],
+        "a one-row step walks the same nodes at 5000 and 50,000 rows"
+    );
+}
+
+/// A list world for the windowed scroll re-walk: an outer `Scroll > Column` of
+/// rows with uneven heights, each a bar and a text label. Every 23rd row holds a
+/// horizontal scroll of 20 cells, row 10 a vertical scroll of 40 sub-rows, and
+/// some rows carry a composite translation or clip.
+struct ListWorld {
+    scene: Scene,
+    outer: WidgetId,
+    inners: Vec<WidgetId>,
+    column: WidgetId,
+    rows: Vec<WidgetId>,
+    height: f32,
+}
+
+const LW_W: f32 = 256.0;
+
+fn list_row(scene: &mut Scene, column: WidgetId, i: usize, y: f32, h: f32) -> WidgetId {
+    let row = scene.insert(WidgetKind::Row, Some(column));
+    scene.set_layout(
+        row,
+        LayoutBox {
+            rect: Rect::new(0.0, y, LW_W + 60.0, h),
+            content: Rect::ZERO,
+        },
+    );
+    scene.replace_primitives(
+        row,
+        [Primitive::SolidRect {
+            rect: Rect::new(4.0, y, LW_W + 50.0, h - 1.0),
+            color: list_color(i),
+            corner_radius: (i % 3) as f32,
+        }],
+    );
+    let label = scene.insert(WidgetKind::Text, Some(row));
+    scene.set_layout(
+        label,
+        LayoutBox {
+            rect: Rect::new(8.0, y + 1.0, 30.0, h.min(8.0)),
+            content: Rect::ZERO,
+        },
+    );
+    let glyphs: Vec<Primitive> = (0..5)
+        .map(|g| Primitive::GlyphQuad {
+            rect: Rect::new(8.0 + g as f32 * 5.0, y + 1.0, 4.0, 8.0),
+            atlas_uv: Rect::new(0.0, 0.0, 4.0, 8.0),
+            color: list_color(i + 7),
+        })
+        .collect();
+    scene.replace_primitives(label, glyphs);
+    row
+}
+
+fn build_list_world(rng: &mut Rng, count: usize) -> ListWorld {
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    let outer = scene.insert(WidgetKind::Scroll, Some(root));
+    let column = scene.insert(WidgetKind::Column, Some(outer));
+    let mut rows = Vec::new();
+    let mut inners = Vec::new();
+    let mut y = 0.0;
+    for i in 0..count {
+        let h = 6.0 + rng.below(25) as f32;
+        let h = if i % 23 == 0 || i == 10 {
+            h.max(40.0)
+        } else {
+            h
+        };
+        let row = list_row(&mut scene, column, i, y, h);
+        if i % 23 == 0 {
+            // A horizontal scroll of 20 cells, wider than its viewport.
+            let inner = scene.insert(WidgetKind::Scroll, Some(row));
+            scene.set_layout(
+                inner,
+                LayoutBox {
+                    rect: Rect::new(40.0, y + 2.0, 150.0, h - 4.0),
+                    content: Rect::new(40.0, y + 2.0, 600.0, h - 4.0),
+                },
+            );
+            scene.replace_primitives(
+                inner,
+                [Primitive::SolidRect {
+                    rect: Rect::new(40.0, y + h - 4.0, 30.0, 2.0),
+                    color: Color::WHITE,
+                    corner_radius: 1.0,
+                }],
+            );
+            for j in 0..20 {
+                let cell = scene.insert(WidgetKind::Column, Some(inner));
+                scene.replace_primitives(
+                    cell,
+                    [Primitive::SolidRect {
+                        rect: Rect::new(40.0 + j as f32 * 30.0, y + 3.0, 26.0, h - 8.0),
+                        color: list_color(i * 31 + j),
+                        corner_radius: 0.0,
+                    }],
+                );
+            }
+            inners.push(inner);
+        }
+        if i == 10 {
+            // A vertical scroll holding its own list of 40 sub-rows.
+            let inner = scene.insert(WidgetKind::Scroll, Some(row));
+            scene.set_layout(
+                inner,
+                LayoutBox {
+                    rect: Rect::new(100.0, y + 2.0, 120.0, h - 4.0),
+                    content: Rect::new(100.0, y + 2.0, 120.0, 400.0),
+                },
+            );
+            for j in 0..40 {
+                let sub = scene.insert(WidgetKind::Row, Some(inner));
+                scene.replace_primitives(
+                    sub,
+                    [Primitive::SolidRect {
+                        rect: Rect::new(100.0, y + 2.0 + j as f32 * 10.0, 120.0, 9.0),
+                        color: list_color(i * 17 + j),
+                        corner_radius: 0.0,
+                    }],
+                );
+            }
+            inners.push(inner);
+        }
+        match i % 37 {
+            5 => scene.set_composite_properties(
+                row,
+                schnellui::scene::CompositeProperties {
+                    translation: Point { x: 12.0, y: 3.0 },
+                    clip: None,
+                    clip_spares_overlays: false,
+                },
+            ),
+            9 => scene.set_composite_properties(
+                row,
+                schnellui::scene::CompositeProperties {
+                    translation: Point::default(),
+                    clip: Some(Rect::new(0.0, y, 90.0, h)),
+                    clip_spares_overlays: false,
+                },
+            ),
+            _ => {}
+        }
+        rows.push(row);
+        y += h;
+    }
+    scene.set_layout(
+        outer,
+        LayoutBox {
+            rect: Rect::new(0.0, 0.0, LW_W, LW_W),
+            content: Rect::new(0.0, 0.0, LW_W + 60.0, y),
+        },
+    );
+    scene.replace_primitives(
+        outer,
+        [Primitive::SolidRect {
+            rect: Rect::new(LW_W - 6.0, 4.0, 4.0, 40.0),
+            color: Color::rgb(250, 250, 250),
+            corner_radius: 2.0,
+        }],
+    );
+    ListWorld {
+        scene,
+        outer,
+        inners,
+        column,
+        rows,
+        height: y,
+    }
+}
+
+/// One random step on a list world: scrolls of every size and direction on the
+/// outer and the nested viewports, repaints, moves and ranged edits of rows that
+/// are usually off screen, inserts and removes.
+fn list_step(world: &mut ListWorld, rng: &mut Rng) -> &'static str {
+    world.rows.retain(|&id| world.scene.node(id).is_some());
+    world.inners.retain(|&id| world.scene.node(id).is_some());
+    let at = |w: &ListWorld| w.scene.scroll_offset(w.outer);
+    let row = world.rows[rng.below(world.rows.len())];
+    match rng.below(100) {
+        0..=24 => {
+            let now = at(world);
+            let dy = (rng.below(7) as f32 - 3.0) * 7.5;
+            let dx = if rng.below(5) == 0 {
+                rng.below(9) as f32 - 4.0
+            } else {
+                0.0
+            };
+            world.scene.set_scroll_offset(
+                world.outer,
+                Point {
+                    x: now.x + dx,
+                    y: now.y + dy,
+                },
+            );
+            "small step"
+        }
+        25..=36 => {
+            let y = rng.unit() * (world.height + 600.0) - 300.0;
+            world
+                .scene
+                .set_scroll_offset(world.outer, Point { x: 0.0, y });
+            "jump"
+        }
+        37..=41 => {
+            let y = if rng.below(2) == 0 {
+                0.0
+            } else {
+                world.height - LW_W
+            };
+            world
+                .scene
+                .set_scroll_offset(world.outer, Point { x: 0.0, y });
+            "to an end"
+        }
+        42..=51 => {
+            if !world.inners.is_empty() {
+                let inner = world.inners[rng.below(world.inners.len())];
+                let to = Point {
+                    x: rng.below(500) as f32 - 20.0,
+                    y: rng.below(400) as f32 - 20.0,
+                };
+                world.scene.set_scroll_offset(inner, to);
+                if rng.below(2) == 0 {
+                    let now = at(world);
+                    world.scene.set_scroll_offset(
+                        world.outer,
+                        Point {
+                            x: now.x,
+                            y: now.y + 5.0,
+                        },
+                    );
+                }
+            }
+            "nested scroll"
+        }
+        52..=63 => {
+            world.scene.set_color(row, rng.color());
+            "recolor"
+        }
+        64..=71 => {
+            // Repaint a row so it draws where the viewport is now: a row far off
+            // screen whose bounds suddenly reach the clip.
+            let top = at(world).y;
+            let rect = Rect::new(
+                rng.unit() * 200.0,
+                top + rng.unit() * 200.0,
+                20.0 + rng.unit() * 40.0,
+                4.0 + rng.unit() * 20.0,
+            );
+            world.scene.replace_primitives(
+                row,
+                [Primitive::SolidRect {
+                    rect,
+                    color: rng.color(),
+                    corner_radius: 0.0,
+                }],
+            );
+            "repaint into view"
+        }
+        72..=77 => {
+            if let Some(label) = world.scene.node(row).map(|n| n.children[0]) {
+                let len = world.scene.paint(label).map_or(0, |p| p.primitives.len());
+                if len > 0 {
+                    let color = rng.color();
+                    for prim in world.scene.paint_range_mut(label, 0..len.min(2)) {
+                        if let Primitive::GlyphQuad { color: c, .. } = prim {
+                            *c = color;
+                        }
+                    }
+                }
+            }
+            "ranged"
+        }
+        78..=83 => {
+            // Move a row's layout box and paint (no relayout of the others).
+            let b = world.scene.layout(row).copied().unwrap_or_default();
+            let dy = rng.below(41) as f32 - 20.0;
+            world.scene.set_layout(
+                row,
+                LayoutBox {
+                    rect: Rect::new(b.rect.x, b.rect.y + dy, b.rect.width, b.rect.height),
+                    content: Rect::ZERO,
+                },
+            );
+            let prims: Vec<Primitive> = world
+                .scene
+                .paint(row)
+                .map_or_else(Vec::new, |p| p.primitives.clone())
+                .into_iter()
+                .map(|p| match p {
+                    Primitive::SolidRect {
+                        rect,
+                        color,
+                        corner_radius,
+                    } => Primitive::SolidRect {
+                        rect: Rect::new(rect.x, rect.y + dy, rect.width, rect.height),
+                        color,
+                        corner_radius,
+                    },
+                    other => other,
+                })
+                .collect();
+            world.scene.replace_primitives(row, prims);
+            "move"
+        }
+        84..=89 => {
+            let y = rng.unit() * world.height;
+            let i = world.rows.len() + rng.below(1000);
+            let id = list_row(&mut world.scene, world.column, i, y, 12.0);
+            world.rows.push(id);
+            "insert"
+        }
+        90..=93 => {
+            if world.rows.len() > 30 {
+                let _ = world.scene.remove_subtree(row);
+            }
+            "remove"
+        }
+        94..=96 => {
+            world.scene.replace_primitives(
+                world.outer,
+                [Primitive::SolidRect {
+                    rect: Rect::new(LW_W - 6.0, rng.unit() * 200.0, 4.0, 40.0),
+                    color: rng.color(),
+                    corner_radius: 2.0,
+                }],
+            );
+            "scrollbar"
+        }
+        _ => {
+            for _ in 0..3 {
+                let row = world.rows[rng.below(world.rows.len())];
+                world.scene.set_color(row, rng.color());
+            }
+            let now = at(world);
+            world.scene.set_scroll_offset(
+                world.outer,
+                Point {
+                    x: now.x,
+                    y: now.y - 11.0,
+                },
+            );
+            "burst and step"
+        }
+    }
+}
+
+/// Random scroll steps, jumps, nested scrolls, repaints, moves, inserts and
+/// removes on a list of uneven rows: after every frame the windowed re-walk must
+/// hold, node by node, what a full gather holds, and draw the same pixels.
+#[test]
+fn windowed_scroll_matches_a_full_gather_on_random_scrolls() {
+    for seed in [
+        0x5C70_11ED_0000_0001,
+        0x0BAD_5EED_1234_5678,
+        0x7777_AAAA_0000_0003,
+    ] {
+        list_equivalence(seed, 300);
+    }
+}
+
+fn list_equivalence(seed: u64, steps: usize) {
+    let (Some(mut inc), Some(mut full)) = (try_renderer(256, 256), try_renderer(256, 256)) else {
+        return;
+    };
+    let atlas = doc_atlas();
+    let mut rng = Rng(seed);
+    let mut world = build_list_world(&mut rng, 400);
+    let nodes = world.scene.len();
+    let (mut windowed, mut gathers) = (0, 0);
+    for step in 0..steps {
+        let op = list_step(&mut world, &mut rng);
+        let got = inc.render_rgba8(&world.scene, &atlas);
+        let work = inc.core.last_upload_work;
+        gathers += work.full_gathers;
+        if work.scroll_regions > 0 && work.walked_nodes < nodes / 4 {
+            windowed += 1;
+        }
+        full.core.invalidate_retained();
+        let want = full.render_rgba8(&world.scene, &atlas);
+        assert_same_instances(&inc, &full, &format!("seed {seed:#x} step {step} ({op})"));
+        assert!(
+            got == want,
+            "seed {seed:#x} step {step} ({op}): windowed render differs from a full gather"
+        );
+        if rng.below(4) != 0 {
+            world.scene.clear_dirty();
+        }
+    }
+    eprintln!("list seed {seed:#x}: {windowed} windowed re-walks, {gathers} full gathers");
+    assert!(
+        windowed > steps / 4,
+        "windowed re-walks exercised: {windowed}"
+    );
 }

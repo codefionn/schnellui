@@ -230,8 +230,21 @@ pub(crate) struct GpuFragment {
     pub(crate) chrome: bool,
     /// A scroll's (begin, end) marker fragment indices.
     pub(crate) region: Option<(u32, u32)>,
+    /// A scroll whose content holds an overlay root, which a re-walk cannot place.
+    pub(crate) has_overlay: bool,
     /// Walk generation that last refreshed this fragment (region re-walks).
     pub(crate) stamp: u32,
+    /// The nearest ancestor with a [`ChildIndex`] (`NO_INDEX` if none) and the
+    /// position of the child of that ancestor this node sits under.
+    pub(crate) scope: u32,
+    pub(crate) scope_child: u32,
+    /// The node's bounds count towards `scope`'s leaf: no `Scroll` lies between.
+    pub(crate) bounded: bool,
+    /// Offset minus the content origin of the nearest `Scroll` above: constant
+    /// while the structure is.
+    pub(crate) rel: Point,
+    /// This node's own [`ChildIndex`], or `NO_INDEX`.
+    pub(crate) index: u32,
 }
 
 impl GpuFragment {
@@ -280,6 +293,166 @@ impl FragmentTable {
     }
 }
 
+/// `GpuFragment::scope` / `index` value for "no child index".
+pub(crate) const NO_INDEX: u32 = u32::MAX;
+
+/// Slack, in logical pixels, added around a query before it is compared with
+/// child bounds, plus a relative part for large coordinates. Bounds and queries
+/// are computed in a different order than the exact per-primitive cull, so they
+/// can differ by a few ulps; the slack makes the index only ever keep too much.
+const INDEX_SLACK: f32 = 2.0;
+const INDEX_SLACK_REL: f32 = 1.0e-5;
+
+/// Whether `bounds` may reach `query` (inflated by the index slack). An empty
+/// query reaches nothing: every primitive under it is culled.
+pub(crate) fn reaches(bounds: &Rect, query: &Rect) -> bool {
+    if bounds.is_empty() || query.is_empty() {
+        return false;
+    }
+    let m = INDEX_SLACK
+        + INDEX_SLACK_REL
+            * query
+                .x
+                .abs()
+                .max(query.y.abs())
+                .max(query.right().abs())
+                .max(query.bottom().abs());
+    bounds.x < query.right() + m
+        && bounds.right() > query.x - m
+        && bounds.y < query.bottom() + m
+        && bounds.bottom() > query.y - m
+}
+
+/// The children of one wide node inside scroll content, with the bounds each
+/// child's subtree can draw into, in the content coordinates of the nearest
+/// `Scroll` (window position minus that scroll's content origin). A scroll step
+/// moves the origin, not the bounds, so the children that reach the new clip are
+/// a query instead of a walk.
+///
+/// Bounds only grow until the next full gather: a repainted node unions its new
+/// bounds in, nothing ever shrinks them. A nested `Scroll` contributes its
+/// viewport and its own primitives, which bound everything its content can draw
+/// whatever its offset.
+#[derive(Default)]
+pub(crate) struct ChildIndex {
+    /// The nearest `Scroll` at or above the indexed node.
+    pub(crate) scroll: WidgetId,
+    /// Number of children, and the power-of-two leaf offset of `tree`.
+    pub(crate) leaves: u32,
+    pub(crate) size: u32,
+    /// Segment tree of bounds: `tree[size + k]` covers child `k`, `tree[i]` the
+    /// union of `tree[2i]` and `tree[2i + 1]`.
+    pub(crate) tree: Vec<Rect>,
+    /// Ascending positions of the children the last walk kept: every child
+    /// outside it emits nothing and owns empty slots.
+    pub(crate) window: Vec<u32>,
+    pub(crate) in_window: Vec<bool>,
+    /// The clip the node handed its children at its last walk, in content
+    /// coordinates.
+    pub(crate) query: Rect,
+    /// The index above this one and the child of it this node sits under.
+    pub(crate) parent: u32,
+    pub(crate) parent_child: u32,
+    /// The parent index uses the same coordinates, so this index's total counts
+    /// towards its leaf.
+    pub(crate) propagate: bool,
+}
+
+impl ChildIndex {
+    pub(crate) fn reset(&mut self, scroll: WidgetId, leaves: usize, query: Rect) {
+        self.scroll = scroll;
+        self.leaves = leaves as u32;
+        self.size = leaves.next_power_of_two().max(1) as u32;
+        self.tree.clear();
+        self.tree.resize(2 * self.size as usize, Rect::ZERO);
+        self.window.clear();
+        self.in_window.clear();
+        self.in_window.resize(leaves, false);
+        self.query = query;
+    }
+
+    /// Unions `r` into leaf `k` without updating the inner nodes ([`Self::build`]).
+    pub(crate) fn add(&mut self, k: u32, r: Rect) {
+        let leaf = &mut self.tree[(self.size + k) as usize];
+        *leaf = leaf.union(&r);
+    }
+
+    pub(crate) fn build(&mut self) {
+        for i in (1..self.size as usize).rev() {
+            self.tree[i] = self.tree[2 * i].union(&self.tree[2 * i + 1]);
+        }
+    }
+
+    /// Unions `r` into leaf `k` and its ancestors. Returns whether the leaf grew.
+    pub(crate) fn grow(&mut self, k: u32, r: Rect) -> bool {
+        let mut i = (self.size + k) as usize;
+        let leaf = self.tree[i].union(&r);
+        if leaf == self.tree[i] {
+            return false;
+        }
+        self.tree[i] = leaf;
+        while i > 1 {
+            i /= 2;
+            let next = self.tree[2 * i].union(&self.tree[2 * i + 1]);
+            if next == self.tree[i] {
+                break;
+            }
+            self.tree[i] = next;
+        }
+        true
+    }
+
+    pub(crate) fn leaf(&self, k: u32) -> Rect {
+        self.tree[(self.size + k) as usize]
+    }
+
+    pub(crate) fn total(&self) -> Rect {
+        self.tree[1]
+    }
+
+    /// Appends, ascending, the children whose bounds reach `query`. Visits only
+    /// the tree nodes that reach it: O(hits * log children).
+    pub(crate) fn query_into(&self, query: Rect, out: &mut Vec<u32>) {
+        if self.leaves == 0 {
+            return;
+        }
+        // Depth is at most 32, and the stack holds at most one sibling per level.
+        let mut stack = [0u32; 64];
+        stack[0] = 1;
+        let mut sp = 1;
+        while sp > 0 {
+            sp -= 1;
+            let i = stack[sp];
+            if !reaches(&self.tree[i as usize], &query) {
+                continue;
+            }
+            if i >= self.size {
+                if i - self.size < self.leaves {
+                    out.push(i - self.size);
+                }
+            } else {
+                stack[sp] = 2 * i + 1;
+                stack[sp + 1] = 2 * i;
+                sp += 2;
+            }
+        }
+    }
+
+    /// Recomputes the window from the bounds and `query` after a full gather.
+    pub(crate) fn refresh_window(&mut self) {
+        let mut window = std::mem::take(&mut self.window);
+        for &k in &window {
+            self.in_window[k as usize] = false;
+        }
+        window.clear();
+        self.query_into(self.query, &mut window);
+        for &k in &window {
+            self.in_window[k as usize] = true;
+        }
+        self.window = window;
+    }
+}
+
 /// Bytes handed to `queue.write_buffer` / `write_texture` by one frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UploadBytes {
@@ -304,6 +477,8 @@ pub(crate) struct GpuUploadWork {
     pub(crate) nodes_patched: usize,
     /// `Scroll` content runs re-walked.
     pub(crate) scroll_regions: usize,
+    /// Nodes the scroll re-walks visited.
+    pub(crate) walked_nodes: usize,
     /// Slots that outgrew their capacity and shifted the slots behind them.
     pub(crate) grown_slots: usize,
     /// Paint-dirty nodes updated from their recorded primitive ranges only.
