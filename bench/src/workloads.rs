@@ -370,6 +370,17 @@ fn textarea_app(lines: usize) -> App {
 }
 
 fn textarea_app_wrapped(lines: usize, wrap: WrapMode) -> App {
+    // mid-document: `lines / 2` lines above the last
+    textarea_app_at(lines, wrap, (lines - 1) - lines / 2)
+}
+
+/// Line the typing rows edit: inside the 600px window, so the edit is painted.
+/// Lines below the window own no primitives, so typing there would measure
+/// nothing but the shaping.
+const TEXTAREA_TYPE_LINE: usize = 10;
+
+/// [`textarea_app_wrapped`] with the caret on line `caret_line`.
+fn textarea_app_at(lines: usize, wrap: WrapMode, caret_line: usize) -> App {
     // Line 0 is wider than any other, so typing never changes the measured size
     // (a layout-dirty edit would add Taffy's allocations at small n only).
     let source = std::iter::once("=".repeat(160))
@@ -386,8 +397,8 @@ fn textarea_app_wrapped(lines: usize, wrap: WrapMode) -> App {
         .find_widget(Role::MultilineTextInput, None)
         .expect("mounted text area");
     app.focus(Some(id));
-    // The caret starts at the end; walk it up to the middle.
-    for _ in 0..lines / 2 {
+    // The caret starts at the end; walk it up to `caret_line`.
+    for _ in 0..(lines - 1).saturating_sub(caret_line) {
         app.dispatch_edit_key(EditKey::Up { select: false });
     }
     app.dispatch_edit_key(EditKey::Home { select: false });
@@ -399,10 +410,11 @@ fn textarea_app_wrapped(lines: usize, wrap: WrapMode) -> App {
     app
 }
 
-/// Insert one character in the middle of an `lines`-line TextArea, then remove it on
-/// the next iteration (so the document stays the same size), + frame.
+/// Insert one character on a visible line near the top of an `lines`-line TextArea
+/// (the middle line of a shorter one), then remove it on the next iteration (so the
+/// document stays the same size), + frame.
 pub(crate) fn textarea_type_char_closure(lines: usize) -> Box<dyn FnMut()> {
-    let mut app = textarea_app(lines);
+    let mut app = textarea_app_at(lines, WrapMode::NoWrap, TEXTAREA_TYPE_LINE.min(lines / 2));
     // Warm: rasterise 'x', grow pools, settle the second-invocation state.
     for _ in 0..3 {
         app.dispatch_edit_key(EditKey::Insert("x"));

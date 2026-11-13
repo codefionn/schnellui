@@ -185,8 +185,15 @@ stay at the mounted size. `SCHNELLUI_HEADLESS_WINDOWED=1` selects it for every
    `Scene::layout_dirty` only. Then `compute_with` runs Taffy (see below), followed by
    `clamp_scroll_offsets`, `emit_wrapped_paint` and `reposition_paint`.
 7. Per-frame paint emitters that do not depend on layout: `emit_terminal_grid_paint`
-   and `emit_scrolled_text_areas`. Scrolling never relayouts, so a text area in a
-   scroll view re-emits its visible row band here.
+   and `emit_scrolled_text_areas`. A text area paints only a band of rows: the rows
+   that can show plus one screenful of overscan on each side. Inside a `Scroll` the
+   viewport decides which rows show. Outside one, the host window does, after the
+   composited translation and clips apply. Lines outside the band own no
+   primitives, so an edit's splice moves only band rows, never the document below
+   the window. Scrolling and a compositor slide never relayout, and a window resize
+   can leave the area's box where it was, so this pass re-emits the area once its
+   band no longer covers what shows.
+   Without a known window (a bare `Scene` with no host) every line is painted.
 8. `PaintBindings::reapply` puts bound colours back on nodes that widget code
    repainted in step 4 to 7, without calling the closures.
 

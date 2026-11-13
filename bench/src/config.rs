@@ -402,7 +402,7 @@ pub(crate) fn paths() -> Vec<BenchPath> {
         BenchPath {
             name: "textarea_type_char",
             budget: Budget::Report,
-            note: "insert one character in the middle of a 2000-line TextArea (then Backspace it on the next iteration) + frame. User-initiated edit work: only the edited line is re-hashed, reshaped and re-emitted (the paint is spliced in place); the other 1,999 lines come from the line table. Reported, never gated; the scale_textarea_* rows gate size independence.",
+            note: "insert one character on line 10 of a 2000-line TextArea in an 800x600 window (then Backspace it on the next iteration) + frame. User-initiated edit work: only the edited line is re-hashed, reshaped and re-emitted, spliced into the rows the window shows (lines below it own no primitives); the other 1,999 lines come from the line table. Reported, never gated; the scale_textarea_* rows gate size independence.",
             iters_cap: None,
             make: make_textarea_type_char,
         },
@@ -485,7 +485,7 @@ pub(crate) fn scale_paths() -> Vec<ScalePath> {
         },
         ScalePath {
             name: "scale_textarea_type_char",
-            note: "type/erase one character mid an n-line TextArea + frame; only the edited line is reshaped and re-emitted, the rest is a splice of the retained paint",
+            note: "type/erase one character on line 10 (the middle of n=10) of an n-line TextArea + frame; only the edited line is reshaped and re-emitted, and the splice moves only the rows the window shows",
             make: textarea_type_char_closure,
             per_n: false,
         },

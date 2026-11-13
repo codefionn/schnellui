@@ -14,8 +14,11 @@ fn measured_edit(lines: usize) -> [(u64, u64); 2] {
     app.frame();
     let id = app.find_widget(Role::MultilineTextInput, None).unwrap();
     app.focus(Some(id));
-    for _ in 0..lines / 2 {
-        app.dispatch_edit_key(EditKey::Up { select: false });
+    // Line 5 shows in the window at every size; lines below the window own no
+    // primitives, so an edit there would not measure the painted splice.
+    app.dispatch_edit_key(EditKey::DocStart { select: false });
+    for _ in 0..5 {
+        app.dispatch_edit_key(EditKey::Down { select: false });
     }
     app.dispatch_edit_key(EditKey::Home { select: false });
     app.dispatch_edit_key(EditKey::Right {
@@ -79,8 +82,11 @@ fn measured_composition(lines: usize) -> [(u64, u64); 3] {
     app.frame();
     let id = app.find_widget(Role::MultilineTextInput, None).unwrap();
     app.focus(Some(id));
-    for _ in 0..lines / 2 {
-        app.dispatch_edit_key(EditKey::Up { select: false });
+    // Line 5 shows in the window at every size; lines below the window own no
+    // primitives, so an edit there would not measure the painted splice.
+    app.dispatch_edit_key(EditKey::DocStart { select: false });
+    for _ in 0..5 {
+        app.dispatch_edit_key(EditKey::Down { select: false });
     }
     app.dispatch_edit_key(EditKey::Home { select: false });
     app.frame();

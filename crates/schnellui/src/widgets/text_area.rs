@@ -204,7 +204,8 @@ struct EmitKey {
     muted: Color,
     line_numbers: Option<(usize, usize, Color)>,
     placeholder: bool,
-    /// the rows emitted when a Scroll ancestor clips the area (none: all)
+    /// the rows emitted when a Scroll ancestor or the window clips the area
+    /// (none: all)
     band: Option<(usize, usize)>,
 }
 
@@ -285,9 +286,13 @@ pub(crate) struct AreaCache {
     key: Option<EmitKey>,
     ranges: Option<PrimRanges>,
     /// The visual rows `[lo, hi)` the text block was emitted for when a Scroll
-    /// ancestor clips the area: the viewport plus an overscan each side. Lines
-    /// outside own no primitives. `None`: every line is emitted.
+    /// ancestor or the host window clips the area: the visible rows plus an
+    /// overscan each side. Lines outside own no primitives. `None` (no Scroll,
+    /// window unknown): every line is emitted.
     band: Option<(usize, usize)>,
+    /// Lines that may own text primitives or an overflow; every other line owns
+    /// neither. The band's lines, so the paint's per-line passes stay off the rest.
+    owned: std::ops::Range<usize>,
     /// Where the surface's top edge was last painted: the area's own top, or
     /// the top of a Scroll viewport that has scrolled past it.
     frame_top: f32,
@@ -522,7 +527,11 @@ impl AreaCache {
 
     /// Text-block primitives owned by `lines[..i]`.
     fn text_prims_before(&self, i: usize) -> usize {
-        self.lines[..i].iter().map(|l| l.text_prims as usize).sum()
+        let from = self.owned.start.min(i);
+        self.lines[from..i]
+            .iter()
+            .map(|l| l.text_prims as usize)
+            .sum()
     }
 }
 
@@ -4046,14 +4055,15 @@ mod tests {
         );
         dispatch_focus(&runtime, &mut scene, &mut text, &mut atlas, Some(id));
         emit_text_area_paint(&runtime, &mut scene, &mut text, &mut atlas, id);
-        assert!(runtime.with(|rt| rt
-            .borrow()
-            .areas
-            .get(id)
-            .unwrap()
-            .cache
-            .painted_out
-            .is_some()));
+        assert!(runtime.with(|rt| {
+            rt.borrow()
+                .areas
+                .get(id)
+                .unwrap()
+                .cache
+                .painted_out
+                .is_some()
+        }));
         runtime.with(|rt| {
             let mut rt = rt.borrow_mut();
             let st = rt.areas.get_mut(id).unwrap();
