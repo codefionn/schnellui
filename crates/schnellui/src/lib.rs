@@ -663,6 +663,9 @@ pub struct App {
     /// when the keyboard closed it, whatever the ring did when it opened.
     keyboard_modality: bool,
     /// The docked regions that returned focus on Escape, each with the control that had focus
+    /// Told every platform color scheme [`App::apply_color_scheme`] receives, whatever the
+    /// theme mode does with it.
+    color_scheme_observer: Option<Box<dyn FnMut(ColorScheme)>>,
     /// when the region appeared.
     region_returns: Vec<RegionReturn>,
     /// The dialog panel the last left press landed in, `None` when it landed

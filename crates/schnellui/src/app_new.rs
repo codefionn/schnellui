@@ -131,6 +131,7 @@ impl App {
             color_scheme: ColorScheme::Light,
             active_theme,
             theme_transition_duration: Duration::ZERO,
+            color_scheme_observer: None,
             theme_transition: None,
             reopen_context_menu: None,
             modal_openers: Vec::new(),

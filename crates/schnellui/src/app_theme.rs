@@ -97,6 +97,15 @@ impl App {
         true
     }
 
+    /// Calls `observer` with the platform color scheme now and with every one
+    /// [`App::apply_color_scheme`] receives after, also under a fixed [`ThemeMode`], which
+    /// records the scheme without rebuilding. An app that shows what the platform uses
+    /// while it does not follow it reads it here. A later observer replaces this one.
+    pub fn on_color_scheme(&mut self, mut observer: impl FnMut(ColorScheme) + 'static) {
+        observer(self.color_scheme);
+        self.color_scheme_observer = Some(Box::new(observer));
+    }
+
     /// Applies a platform light/dark appearance.
     ///
     /// Windowed apps call this automatically from winit's initial appearance and
@@ -104,6 +113,9 @@ impl App {
     /// A fixed [`ThemeMode`] records the scheme but does not rebuild.
     pub fn apply_color_scheme(&mut self, scheme: ColorScheme) -> bool {
         self.color_scheme = scheme;
+        if let Some(observer) = self.color_scheme_observer.as_mut() {
+            observer(scheme);
+        }
         let ThemeMode::System { .. } = self.theme_mode else {
             return false;
         };
@@ -175,6 +187,7 @@ impl App {
         replacement.theme_factory = Some(factory);
         replacement.theme_mode = self.theme_mode;
         replacement.color_scheme = self.color_scheme;
+        replacement.color_scheme_observer = self.color_scheme_observer.take();
         replacement.active_theme = selected;
         replacement.theme_transition_duration = self.theme_transition_duration;
         replacement.theme_transition = self.theme_transition;

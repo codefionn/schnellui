@@ -469,6 +469,25 @@ fn theme_remount_preserves_loading_spinner_phase_and_paint_bindings() {
 }
 
 #[test]
+fn a_color_scheme_observer_hears_the_scheme_under_a_fixed_mode_and_across_a_rebuild() {
+    use schnellui::widgets::Text;
+    use std::{cell::RefCell, rc::Rc};
+
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let mut app = App::mount_themed(ThemeMode::Fixed(theme::DARK), || Text::new("fixed"));
+    let sink = heard.clone();
+    app.on_color_scheme(move |scheme| sink.borrow_mut().push(scheme));
+    assert_eq!(*heard.borrow(), [ColorScheme::Light]);
+    // A fixed theme does not rebuild, but the observer still hears the platform.
+    assert!(!app.apply_color_scheme(ColorScheme::Dark));
+    assert_eq!(*heard.borrow(), [ColorScheme::Light, ColorScheme::Dark]);
+    // A rebuild under a new theme keeps the observer.
+    app.set_theme(theme::LIGHT);
+    assert!(!app.apply_color_scheme(ColorScheme::Light));
+    assert_eq!(heard.borrow().len(), 3);
+}
+
+#[test]
 fn system_mode_resolves_platform_scheme() {
     use schnellui::widgets::Text;
 
