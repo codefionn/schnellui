@@ -354,26 +354,40 @@ fn apply_disabled_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, disa
         return;
     };
     let theme = theme_for(runtime, id);
-    let solid = appearance == ButtonAppearance::Solid;
-    let outline = appearance == ButtonAppearance::Outline;
-    let index = usize::from(solid && theme.shape.shadow > 0.0)
-        + usize::from((solid && theme.shape.frame > 0.0) || outline);
-    let color = if disabled {
-        theme.disabled
-    } else if solid {
-        theme.accent
-    } else if outline {
-        theme.surface
+    let colors = crate::widgets::paint::button_colors(&theme, appearance, disabled);
+    // The shadow, when the button was built enabled, comes first; then the
+    // frame, then the fill, then the label's glyphs.
+    let has_frame = colors.frame > 0.0;
+    let rects: Vec<usize> = scene
+        .paint_mut(id)
+        .primitives
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| matches!(p, Primitive::SolidRect { .. }).then_some(i))
+        .collect();
+    let fill_at = rects.last().copied();
+    let frame_at = if has_frame && rects.len() >= 2 {
+        rects.get(rects.len() - 2).copied()
     } else {
-        Color::TRANSPARENT
+        None
     };
-    if let Some(Primitive::SolidRect { color: current, .. }) =
-        scene.paint_mut(id).primitives.get_mut(index)
-    {
-        if *current != color {
-            *current = color;
-            scene.mark_dirty(id, DirtyFlags::PAINT);
+    let mut changed = false;
+    for (i, primitive) in scene.paint_mut(id).primitives.iter_mut().enumerate() {
+        let want = match primitive {
+            Primitive::SolidRect { .. } if Some(i) == fill_at => colors.fill,
+            Primitive::SolidRect { .. } if Some(i) == frame_at => colors.frame_color,
+            Primitive::GlyphQuad { .. } => colors.label,
+            _ => continue,
+        };
+        if let Primitive::SolidRect { color, .. } | Primitive::GlyphQuad { color, .. } = primitive {
+            if *color != want {
+                *color = want;
+                changed = true;
+            }
         }
+    }
+    if changed {
+        scene.mark_dirty(id, DirtyFlags::PAINT);
     }
 }
 

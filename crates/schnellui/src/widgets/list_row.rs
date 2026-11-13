@@ -13,7 +13,7 @@ use std::borrow::Cow;
 
 use schnellui::a11y::{ActionFlags, Role, StateFlags};
 use schnellui::scene::{Color, Point, Primitive, Rect, Size, WidgetId, WidgetKind};
-use schnellui::text::ShapedText;
+use schnellui::text::{FontFace, ShapeOptions, ShapedText};
 
 use crate::widgets::{
     node_rect, norm_scale, phys_size_px, rasterize_and_push, theme_for, with_handlers, BuildCtx,
@@ -60,6 +60,7 @@ pub struct ListRow {
     pad_h: f32,
     end_room: f32,
     title_size: f32,
+    title_bold: bool,
     meta_size: f32,
     trailing_inline: bool,
     trailing_centered: bool,
@@ -88,6 +89,7 @@ impl ListRow {
             pad_h: DEFAULT_PAD_H,
             end_room: 0.0,
             title_size: 13.0,
+            title_bold: false,
             meta_size: 11.5,
             trailing_inline: false,
             trailing_centered: false,
@@ -132,6 +134,12 @@ impl ListRow {
     }
 
     /// Font size of the trailing text and the subtitle.
+    /// Draws the title in the bold face, for a row that has something new.
+    pub fn title_bold(mut self, bold: bool) -> ListRow {
+        self.title_bold = bold;
+        self
+    }
+
     pub fn meta_size(mut self, size: f32) -> ListRow {
         self.meta_size = size;
         self
@@ -288,8 +296,24 @@ fn shape_fit(
     max_width: f32,
     scale: f32,
 ) -> ShapedText {
+    shape_fit_face(shaper, text, phys, max_width, scale, FontFace::Sans)
+}
+
+/// [`shape_fit`] in `face`.
+fn shape_fit_face(
+    shaper: &mut schnellui::text::TextShaper,
+    text: &str,
+    phys: f32,
+    max_width: f32,
+    scale: f32,
+    face: FontFace,
+) -> ShapedText {
     let inv = 1.0 / norm_scale(scale);
-    let mut shaped = shaper.shape(text, phys, None);
+    let opts = ShapeOptions {
+        face,
+        ..ShapeOptions::new(phys)
+    };
+    let mut shaped = shaper.shape_with(text, &opts);
     if shaped.width * inv <= max_width {
         return shaped;
     }
@@ -299,7 +323,7 @@ fn shape_fit(
         let mut cut: String = chars.iter().collect();
         cut.truncate(cut.trim_end().len());
         cut.push('…');
-        shaped = shaper.shape(&cut, phys, None);
+        shaped = shaper.shape_with(&cut, &opts);
         if shaped.width * inv <= max_width {
             break;
         }
@@ -367,12 +391,17 @@ impl View for ListRow {
             } else {
                 0.0
             };
-        let title = shape_fit(
+        let title = shape_fit_face(
             ctx.text,
             &this.title,
             title_phys,
             title_room.max(8.0),
             ctx.scale,
+            if this.title_bold {
+                FontFace::SansBold
+            } else {
+                FontFace::Sans
+            },
         );
         let subtitle = this.subtitle.as_ref().map(|text| {
             shape_fit(

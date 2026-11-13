@@ -302,22 +302,14 @@ pub fn emit_button_paint(
     let t = theme_for(runtime, id);
     let sh = t.shape;
     let solid = appearance == ButtonAppearance::Solid;
-    // Every disabled button is drawn alike, a flat disabled fill with only
-    // the design's own frame, so it reads as off rather than as a field.
-    let frame = match appearance {
-        _ if disabled => sh.frame,
-        ButtonAppearance::Solid => sh.frame,
-        ButtonAppearance::Outline => OUTLINE_FRAME,
-        ButtonAppearance::Ghost | ButtonAppearance::Link => 0.0,
-    };
+    let ButtonColors {
+        frame,
+        frame_color,
+        fill: bg,
+        label: label_color,
+    } = button_colors(&t, appearance, disabled);
     // A disabled button lies flat: no block shadow to suggest it can be pressed.
     let shadow = if solid && !disabled { sh.shadow } else { 0.0 };
-    let bg = match (disabled, appearance) {
-        (true, _) => t.disabled,
-        (false, ButtonAppearance::Solid) => t.accent,
-        (false, ButtonAppearance::Outline) => t.surface,
-        (false, ButtonAppearance::Ghost | ButtonAppearance::Link) => Color::TRANSPARENT,
-    };
     // The body is the layout box minus the shadow's offset strip.
     let body = Rect::new(
         rect.x,
@@ -338,14 +330,7 @@ pub fn emit_button_paint(
     if frame > 0.0 {
         pd.primitives.push(Primitive::SolidRect {
             rect: body,
-            // A disabled button's frame sits halfway between the divider
-            // and the outline: weaker than one that takes clicks, but still
-            // a visible edge on the disabled fill.
-            color: if disabled {
-                crate::widgets::theme::mix_color(t.separator, t.outline, DISABLED_FRAME_SHARE)
-            } else {
-                t.outline
-            },
+            color: frame_color,
             corner_radius: radius,
         });
     }
@@ -368,17 +353,7 @@ pub fn emit_button_paint(
         atlas,
         &shaped,
         phys as u32,
-        // A disabled button's label steps back from the muted text color
-        // toward its fill: on the disabled fill, the accent's contrast color
-        // would vanish, and the ordinary or the muted text color would read
-        // as enabled beside an outlined button.
-        if disabled {
-            crate::widgets::theme::mix_color(t.text_muted, t.disabled, DISABLED_LABEL_FADE)
-        } else if appearance != ButtonAppearance::Solid {
-            t.text
-        } else {
-            t.on_accent
-        },
+        label_color,
         scale,
         Point {
             x: body.x + (body.width - ts.width) * 0.5,
@@ -395,6 +370,66 @@ pub fn emit_button_paint(
     );
     ts
 }
+
+/// The frame, fill and label of a button in one state.
+pub(crate) struct ButtonColors {
+    /// Frame thickness. The same enabled and disabled, so a button that turns
+    /// off keeps its primitives and only their colors change.
+    pub frame: f32,
+    pub frame_color: Color,
+    pub fill: Color,
+    pub label: Color,
+}
+
+/// What a button of `appearance` is painted with. A disabled button keeps
+/// its kind: a filled one gets the flat disabled fill, an outlined one keeps
+/// its surface behind a weaker frame, and a ghost or link stays bare. In each
+/// the label fades, so off reads as off without a grey block where no block
+/// was before.
+pub(crate) fn button_colors(
+    t: &crate::widgets::Theme,
+    appearance: ButtonAppearance,
+    disabled: bool,
+) -> ButtonColors {
+    use crate::widgets::theme::mix_color;
+    let frame = match appearance {
+        ButtonAppearance::Solid => t.shape.frame,
+        ButtonAppearance::Outline => OUTLINE_FRAME,
+        ButtonAppearance::Ghost | ButtonAppearance::Link => 0.0,
+    };
+    let fill = match (appearance, disabled) {
+        (ButtonAppearance::Solid, true) => t.disabled,
+        (ButtonAppearance::Solid, false) => t.accent,
+        (ButtonAppearance::Outline, _) => t.surface,
+        (ButtonAppearance::Ghost | ButtonAppearance::Link, _) => Color::TRANSPARENT,
+    };
+    // A disabled frame sits between the divider and the outline: weaker than
+    // one that takes clicks, but still a visible edge.
+    let frame_color = if disabled {
+        mix_color(t.separator, t.outline, DISABLED_FRAME_SHARE)
+    } else {
+        t.outline
+    };
+    let label = match (appearance, disabled) {
+        // On the disabled fill the accent's contrast color would vanish, and
+        // the ordinary or the muted text color would read as enabled.
+        (ButtonAppearance::Solid, true) => mix_color(t.text_muted, t.disabled, DISABLED_LABEL_FADE),
+        (_, true) => mix_color(t.text_muted, t.surface, DISABLED_BARE_LABEL_FADE),
+        (ButtonAppearance::Solid, false) => t.on_accent,
+        (_, false) => t.text,
+    };
+    ButtonColors {
+        frame,
+        frame_color,
+        fill,
+        label,
+    }
+}
+
+/// How far the label of a disabled button without a fill fades from the
+/// muted text color toward the surface. More than on the disabled fill: with
+/// no grey block behind it, the fade alone says the button is off.
+const DISABLED_BARE_LABEL_FADE: f32 = 0.35;
 
 /// How far a disabled button's frame moves from the divider color toward
 /// the outline.

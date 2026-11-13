@@ -217,7 +217,9 @@ pub(crate) fn emit_switch_paint(
 ) {
     let rect = node_rect(scene, id, switch_intrinsic(runtime, id));
     let t = theme_for(runtime, id);
-    let track_color = if on { t.accent } else { t.media };
+    // The off track is the first grey that reads against the page, so an off
+    // switch is still a visible control and not a pale smear.
+    let track_color = if on { t.accent } else { t.track_color() };
     let knob = (rect.height - 2.0 * SWITCH_INSET).max(0.0);
     let knob_x = if on {
         rect.x + rect.width - SWITCH_INSET - knob
@@ -256,10 +258,17 @@ pub(crate) fn emit_switch_paint(
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(knob_x, rect.y + SWITCH_INSET + frame, knob, knob),
         // An on knob takes the color drawn on the accent, so it stands out
-        // from the track whatever the scheme; an off knob in muted text
-        // stands out from a dark track, so an off switch still reads as a
-        // control.
-        color: if on { t.on_accent } else { t.text_muted },
+        // from the track whatever the scheme. An off knob takes the surface:
+        // the off track is picked to read against the page, and the surface
+        // is the page's near neighbour. Framed designs keep a surface track,
+        // so there the knob stays in muted text.
+        color: if on {
+            t.on_accent
+        } else if frame == 0.0 {
+            t.surface
+        } else {
+            t.text_muted
+        },
         corner_radius: t.shape.pill(knob),
     });
 }
