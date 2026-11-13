@@ -126,6 +126,7 @@ pub struct VirtualList<K> {
     controller: VirtualListController<K>,
     row: Option<RowFactory<K>>,
     scroll: Scroll,
+    align_end: bool,
 }
 
 impl<K> VirtualList<K>
@@ -143,6 +144,7 @@ where
             controller,
             row: Some(Box::new(move |key| Box::new(row(key)))),
             scroll: Scroll::new(),
+            align_end: false,
         }
     }
 
@@ -182,6 +184,14 @@ where
         self.scroll = self.scroll.restoration_key(key);
         self
     }
+
+    /// Puts the rows at the end of the viewport while they are shorter than it, as a
+    /// chat does: the newest row sits right above what follows the list, and the free
+    /// room is above the first row. A list that fills its viewport is unchanged.
+    pub fn align_end(mut self, enabled: bool) -> Self {
+        self.align_end = enabled;
+        self
+    }
 }
 
 impl<K> View for VirtualList<K>
@@ -191,6 +201,7 @@ where
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
         let mut this = *self;
         this.controller.inner.borrow_mut().follow_end = this.scroll.follow_end;
+        this.controller.inner.borrow_mut().align_end = this.align_end;
         let controller = this.controller.clone();
         let callback_controller = controller.clone();
         this.scroll = this
@@ -236,6 +247,7 @@ where
                 after,
                 mounted: HashMap::new(),
                 scratch: Scratch::default(),
+                lead: 0.0,
             }),
         );
         content
@@ -315,6 +327,8 @@ struct MountedList<K> {
     after: WidgetId,
     mounted: HashMap<K, WidgetId>,
     scratch: Scratch<K>,
+    /// The free room above the first row of an end-aligned list, as last applied.
+    lead: f32,
 }
 
 /// Buffers a window shift reuses, so scrolling through a long list stops
@@ -460,8 +474,9 @@ where
         self.scratch = scratch;
         let (before, after) = {
             let state = self.controller.inner.borrow();
+            self.lead = state.lead();
             (
-                state.heights.prefix(range.0),
+                state.heights.prefix(range.0) + self.lead,
                 state.heights.total() - state.heights.prefix(range.1),
             )
         };
@@ -520,11 +535,15 @@ where
                 changed |= state.set_height_at(index, box_.rect.height);
             }
         }
-        if !changed {
+        // The free room above the rows of an end-aligned list follows the viewport and
+        // the rows' heights.
+        let lead = state.lead();
+        if !changed && lead == self.lead {
             return false;
         }
+        self.lead = lead;
         let range = state.mounted_range.unwrap_or((0, 0));
-        let before = state.heights.prefix(range.0);
+        let before = state.heights.prefix(range.0) + lead;
         let after = state.heights.total() - state.heights.prefix(range.1);
         let pin_end = state.follow_end && state.at_end;
         let sync_offset = state.take_scroll_sync();
@@ -598,6 +617,8 @@ struct Controller<K> {
     viewport: f32,
     width: f32,
     follow_end: bool,
+    /// Rows shorter than the viewport sit at its end.
+    align_end: bool,
     at_end: bool,
     dirty: bool,
     refresh: HashSet<K>,
@@ -622,6 +643,7 @@ where
             viewport: 0.0,
             width: 0.0,
             follow_end: false,
+            align_end: false,
             at_end: true,
             dirty: true,
             refresh: HashSet::new(),
@@ -738,6 +760,16 @@ where
         self.at_end = at_end;
         self.dirty |= changed;
         changed
+    }
+
+    /// The free room above the first row: what the viewport has left over when the list
+    /// is end-aligned and its rows are shorter than the viewport.
+    fn lead(&self) -> f32 {
+        if self.align_end {
+            (self.viewport - self.heights.total()).max(0.0)
+        } else {
+            0.0
+        }
     }
 
     fn set_viewport(&mut self, viewport: f32) -> bool {
