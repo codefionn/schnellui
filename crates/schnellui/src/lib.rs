@@ -325,7 +325,7 @@ pub enum Navigation {
     Forward,
 }
 
-type ShortcutHandler = Box<dyn FnMut() + 'static>;
+type ShortcutHandler = Box<dyn FnMut() -> bool + 'static>;
 type NavigationHandler = Box<dyn FnMut(Navigation) -> bool + 'static>;
 type FocusedKeyHandler = Box<dyn for<'a> FnMut(UiKey<'a>) -> bool + 'static>;
 type FocusedInputHandler = Box<dyn FnMut(FocusedInputEvent) -> FocusedInputResult + 'static>;

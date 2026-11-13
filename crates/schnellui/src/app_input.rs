@@ -33,7 +33,25 @@ impl App {
 
     /// Registers an application keyboard shortcut, replacing any handler
     /// already assigned to the same chord.
-    pub fn register_shortcut(&mut self, shortcut: Shortcut, handler: impl FnMut() + 'static) {
+    pub fn register_shortcut(&mut self, shortcut: Shortcut, mut handler: impl FnMut() + 'static) {
+        self.shortcut_registry.insert(
+            shortcut.normalized(),
+            Box::new(move || {
+                handler();
+                true
+            }),
+        );
+    }
+
+    /// Registers an application shortcut whose handler may decline. A handler
+    /// that returns `false` leaves the chord to the focused widget, so Ctrl+Z
+    /// can still undo in a text field while the application has nothing to
+    /// undo. Replaces any handler already assigned to the same chord.
+    pub fn register_shortcut_if(
+        &mut self,
+        shortcut: Shortcut,
+        handler: impl FnMut() -> bool + 'static,
+    ) {
         self.shortcut_registry
             .insert(shortcut.normalized(), Box::new(handler));
     }
@@ -181,13 +199,12 @@ impl App {
     }
 
     /// Dispatches one resolved application shortcut. Returns `true` when a
-    /// handler was registered for the chord.
+    /// handler was registered for the chord and took it.
     pub fn dispatch_shortcut(&mut self, shortcut: Shortcut) -> bool {
         let Some(handler) = self.shortcut_registry.get_mut(&shortcut.normalized()) else {
             return false;
         };
-        handler();
-        true
+        handler()
     }
 
     pub(crate) fn dispatch_focused_key_handler(&mut self, key: UiKey<'_>) -> bool {

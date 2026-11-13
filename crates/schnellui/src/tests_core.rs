@@ -614,6 +614,26 @@ fn application_shortcuts_dispatch_by_normalized_chord() {
     assert!(!app.dispatch_shortcut(Shortcut::command(',')));
 }
 
+#[test]
+fn a_shortcut_handler_can_decline_the_chord() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let mut app = App::new(100, 100);
+    let take = Rc::new(Cell::new(false));
+    let calls = Rc::new(Cell::new(0));
+    let (flag, sink) = (take.clone(), calls.clone());
+    app.register_shortcut_if(Shortcut::command('z'), move || {
+        sink.set(sink.get() + 1);
+        flag.get()
+    });
+
+    assert!(!app.dispatch_shortcut(Shortcut::command('z')));
+    take.set(true);
+    assert!(app.dispatch_shortcut(Shortcut::command('z')));
+    assert_eq!(calls.get(), 2);
+}
+
 /// Sequence (calculator): type 1 + 2, press Enter. The display stayed at 2
 /// although the app bound Enter to equals with a '\r' shortcut: Enter is a
 /// named key, and only typed characters reached shortcuts. After clicking
