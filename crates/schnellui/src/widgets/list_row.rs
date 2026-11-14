@@ -48,6 +48,7 @@ struct LeadingMark {
 pub struct ListRow {
     title: Cow<'static, str>,
     trailing: Option<Cow<'static, str>>,
+    meta: Option<Cow<'static, str>>,
     subtitle: Option<Cow<'static, str>>,
     accent: Option<Color>,
     dot: Option<Color>,
@@ -77,6 +78,7 @@ impl ListRow {
         ListRow {
             title: title.into(),
             trailing: None,
+            meta: None,
             subtitle: None,
             accent: None,
             dot: None,
@@ -149,6 +151,15 @@ impl ListRow {
     pub fn trailing(mut self, text: impl Into<Cow<'static, str>>) -> ListRow {
         let text = text.into();
         self.trailing = (!text.is_empty()).then_some(text);
+        self
+    }
+
+    /// Muted text at the right end of the title line, such as a time. With
+    /// it and a subtitle the trailing text moves down to the subtitle's
+    /// line, so a row can show a time above and a count below.
+    pub fn meta(mut self, text: impl Into<Cow<'static, str>>) -> ListRow {
+        let text = text.into();
+        self.meta = (!text.is_empty()).then_some(text);
         self
     }
 
@@ -382,12 +393,25 @@ impl View for ListRow {
         let trailing_width = trailing
             .as_ref()
             .map_or(0.0, |t| t.width * inv + 2.0 * pill_pad);
+        let meta_text = this
+            .meta
+            .as_ref()
+            .map(|text| shape_fit(ctx.text, text, meta_phys, this.width * 0.5, ctx.scale));
+        let meta_width = meta_text.as_ref().map_or(0.0, |t| t.width * inv);
+        // A time on the title line sends the trailing text to the line under it.
+        let trailing_below = meta_text.is_some() && this.subtitle.is_some();
+        let trailing_room = if trailing.is_some() {
+            trailing_width + TRAILING_GAP
+        } else {
+            0.0
+        };
         let title_room = this.width
             - lead
             - this.pad_h
             - this.end_room
-            - if trailing.is_some() {
-                trailing_width + TRAILING_GAP
+            - if trailing_below { 0.0 } else { trailing_room }
+            - if meta_text.is_some() {
+                meta_width + TRAILING_GAP
             } else {
                 0.0
             };
@@ -408,7 +432,12 @@ impl View for ListRow {
                 ctx.text,
                 text,
                 meta_phys,
-                (this.width - lead - this.pad_h - this.end_room).max(8.0),
+                (this.width
+                    - lead
+                    - this.pad_h
+                    - this.end_room
+                    - if trailing_below { trailing_room } else { 0.0 })
+                .max(8.0),
                 ctx.scale,
             )
         });
@@ -459,7 +488,7 @@ impl View for ListRow {
         if let Some(mark) = &this.mark {
             let disc = Rect::new(
                 rect.x + lead - DOT_GAP - mark.size,
-                rect.y + (this.height - mark.size) * 0.5,
+                rect.y + (rect.height - mark.size) * 0.5,
                 mark.size,
                 mark.size,
             );
@@ -509,7 +538,12 @@ impl View for ListRow {
             } else {
                 this.height
             };
-            let y = rect.y + (line - text_height) * 0.5;
+            let y = if trailing_below {
+                // Centered on the subtitle's line.
+                rect.y + this.height - SUBTITLE_DROP - 2.0 + (subtitle_height - text_height) * 0.5
+            } else {
+                rect.y + (line - text_height) * 0.5
+            };
             let color = match this.pill {
                 Some(pill) => {
                     let height = text_height + 2.0 * PILL_PAD_V;
@@ -531,6 +565,27 @@ impl View for ListRow {
                 color,
                 ctx.scale,
                 Point { x: x + pill_pad, y },
+            );
+        }
+        if let Some(meta_text) = &meta_text {
+            let end = rect.x + rect.width - this.pad_h - this.end_room;
+            let x = if trailing_below || trailing.is_none() || this.trailing_inline {
+                end - meta_width
+            } else {
+                end - trailing_width - TRAILING_GAP - meta_width
+            };
+            rasterize_and_push(
+                pd,
+                ctx.text,
+                ctx.atlas,
+                meta_text,
+                meta_phys as u32,
+                meta,
+                ctx.scale,
+                Point {
+                    x,
+                    y: rect.y + (this.height - meta_text.height * inv) * 0.5,
+                },
             );
         }
         if let Some(subtitle) = &subtitle {
