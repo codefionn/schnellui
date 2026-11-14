@@ -66,7 +66,7 @@ pub fn rasterize_and_push(
                     rg.height as f32 * inv,
                 ),
                 atlas_uv: Rect::new(
-                    rg.rect.x as f32,
+                    rg.uv_x(),
                     rg.rect.y as f32,
                     rg.rect.width as f32,
                     rg.rect.height as f32,
@@ -119,7 +119,7 @@ pub fn rasterize_lines_and_push(
                         rg.height as f32 * inv,
                     ),
                     atlas_uv: Rect::new(
-                        rg.rect.x as f32,
+                        rg.uv_x(),
                         rg.rect.y as f32,
                         rg.rect.width as f32,
                         rg.rect.height as f32,

@@ -427,6 +427,7 @@ impl SurfaceRenderer {
         if let Some(shadow) = self.core.atlas_shadow.as_mut() {
             shadow.clear();
         }
+        self.core.color_atlas = None;
         self.core.image_atlas = None;
     }
 

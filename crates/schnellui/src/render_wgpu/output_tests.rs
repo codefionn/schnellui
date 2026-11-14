@@ -1345,3 +1345,126 @@ fn a_raised_nested_overlay_draws_after_its_later_peers() {
         "after its parent"
     );
 }
+
+/// A glyph quad whose `atlas_uv` x carries the colour bias samples the atlas's colour
+/// plane: the texel's own colour shows, the text colour gives only the opacity, and a
+/// colour glyph written after the first render reaches the GPU.
+#[test]
+fn color_glyph_quad_draws_the_color_plane_untinted() {
+    let Some(mut r) = try_renderer(32, 32) else {
+        return;
+    };
+    let mut atlas = GlyphAtlas::new(16, 16);
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    scene.paint_mut(root).primitives.push(Primitive::GlyphQuad {
+        rect: Rect::new(4.0, 4.0, 8.0, 8.0),
+        atlas_uv: Rect::new(schnellui::text::COLOR_GLYPH_UV_BIAS, 0.0, 8.0, 8.0),
+        // A blue text colour: it must not tint the picture.
+        color: Color::rgb(0, 0, 255),
+    });
+    scene.mark_dirty(root, DirtyFlags::PAINT);
+    let first = r.render_rgba8(&scene, &atlas);
+    assert_eq!(
+        pixel(&first, 32, 8, 8),
+        [0, 0, 0, 255],
+        "no colour glyph yet"
+    );
+
+    let rect = atlas
+        .allocate_color(8, 8)
+        .expect("room in the colour plane");
+    assert_eq!((rect.x, rect.y), (0, 0));
+    let red: Vec<u8> = [255u8, 0, 0, 255].repeat(64);
+    atlas.write_color(rect, &red);
+    let second = r.render_rgba8(&scene, &atlas);
+    assert_eq!(pixel(&second, 32, 8, 8), [255, 0, 0, 255]);
+    // Outside the quad nothing changed.
+    assert_eq!(pixel(&second, 32, 20, 20), [0, 0, 0, 255]);
+}
+
+/// Emoji shape to one glyph per cluster and draw in colour: a plain one, one with
+/// variation selector 16, a ZWJ family and a flag. Needs a colour emoji font on the
+/// machine (Noto Color Emoji, Segoe UI Emoji, Apple Color Emoji).
+#[test]
+fn emoji_shape_as_one_cluster_each_and_draw_in_color() {
+    let mut shaper = schnellui::text::TextShaper::new();
+    let mut atlas = GlyphAtlas::new(256, 256);
+    let size = 32.0;
+    let probe = shaper.shape("\u{1F600}", size, None);
+    let colored = probe.glyphs.first().is_some_and(|g| {
+        let key = shaper.glyph_key_in(g.font, g.glyph_id, size as u32);
+        shaper.rasterize_glyph(key, &mut atlas).color
+    });
+    if !colored {
+        eprintln!("skipping emoji test: this machine has no colour emoji font");
+        return;
+    }
+
+    // Grinning face, red heart with VS16, rainbow flag (white flag, VS16, ZWJ, rainbow),
+    // German flag (two regional indicators). Noto draws the family sequences as grey
+    // silhouettes, so they cannot stand in for the ZWJ case here.
+    let text = "\u{1F600}\u{2764}\u{FE0F}\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}\u{1F1E9}\u{1F1EA}";
+    let shaped = shaper.shape(text, size, None);
+    assert_eq!(
+        shaped.glyphs.len(),
+        4,
+        "one glyph per emoji: {:?}",
+        shaped.glyphs
+    );
+    let one = probe.width;
+    assert!(
+        (shaped.width - 4.0 * one).abs() <= 4.0,
+        "four cells of {one}, got {}",
+        shaped.width
+    );
+    for g in &shaped.glyphs {
+        let key = shaper.glyph_key_in(g.font, g.glyph_id, size as u32);
+        let rg = shaper.rasterize_glyph(key, &mut atlas);
+        assert!(rg.color && !rg.rect.is_empty(), "{rg:?}");
+    }
+
+    let (w, h) = (192u32, 64u32);
+    let Some(mut r) = try_renderer(w, h) else {
+        return;
+    };
+    let mut scene = Scene::new();
+    let root = scene.insert(WidgetKind::Stack, None);
+    scene.set_root(root);
+    crate::widgets::rasterize_and_push(
+        scene.paint_mut(root),
+        &mut shaper,
+        &mut atlas,
+        &shaped,
+        size as u32,
+        Color::rgb(255, 255, 255),
+        1.0,
+        Point { x: 8.0, y: 8.0 },
+    );
+    scene.mark_dirty(root, DirtyFlags::PAINT);
+    let frame = r.render_rgba8(&scene, &atlas);
+    // Each emoji's cell holds ink, and the ink is not grey: a mask drawn in the white
+    // text colour would have equal channels everywhere.
+    for cell in 0..4u32 {
+        let x0 = 8 + (cell as f32 * one) as u32;
+        let x1 = (x0 + one as u32).min(w);
+        let (mut inked, mut tinted) = (0, 0);
+        for y in 0..h {
+            for x in x0..x1 {
+                let [red, green, blue, _] = pixel(&frame, w, x, y);
+                if red.max(green).max(blue) > 24 {
+                    inked += 1;
+                }
+                if red.abs_diff(green) > 40 || red.abs_diff(blue) > 40 {
+                    tinted += 1;
+                }
+            }
+        }
+        assert!(inked > 50, "emoji {cell} is blank ({inked} lit pixels)");
+        assert!(
+            tinted > 20,
+            "emoji {cell} has no colour ({tinted} tinted pixels)"
+        );
+    }
+}

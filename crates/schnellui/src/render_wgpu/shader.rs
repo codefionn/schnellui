@@ -12,6 +12,9 @@ struct Uniforms {
 
 @group(1) @binding(0) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(1) var atlas_samp: sampler;
+// The colour plane of the glyph atlas: RGBA emoji with straight alpha. Only the glyph
+// pipeline binds it.
+@group(2) @binding(0) var color_tex: texture_2d<f32>;
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
     let low = c / 12.92;
@@ -172,6 +175,14 @@ fn fs_glyph(in: GlyphOut) -> @location(0) vec4<f32> {
     let s = u.params.x;
     let local = (in.pos.xy - in.rect.xy * s) / (in.rect.zw * s) * in.texrect.zw;
     let t = clamp(floor(local + vec2<f32>(0.00390625)), vec2<f32>(0.0), in.texrect.zw - vec2<f32>(1.0));
+    // A texel x at or above the bias names the colour plane (see
+    // `COLOR_GLYPH_UV_BIAS`): the glyph is a colour picture, drawn as it is. The text
+    // colour gives it only its opacity. The plane is sRGB, so the load is linear.
+    if (in.texrect.x >= 65536.0) {
+        let at = vec2<i32>(in.texrect.xy + t) - vec2<i32>(65536, 0);
+        let texel = textureLoad(color_tex, at, 0);
+        return vec4<f32>(texel.rgb, texel.a * in.color.a);
+    }
     let cov = textureLoad(atlas_tex, vec2<i32>(in.texrect.xy + t), 0).r;
     let lin = srgb_to_linear(in.color.rgb);
     return vec4<f32>(lin, in.color.a * cov);

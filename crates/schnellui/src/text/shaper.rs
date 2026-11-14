@@ -14,8 +14,8 @@ use parley::{
     StyleProperty, TextWrapMode,
 };
 use rustc_hash::FxHashMap;
-use swash::scale::image::Image;
-use swash::scale::{Render, ScaleContext, Source};
+use swash::scale::image::{Content, Image};
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::Format;
 
 /// Line height of text that can wrap, as a multiple of its font size.
@@ -647,6 +647,105 @@ impl SystemFonts {
     }
 }
 
+/// Whether `ch` draws as a colour picture by default. The supplementary
+/// pictograph blocks count as a whole; the BMP entries are the characters
+/// Unicode gives the Emoji_Presentation property.
+fn emoji_by_default(ch: char) -> bool {
+    let cp = ch as u32;
+    if cp < 0x231A {
+        return false;
+    }
+    if cp > 0xFFFF {
+        return (0x1F000..=0x1FAFF).contains(&cp);
+    }
+    const BMP: &[(u16, u16)] = &[
+        (0x231A, 0x231B),
+        (0x23E9, 0x23EC),
+        (0x23F0, 0x23F0),
+        (0x23F3, 0x23F3),
+        (0x25FD, 0x25FE),
+        (0x2614, 0x2615),
+        (0x2648, 0x2653),
+        (0x267F, 0x267F),
+        (0x2693, 0x2693),
+        (0x26A1, 0x26A1),
+        (0x26AA, 0x26AB),
+        (0x26BD, 0x26BE),
+        (0x26C4, 0x26C5),
+        (0x26CE, 0x26CE),
+        (0x26D4, 0x26D4),
+        (0x26EA, 0x26EA),
+        (0x26F2, 0x26F3),
+        (0x26F5, 0x26F5),
+        (0x26FA, 0x26FA),
+        (0x26FD, 0x26FD),
+        (0x2705, 0x2705),
+        (0x270A, 0x270B),
+        (0x2728, 0x2728),
+        (0x274C, 0x274C),
+        (0x274E, 0x274E),
+        (0x2753, 0x2755),
+        (0x2757, 0x2757),
+        (0x2795, 0x2797),
+        (0x27B0, 0x27B0),
+        (0x27BF, 0x27BF),
+        (0x2B1B, 0x2B1C),
+        (0x2B50, 0x2B50),
+        (0x2B55, 0x2B55),
+    ];
+    let cp = cp as u16;
+    BMP.iter().any(|&(lo, hi)| (lo..=hi).contains(&cp))
+}
+
+const VS16: char = '\u{FE0F}';
+const ZWJ: char = '\u{200D}';
+const KEYCAP: char = '\u{20E3}';
+
+/// The next stretch of `text` at or after byte `from` that draws as emoji:
+/// characters that are emoji by default, any character with the emoji
+/// variation selector (U+FE0F) behind it, keycaps, and what joins onto them
+/// (skin tones, joiners with their next character, tags). Neighbouring emoji
+/// come back as one range. A digit, `#` or a heart without the selector stays
+/// text.
+pub(super) fn next_emoji_range(text: &str, from: usize) -> Option<std::ops::Range<usize>> {
+    let rest = &text[from..];
+    // Every emoji sequence holds a character of three or four UTF-8 bytes.
+    if !rest.bytes().any(|b| b >= 0xE2) {
+        return None;
+    }
+    let mut chars = rest.char_indices().peekable();
+    let mut start = None;
+    while let Some((at, ch)) = chars.next() {
+        let next = chars.peek().map(|&(_, c)| c);
+        let begins = emoji_by_default(ch)
+            || (next == Some(VS16) && !ch.is_control() && ch != ' ')
+            || (next == Some(KEYCAP) && (ch.is_ascii_digit() || ch == '#' || ch == '*'));
+        if !begins {
+            if let Some(start) = start {
+                return Some(from + start..from + at);
+            }
+            continue;
+        }
+        start.get_or_insert(at);
+        // What rides on the base character.
+        while let Some(&(_, c)) = chars.peek() {
+            let rides = c == VS16
+                || c == KEYCAP
+                || ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
+                || ('\u{E0020}'..='\u{E007F}').contains(&c);
+            if rides {
+                chars.next();
+            } else if c == ZWJ {
+                chars.next();
+                chars.next();
+            } else {
+                break;
+            }
+        }
+    }
+    start.map(|start| from + start..text.len())
+}
+
 impl TextShaper {
     /// Builds a shaper over a Fontique collection holding the embedded faces
     /// (deterministic, SOUL §7.3), mapped as every generic family so UI text
@@ -999,11 +1098,19 @@ impl TextShaper {
         text: &str,
         opts: &ShapeOptions,
         embedded: bool,
+        base: GenericFamily,
         style: impl FnOnce(&mut RangedBuilder<'_, Brush>),
     ) {
+        // Emoji take the system's colour emoji font, which the embedded faces
+        // do not have.
+        let has_emoji = next_emoji_range(text, 0).is_some();
+        let emoji_stack = [
+            FontFamilyName::Generic(GenericFamily::Emoji),
+            FontFamilyName::Generic(base),
+        ];
         // Split-borrow the pooled fields so the builder can hold `layout_cx` +
         // `font_cx` while `build_into` fills `scratch_layout` (§4.1 pooling).
-        let font_cx = if embedded {
+        let font_cx = if embedded && !has_emoji {
             &mut self.embedded_cx
         } else {
             self.font_cx.get_or_insert_with(SystemFonts::context)
@@ -1043,6 +1150,16 @@ impl TextShaper {
                 ));
             }
             style(&mut builder);
+            if has_emoji {
+                let mut at = 0;
+                while let Some(range) = next_emoji_range(text, at) {
+                    at = range.end;
+                    builder.push(
+                        StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(&emoji_stack))),
+                        range,
+                    );
+                }
+            }
             builder.build_into(layout, text);
         }
 
@@ -1075,7 +1192,13 @@ impl TextShaper {
         let narrow =
             font_family.is_none() && !embedded && self.narrow_stacks(text, 1 << face as u8);
         self.narrowed += narrow as u64;
-        self.layout_text(text, opts, embedded, |builder| {
+        let base = match (font_family.is_some() || face.mono(), narrow) {
+            (true, true) if font_family.is_none() => MONO_SLOT,
+            (true, _) => GenericFamily::Monospace,
+            (false, true) => SANS_SLOT,
+            (false, false) => GenericFamily::SansSerif,
+        };
+        self.layout_text(text, opts, embedded, base, |builder| {
             // Borrowed names: no per-call Vec/String for a named family.
             let named;
             let family = if let Some(family) = font_family {
@@ -1198,7 +1321,12 @@ impl TextShaper {
         });
         let narrow = !embedded && self.narrow_stacks(text, faces);
         self.narrowed += narrow as u64;
-        self.layout_text(text, opts, embedded, |builder| {
+        let base = if narrow {
+            SANS_SLOT
+        } else {
+            GenericFamily::SansSerif
+        };
+        self.layout_text(text, opts, embedded, base, |builder| {
             let (sans, mono) = if narrow {
                 (SANS_SLOT, MONO_SLOT)
             } else {
@@ -1409,7 +1537,7 @@ impl TextShaper {
         if let Some(g) = self.glyph_cache.get(&key) {
             return *g;
         }
-        let (g, placed) = self.raster_glyph_into(key, atlas);
+        let (g, placed) = self.raster_glyph_into(key, atlas, true);
         // An atlas at its cap reports the placement but caches nothing, so
         // the glyph is not lost for good.
         if placed {
@@ -1428,12 +1556,24 @@ impl TextShaper {
         key: GlyphKey,
         atlas: &mut GlyphAtlas,
     ) -> RasterGlyph {
-        self.raster_glyph_into(key, atlas).0
+        // Coverage only: the caller reads the scratch atlas's R8 texels, and a colour glyph
+        // has none there.
+        self.raster_glyph_into(key, atlas, false).0
     }
 
     /// The glyph rasterized into `atlas`, and whether it found a place there
     /// (false when the atlas is full and cannot grow).
-    fn raster_glyph_into(&mut self, key: GlyphKey, atlas: &mut GlyphAtlas) -> (RasterGlyph, bool) {
+    ///
+    /// With `allow_color`, a glyph that has a colour picture in its font (an emoji in a
+    /// colour bitmap or layered colour outline font) goes into the atlas's colour plane as
+    /// RGBA. swash picks the nearest bitmap strike and scales it to the text size. Every
+    /// other glyph takes the coverage path as before.
+    fn raster_glyph_into(
+        &mut self,
+        key: GlyphKey,
+        atlas: &mut GlyphAtlas,
+        allow_color: bool,
+    ) -> (RasterGlyph, bool) {
         // The key's FontId selects the embedded face's bytes (index 0 — each
         // Liberation face is a single-font file). If a face ever fails to parse
         // we cache an empty glyph so we don't retry every frame.
@@ -1455,10 +1595,42 @@ impl TextShaper {
             .size(key.size_px as f32)
             .hint(false)
             .build();
-        let sources = [Source::Outline];
-        let mut render = Render::new(&sources);
+        // Colour first, so an emoji font that also carries plain outlines draws in colour.
+        // A font with no colour tables skips both colour sources at no cost.
+        let color_sources = [
+            Source::ColorOutline(0),
+            Source::ColorBitmap(StrikeWith::BestFit),
+            Source::Outline,
+        ];
+        let plain_sources = [Source::Outline];
+        let sources: &[Source] = if allow_color {
+            &color_sources
+        } else {
+            &plain_sources
+        };
+        let mut render = Render::new(sources);
         render.format(Format::Alpha);
         let ok = render.render_into(&mut scaler, key.glyph_id, img);
+
+        if ok && img.content == Content::Color {
+            let (w, h) = (img.placement.width, img.placement.height);
+            if w == 0 || h == 0 || img.data.len() < (w as usize) * (h as usize) * 4 {
+                return (RasterGlyph::default(), true);
+            }
+            let unplaced = RasterGlyph {
+                rect: AtlasRect::default(),
+                left: img.placement.left,
+                top: img.placement.top,
+                width: w,
+                height: h,
+                color: true,
+            };
+            let Some(rect) = atlas.allocate_color(w, h) else {
+                return (unplaced, false);
+            };
+            atlas.write_color(rect, &img.data);
+            return (RasterGlyph { rect, ..unplaced }, true);
+        }
 
         let g = if ok && !img.data.is_empty() {
             let w = img.placement.width;
@@ -1476,6 +1648,7 @@ impl TextShaper {
                         top: img.placement.top,
                         width: w,
                         height: h,
+                        color: false,
                     },
                     false,
                 );
@@ -1487,6 +1660,7 @@ impl TextShaper {
                 top: img.placement.top,
                 width: w,
                 height: h,
+                color: false,
             }
         } else {
             // Empty glyph (e.g. space): no coverage, zero-size rect, no atlas write.
@@ -1496,6 +1670,7 @@ impl TextShaper {
                 top: img.placement.top,
                 width: 0,
                 height: 0,
+                color: false,
             }
         };
         (g, true)

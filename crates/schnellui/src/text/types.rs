@@ -485,6 +485,106 @@ pub struct RasterGlyph {
     pub top: i32,
     pub width: u32,
     pub height: u32,
+    /// The glyph is a colour picture (an emoji from a colour font). `rect` then lies in the
+    /// atlas's colour plane, not in the R8 coverage, and the text colour does not tint it.
+    pub color: bool,
+}
+
+impl RasterGlyph {
+    /// The x a [`GlyphQuad`](crate::scene::Primitive::GlyphQuad) carries in its `atlas_uv`:
+    /// the texel x, moved up by [`COLOR_GLYPH_UV_BIAS`] for a colour glyph so the renderer
+    /// samples the colour plane.
+    pub fn uv_x(&self) -> f32 {
+        if self.color {
+            self.rect.x as f32 + COLOR_GLYPH_UV_BIAS
+        } else {
+            self.rect.x as f32
+        }
+    }
+}
+
+/// Added to the texel x of a glyph quad's `atlas_uv` when the glyph is a colour picture.
+/// An x at or above it names a texel of the atlas's colour plane at `x - COLOR_GLYPH_UV_BIAS`.
+/// It is far above any atlas width and exact in an `f32`, so code that crops or copies a
+/// quad's `atlas_uv` keeps the mark without knowing about it.
+pub const COLOR_GLYPH_UV_BIAS: f32 = 65536.0;
+
+/// The RGBA half of a [`GlyphAtlas`]: colour glyphs (emoji from a colour font), straight
+/// alpha, row-major. It starts empty and takes room on the first colour glyph, so an app
+/// with no emoji pays nothing for it. Grow-only, like the coverage half.
+#[derive(Clone, Default)]
+struct ColorPlane {
+    width: u32,
+    height: u32,
+    /// RGBA8, `width * height * 4` bytes.
+    pixels: Vec<u8>,
+    /// Bumped on every write and every grow. A renderer uploads the plane again when the
+    /// number it remembers differs.
+    generation: u64,
+    shelf_x: u32,
+    shelf_y: u32,
+    shelf_h: u32,
+}
+
+impl ColorPlane {
+    const WIDTH: u32 = 512;
+    const FIRST_HEIGHT: u32 = 256;
+    const MAX_HEIGHT: u32 = 4096;
+
+    fn allocate(&mut self, w: u32, h: u32) -> Option<AtlasRect> {
+        if w == 0 || h == 0 || w > Self::WIDTH || h > Self::MAX_HEIGHT {
+            return None;
+        }
+        if self.width == 0 {
+            self.width = Self::WIDTH;
+        }
+        if self.shelf_x + w > self.width {
+            self.shelf_y += self.shelf_h;
+            self.shelf_x = 0;
+            self.shelf_h = 0;
+        }
+        let bottom = self.shelf_y + h;
+        if bottom > Self::MAX_HEIGHT {
+            return None;
+        }
+        if bottom > self.height {
+            let mut height = self.height.max(Self::FIRST_HEIGHT);
+            while height < bottom {
+                height = (height * 2).min(Self::MAX_HEIGHT);
+            }
+            self.pixels
+                .resize(self.width as usize * height as usize * 4, 0);
+            self.height = height;
+            self.generation += 1;
+        }
+        let rect = AtlasRect {
+            x: self.shelf_x,
+            y: self.shelf_y,
+            width: w,
+            height: h,
+        };
+        self.shelf_x += w;
+        self.shelf_h = self.shelf_h.max(h);
+        Some(rect)
+    }
+
+    fn write(&mut self, rect: AtlasRect, rgba: &[u8]) {
+        let (w, h) = (rect.width as usize, rect.height as usize);
+        if rect.is_empty()
+            || rgba.len() < w * h * 4
+            || rect.right() > self.width
+            || rect.bottom() > self.height
+        {
+            return;
+        }
+        let stride = self.width as usize * 4;
+        for row in 0..h {
+            let dst = (rect.y as usize + row) * stride + rect.x as usize * 4;
+            let src = row * w * 4;
+            self.pixels[dst..dst + w * 4].copy_from_slice(&rgba[src..src + w * 4]);
+        }
+        self.generation += 1;
+    }
 }
 
 /// A CPU-side **R8** glyph atlas with a tracked dirty sub-rect (SOUL §8.1, §3.2).
@@ -523,6 +623,8 @@ pub struct GlyphAtlas {
     /// The fork shares the donor's id, which is only sound while the donor has
     /// not written anything since; see [`GlyphAtlas::resolve_fork`].
     fork_base: Option<u64>,
+    /// Colour glyphs, kept beside the coverage. See [`ColorPlane`].
+    color: ColorPlane,
 }
 
 static NEXT_GLYPH_ATLAS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -561,6 +663,47 @@ impl GlyphAtlas {
             max_height: height.max(Self::DEFAULT_MAX_HEIGHT),
             exhausted: false,
             fork_base: None,
+            color: ColorPlane::default(),
+        }
+    }
+
+    /// Width of the colour plane in texels, 0 while no colour glyph was placed.
+    pub fn color_width(&self) -> u32 {
+        self.color.width
+    }
+    /// Height of the colour plane in texels, 0 while no colour glyph was placed.
+    pub fn color_height(&self) -> u32 {
+        self.color.height
+    }
+    /// The colour plane: RGBA8 with straight alpha, row-major.
+    pub fn color_pixels(&self) -> &[u8] {
+        &self.color.pixels
+    }
+    /// Changes whenever the colour plane was written or grew.
+    pub fn color_generation(&self) -> u64 {
+        self.color.generation
+    }
+
+    /// A `w` x `h` slot in the colour plane, or `None` when the plane is full at its cap.
+    /// The plane grows as needed. Slots handed out before stay where they are.
+    pub fn allocate_color(&mut self, w: u32, h: u32) -> Option<AtlasRect> {
+        self.color.allocate(w, h)
+    }
+
+    /// A colour write counts as a change of the atlas: whoever keys cached pixels by
+    /// [`GlyphAtlas::generation`] must draw again. The coverage write log is untouched,
+    /// so [`GlyphAtlas::delta_since`] reports no coverage to upload for it.
+    fn color_changed(&mut self) {
+        self.generation += 1;
+    }
+
+    /// Copies row-major RGBA8 `rgba` (straight alpha) into `rect` of the colour plane.
+    /// A short source or a rect outside the plane is a no-op.
+    pub fn write_color(&mut self, rect: AtlasRect, rgba: &[u8]) {
+        let before = self.color.generation;
+        self.color.write(rect, rgba);
+        if self.color.generation != before {
+            self.color_changed();
         }
     }
 

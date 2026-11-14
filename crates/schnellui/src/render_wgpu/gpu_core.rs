@@ -454,6 +454,21 @@ pub(crate) struct AtlasGpu {
     pub(crate) generation: u64,
 }
 
+/// The GPU-side colour plane of the glyph atlas: an RGBA8-sRGB texture with the colour
+/// glyphs (emoji) of a CPU [`GlyphAtlas`]. Colour glyphs are written when a text first
+/// shows one, so the whole plane is uploaded again whenever it changed. A one texel
+/// stand-in exists while the atlas has no colour glyph, so the glyph pipeline always has
+/// something bound.
+pub(crate) struct ColorAtlasGpu {
+    pub(crate) texture: wgpu::Texture,
+    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// The CPU atlas and the colour generation this texture last matched.
+    pub(crate) atlas_id: u64,
+    pub(crate) generation: u64,
+}
+
 /// The GPU-side **image** atlas: an RGBA8-sRGB texture kept in sync with the scene's
 /// CPU [`ImageAtlas`](schnellui::scene::ImageAtlas) (SOUL §3.2). Staleness is a
 /// revision compare — the CPU atlas bumps its revision on every write, so the sync
@@ -489,6 +504,8 @@ pub(crate) struct GpuCore {
 
     pub(crate) sampler: wgpu::Sampler,
     pub(crate) glyph_bgl: wgpu::BindGroupLayout,
+    /// Layout of bind group 2 of the glyph pipeline: the colour plane texture.
+    pub(crate) color_bgl: wgpu::BindGroupLayout,
 
     // resident, grow-only instance buffers (§3.2, §4.4): steady-state re-render
     // reuses them via `write_buffer`, never reallocates.
@@ -504,6 +521,7 @@ pub(crate) struct GpuCore {
     /// explicit, this lets a structural remount reconcile a freshly built atlas
     /// against what is actually on the GPU instead of destroying the texture.
     pub(crate) atlas_shadow: Option<Vec<u8>>,
+    pub(crate) color_atlas: Option<ColorAtlasGpu>,
     pub(crate) image_atlas: Option<ImageAtlasGpu>,
 
     // cross-frame scratch (cleared-and-refilled, retains capacity — §4.4).
@@ -671,6 +689,21 @@ impl GpuCore {
             ],
         });
 
+        // --- colour glyph plane (texture only, read texel by texel), bind group 2 ---
+        let color_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("schnellui.color_glyph_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("schnellui.atlas_sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -738,9 +771,15 @@ impl GpuCore {
             std::mem::size_of::<QuadInstance>(),
         );
 
-        // pipeline 2: glyph quads sampling the R8 atlas (bind groups 0 + 1).
+        // pipeline 2: glyph quads sampling the R8 atlas, or the colour plane for a
+        // colour glyph (bind groups 0 + 1 + 2).
         let glyph_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("schnellui.glyph_layout"),
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&glyph_bgl), Some(&color_bgl)],
+            immediate_size: 0,
+        });
+        let image_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("schnellui.image_layout"),
             bind_group_layouts: &[Some(&uniform_bgl), Some(&glyph_bgl)],
             immediate_size: 0,
         });
@@ -754,12 +793,12 @@ impl GpuCore {
         );
 
         // pipeline 3: image quads sampling the RGBA image atlas (bind groups 0 + 1;
-        // the texture+sampler layout is identical to the glyph one, so the layout is
-        // shared). Instances reuse the glyph 4×vec4 layout: dest rect, texel uv,
+        // the texture+sampler layout is identical to the glyph one, so that bind group
+        // layout is shared). Instances reuse the glyph 4×vec4 layout: dest rect, texel uv,
         // tint colour, clip (SOUL §3.2).
         let image_pipeline = pipeline(
             "schnellui.image_pipeline",
-            &glyph_layout,
+            &image_layout,
             "vs_image",
             "fs_image",
             glyph_stride,
@@ -775,6 +814,7 @@ impl GpuCore {
             image_pipeline,
             sampler,
             glyph_bgl,
+            color_bgl,
             quad_buf: None,
             quad_cap: 0,
             glyph_buf: None,
@@ -783,6 +823,7 @@ impl GpuCore {
             image_cap: 0,
             atlas: None,
             atlas_shadow: None,
+            color_atlas: None,
             image_atlas: None,
             quad_scratch: Vec::new(),
             chrome_scratch: Vec::new(),
@@ -2385,10 +2426,11 @@ impl GpuCore {
                 }
             }
             if !glyphs.is_empty() {
-                if let Some(atlas_gpu) = &self.atlas {
+                if let (Some(atlas_gpu), Some(color_gpu)) = (&self.atlas, &self.color_atlas) {
                     pass.set_pipeline(&self.glyph_pipeline);
                     pass.set_bind_group(0, &self.uniform_bg, &[]);
                     pass.set_bind_group(1, &atlas_gpu.bind_group, &[]);
+                    pass.set_bind_group(2, &color_gpu.bind_group, &[]);
                     pass.set_vertex_buffer(0, self.glyph_buf.as_ref().unwrap().slice(..));
                     pass.draw(0..6, glyphs);
                 }
@@ -2408,6 +2450,7 @@ impl GpuCore {
     /// instead of consuming a shared dirty marker, so several renderers (the headless
     /// one and a windowed one) each stay current. A steady-state no-op.
     pub(crate) fn sync_atlas(&mut self, atlas: &GlyphAtlas) {
+        self.sync_color_atlas(atlas);
         let created = self.ensure_atlas(atlas);
         let Some(gpu) = self.atlas.as_ref() else {
             return;
@@ -2435,6 +2478,70 @@ impl GpuCore {
         if let Some(gpu) = self.atlas.as_mut() {
             gpu.atlas_id = atlas.id();
             gpu.generation = atlas.generation();
+        }
+    }
+
+    /// Brings the colour plane texture up to date with `atlas`. Nothing happens while the
+    /// texture matches the atlas and its colour generation, which is every frame that
+    /// shows no new emoji. Otherwise the plane is uploaded whole: it changes only when a
+    /// colour glyph is drawn for the first time.
+    pub(crate) fn sync_color_atlas(&mut self, atlas: &GlyphAtlas) {
+        let (w, h) = (atlas.color_width().max(1), atlas.color_height().max(1));
+        if let Some(gpu) = &self.color_atlas {
+            if gpu.atlas_id == atlas.id()
+                && gpu.generation == atlas.color_generation()
+                && gpu.width == w
+                && gpu.height == h
+            {
+                return;
+            }
+        }
+        let resident = self
+            .color_atlas
+            .as_ref()
+            .is_some_and(|gpu| gpu.width == w && gpu.height == h);
+        if !resident {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("schnellui.color_glyph_atlas"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("schnellui.color_glyph_atlas_bg"),
+                layout: &self.color_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            });
+            self.color_atlas = Some(ColorAtlasGpu {
+                texture,
+                bind_group,
+                width: w,
+                height: h,
+                atlas_id: atlas.id(),
+                generation: atlas.color_generation(),
+            });
+        }
+        let gpu = self.color_atlas.as_mut().unwrap();
+        gpu.atlas_id = atlas.id();
+        gpu.generation = atlas.color_generation();
+        let pixels = atlas.color_pixels();
+        if pixels.len() == (w as usize) * (h as usize) * 4 {
+            write_texels(&self.queue, &gpu.texture, 0, 0, w, h, w * 4, pixels);
+        } else {
+            // No colour glyph yet: the stand-in texel is transparent.
+            write_texels(&self.queue, &gpu.texture, 0, 0, 1, 1, 4, &[0, 0, 0, 0]);
         }
     }
 

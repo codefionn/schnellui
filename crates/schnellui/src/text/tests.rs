@@ -1283,3 +1283,30 @@ fn uncovered_text_takes_the_short_family_stack() {
     full.shape_with("ok ✓", &opts);
     assert_eq!(full.narrowed, 0);
 }
+
+/// Emoji ranges: emoji by default, a character made emoji by U+FE0F, keycaps and
+/// joined sequences; plain digits and a heart without the selector stay text.
+#[test]
+fn emoji_ranges_cover_sequences_and_leave_text_alone() {
+    use super::shaper::next_emoji_range;
+    let all = |text: &str| {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while let Some(range) = next_emoji_range(text, at) {
+            at = range.end;
+            out.push(text[range].to_owned());
+        }
+        out
+    };
+    assert!(all("plain 123 # text").is_empty());
+    assert!(all("gr\u{00FC}n \u{2764} \u{4E2D}").is_empty());
+    assert_eq!(all("a\u{1F600}b"), ["\u{1F600}"]);
+    assert_eq!(all("x \u{2764}\u{FE0F} y"), ["\u{2764}\u{FE0F}"]);
+    assert_eq!(all("1\u{FE0F}\u{20E3}2"), ["1\u{FE0F}\u{20E3}"]);
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    assert_eq!(all(&format!("hi {family}!")), [family]);
+    assert_eq!(
+        all("\u{1F44D}\u{1F3FD}\u{1F1E9}\u{1F1EA} ok \u{2705}"),
+        ["\u{1F44D}\u{1F3FD}\u{1F1E9}\u{1F1EA}", "\u{2705}"]
+    );
+}
