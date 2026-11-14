@@ -946,6 +946,57 @@ fn shadowed_button_body(scene: &Scene, id: WidgetId) -> Option<Rect> {
 const LINK_DECORATION_PAD_X: f32 = 4.0;
 const LINK_DECORATION_PAD_Y: f32 = 2.0;
 
+/// Thickness of the rule under a link button under the pointer.
+const LINK_RULE_W: f32 = 1.0;
+/// Gap between the baseline of a link button's label and its rule.
+const LINK_RULE_GAP: f32 = 2.0;
+
+/// The rule under the label of a button with the link appearance, and the
+/// label's colour: from the first glyph to the last, a little under the
+/// baseline. `None` for any other widget and for a button without glyphs.
+fn link_rule(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<(Rect, Color)> {
+    if scene.node(id)?.kind != WidgetKind::Button
+        || runtime.with(|rt| rt.borrow().button_appearances.get(id).copied())
+            != Some(crate::widgets::ButtonAppearance::Link)
+    {
+        return None;
+    }
+    let paint = scene.paint(id)?;
+    let end = ordinary_primitive_end(runtime, id, paint);
+    let glyphs: Vec<(Rect, Color)> = paint.primitives[..end]
+        .iter()
+        .filter_map(|primitive| match *primitive {
+            Primitive::GlyphQuad { rect, color, .. } => Some((rect, color)),
+            _ => None,
+        })
+        .collect();
+    let (first, ink) = *glyphs.first()?;
+    let left = glyphs.iter().map(|(r, _)| r.x).fold(first.x, f32::min);
+    let right = glyphs
+        .iter()
+        .map(|(r, _)| r.x + r.width)
+        .fold(first.x + first.width, f32::max);
+    // Most glyphs stand on the baseline, so the bottom edge that most of them
+    // share is the baseline. A descender or a hyphen ends somewhere else.
+    let bottoms: Vec<i32> = glyphs
+        .iter()
+        .map(|(r, _)| (r.y + r.height).round() as i32)
+        .collect();
+    let baseline = bottoms
+        .iter()
+        .copied()
+        .max_by_key(|bottom| (bottoms.iter().filter(|b| *b == bottom).count(), *bottom))?;
+    Some((
+        Rect::new(
+            left,
+            baseline as f32 + LINK_RULE_GAP,
+            right - left,
+            LINK_RULE_W,
+        ),
+        ink,
+    ))
+}
+
 fn apply_interaction_style(
     runtime: &Runtime,
     scene: &mut Scene,
@@ -988,6 +1039,19 @@ fn apply_interaction_style(
         // behind the control, round for the round ones.
         let halo = component == Some(InteractionComponent::Toggle);
         let (wash, corner_radius) = if halo {
+            // A radio's box may be as tall as its row. Its halo is a circle
+            // around the dot in the middle, not a pill as tall as the row.
+            let rect = if kind == Some(WidgetKind::Radio) {
+                let side = rect.width.min(rect.height);
+                Rect::new(
+                    rect.x + (rect.width - side) * 0.5,
+                    rect.y + (rect.height - side) * 0.5,
+                    side,
+                    side,
+                )
+            } else {
+                rect
+            };
             let wash = Rect::new(
                 rect.x - TOGGLE_HALO,
                 rect.y - TOGGLE_HALO,
@@ -1060,8 +1124,16 @@ fn apply_interaction_style(
                     })
             })
             .unwrap_or_else(|| theme_for(runtime, id).page);
-        let color = crate::widgets::theme::wash_over(color, backdrop);
-        let rect = wash;
+        // A link button has no box to tint. Its state is a rule under its
+        // words in the label's own colour, as a link in a page has.
+        let (rect, color, corner_radius) = match link_rule(runtime, scene, id) {
+            Some((rule, ink)) => (rule, ink, 0.0),
+            None => (
+                wash,
+                crate::widgets::theme::wash_over(color, backdrop),
+                corner_radius,
+            ),
+        };
         // The new rect shifts the later primitives of this node, including the
         // colour restores of decorations already applied.
         shift_restores(runtime, id, position, 1);

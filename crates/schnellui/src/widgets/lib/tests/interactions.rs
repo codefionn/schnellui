@@ -883,8 +883,19 @@ fn filled_buttons_wear_their_own_states_and_other_kinds_the_plain_ones() {
             y: rect.y + rect.height * 0.5,
         };
         assert!(update_pointer_proximity(runtime, &mut scene, center));
+        // A link has no box to tint: its state is a rule in the label's colour.
+        let link = appearance == ButtonAppearance::Link;
+        let rule = Some(Theme::default().accent);
         assert!(
-            has_wash(&scene, id, expected.hover.background),
+            has_wash(
+                &scene,
+                id,
+                if link {
+                    rule
+                } else {
+                    expected.hover.background
+                }
+            ),
             "{appearance:?} hover"
         );
         update_pointer_proximity(
@@ -897,7 +908,15 @@ fn filled_buttons_wear_their_own_states_and_other_kinds_the_plain_ones() {
         );
         assert!(set_active_interaction(runtime, &mut scene, Some(id)));
         assert!(
-            has_wash(&scene, id, expected.active.background),
+            has_wash(
+                &scene,
+                id,
+                if link {
+                    rule
+                } else {
+                    expected.active.background
+                }
+            ),
             "{appearance:?} pressed"
         );
     }

@@ -571,7 +571,8 @@ fn luminance(color: Color) -> f32 {
 /// in linear light it barely moves and a 12% white wash over a dark surface
 /// glares. The returned alpha gives the luminance the sRGB blend would give
 /// over `backdrop`.
-pub(crate) fn wash_over(wash: Color, backdrop: Color) -> Color {
+#[must_use]
+pub fn wash_over(wash: Color, backdrop: Color) -> Color {
     if wash.a == 0 || wash.a == 255 {
         return wash;
     }

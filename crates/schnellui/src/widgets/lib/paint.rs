@@ -431,8 +431,9 @@ pub(crate) fn button_colors(
 
 /// How far the label of a disabled button without a fill fades from the
 /// muted text color toward the surface. More than on the disabled fill: with
-/// no grey block behind it, the fade alone says the button is off.
-const DISABLED_BARE_LABEL_FADE: f32 = 0.35;
+/// no grey block behind it, the fade alone says the button is off. Not more
+/// than this: at 0.35 a label on a light page fell under 3:1.
+const DISABLED_BARE_LABEL_FADE: f32 = 0.30;
 
 /// How far a disabled button's frame moves from the divider color toward
 /// the outline.
