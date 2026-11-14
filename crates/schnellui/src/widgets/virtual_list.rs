@@ -181,6 +181,13 @@ where
         self
     }
 
+    /// With a scrollbar: keeps the bar's strip reserved even while the rows fit,
+    /// so the rows do not shift when the list starts to overflow.
+    pub fn stable_gutter(mut self, stable: bool) -> Self {
+        self.scroll = self.scroll.stable_gutter(stable);
+        self
+    }
+
     /// Pins the list to its end while it is already at the end, including when
     /// streamed data changes the estimated or measured content extent.
     pub fn follow_end(mut self, enabled: bool) -> Self {

@@ -258,14 +258,21 @@ pub(crate) fn emit_switch_paint(
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(knob_x, rect.y + SWITCH_INSET + frame, knob, knob),
         // An on knob takes the color drawn on the accent, so it stands out
-        // from the track whatever the scheme. An off knob takes the surface:
-        // the off track is picked to read against the page, and the surface
-        // is the page's near neighbour. Framed designs keep a surface track,
-        // so there the knob stays in muted text.
+        // from the track whatever the scheme. An off knob is the lighter of
+        // the surface and the text: the surface on a light page, the text on
+        // a dark one, where a surface knob was a dark dot on a grey track.
+        // Framed designs keep a surface track, so there the knob stays in
+        // muted text.
         color: if on {
             t.on_accent
         } else if frame == 0.0 {
-            t.surface
+            let light =
+                |c: schnellui::scene::Color| u16::from(c.r) + u16::from(c.g) + u16::from(c.b);
+            if light(t.text) > light(t.surface) {
+                t.text
+            } else {
+                t.surface
+            }
         } else {
             t.text_muted
         },

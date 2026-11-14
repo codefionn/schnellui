@@ -75,6 +75,7 @@ impl TemplateRenderer for SceneTemplate {
                     on_scroll_debounced: None,
                     name: None,
                     scrollbar,
+                    stable_gutter: false,
                     edge_auto_scroll,
                     follow_end: false,
                     initial_offset: None,

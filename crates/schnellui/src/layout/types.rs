@@ -304,6 +304,10 @@ pub struct ContainerStyle {
     /// edge so the bar sits beside the content instead of over it. Content that
     /// fits keeps the full width. Ignored on every other container.
     pub scrollbar_gutter: bool,
+    /// With [`Self::scrollbar_gutter`]: the gutter is reserved whether or not the
+    /// content overflows, so the content keeps one width and does not shift when
+    /// it starts to scroll.
+    pub scrollbar_gutter_stable: bool,
 }
 
 /// Width a scrollbar takes at a viewport's right edge: the bar plus its inset.
@@ -329,6 +333,7 @@ impl ContainerStyle {
             keep_in_view: true,
             fit_parent: false,
             scrollbar_gutter: false,
+            scrollbar_gutter_stable: false,
         }
     }
 }

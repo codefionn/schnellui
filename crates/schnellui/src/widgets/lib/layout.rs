@@ -563,6 +563,7 @@ pub struct Scroll {
     pub(crate) on_scroll_debounced: Option<DebouncedScrollHandler>,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) scrollbar: bool,
+    pub(crate) stable_gutter: bool,
     pub(crate) edge_auto_scroll: bool,
     pub(crate) follow_end: bool,
     pub(crate) initial_offset: Option<f32>,
@@ -578,6 +579,7 @@ impl Scroll {
             on_scroll_debounced: None,
             name: None,
             scrollbar: false,
+            stable_gutter: false,
             edge_auto_scroll: false,
             follow_end: false,
             initial_offset: None,
@@ -588,6 +590,13 @@ impl Scroll {
     /// a specific focused scroll surface with application-level key handling.
     pub fn label(mut self, name: impl Into<Cow<'static, str>>) -> Scroll {
         self.name = Some(name.into());
+        self
+    }
+    /// With a scrollbar: keeps the bar's strip reserved even while the content
+    /// fits, so the content has one width and does not shift when it starts to
+    /// overflow.
+    pub fn stable_gutter(mut self, stable: bool) -> Scroll {
+        self.stable_gutter = stable;
         self
     }
     /// Sets the single scrollable child (SOUL §3.3 `.child(…)`).
@@ -723,6 +732,7 @@ impl View for Scroll {
         // The bar gets its own strip while the content overflows (SOUL §8.1: layout
         // owns geometry), so content never runs under it.
         style.scrollbar_gutter = this.scrollbar;
+        style.scrollbar_gutter_stable = this.stable_gutter;
         ctx.layout.set_container(id, style);
         ctx.runtime.with(|runtime| {
             let debounced =

@@ -180,7 +180,11 @@ impl LayoutEngine {
     /// the node is already synced its cache is invalidated so the next
     /// [`Self::compute`] relayouts it and its ancestors.
     pub fn set_container(&mut self, id: WidgetId, style: ContainerStyle) {
-        if style.scrollbar_gutter && style.container == Container::Scroll {
+        // A stable gutter is always there, so it needs no overflow bookkeeping.
+        if style.scrollbar_gutter
+            && !style.scrollbar_gutter_stable
+            && style.container == Container::Scroll
+        {
             if !self.gutters.contains_key(id) {
                 self.gutters.insert(id, Gutter::default());
                 self.gutter_ids.push(id);
@@ -426,7 +430,11 @@ impl LayoutEngine {
                 .copied()
                 .unwrap_or_else(|| ContainerStyle::new(default_container(kind)));
             apply_container(&mut s, &style);
-            if self.gutters.get(id).is_some_and(|g| g.on) {
+            if self.gutters.get(id).is_some_and(|g| g.on)
+                || (style.scrollbar_gutter
+                    && style.scrollbar_gutter_stable
+                    && style.container == Container::Scroll)
+            {
                 s.scrollbar_width = SCROLLBAR_GUTTER;
             }
         }

@@ -61,7 +61,7 @@ pub(crate) const INPUT_BORDER_W: f32 = 1.0;
 /// at a fractional x antialiases to a pale grey that is hard to find.
 pub(crate) const CARET_W: f32 = 2.0;
 /// A floated Material-style label is one typography step below the input value.
-const FLOAT_LABEL_SIZE_RATIO: f32 = 0.8;
+const FLOAT_LABEL_SIZE_RATIO: f32 = 0.86;
 /// How long a floating label takes to move fully between rest and floating.
 const FLOAT_LABEL_ANIMATION_MS: f32 = 133.0;
 /// The nominal frame the first tick of a transition advances.
