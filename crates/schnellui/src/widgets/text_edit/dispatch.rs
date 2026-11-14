@@ -290,6 +290,7 @@ fn dispatch_focus_with_indicator(
         // for editables, which browsers treat as keyboard-input controls.
         crate::widgets::set_focus_ring_visible(runtime, scene, n, indicator_visible);
     }
+    crate::widgets::report_focus_within(runtime, scene);
     true
 }
 

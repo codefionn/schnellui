@@ -90,8 +90,7 @@ impl Text {
     }
 
     /// Sets the text in the bold face, for headings. It works for a single
-    /// line and for wrapped or aligned text, static or dynamic. An ellipsized
-    /// text stays regular.
+    /// line and for wrapped, aligned or ellipsized text, static or dynamic.
     pub fn bold(mut self) -> Text {
         self.bold = true;
         self

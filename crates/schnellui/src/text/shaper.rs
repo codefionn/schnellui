@@ -1458,9 +1458,22 @@ impl TextShaper {
         max_width: f32,
         out: &mut ShapedText,
     ) {
+        self.truncate_to_width_face_into(text, size_px, max_width, FontFace::Sans, out);
+    }
+
+    /// [`truncate_to_width_into`](Self::truncate_to_width_into) in `face`, so a
+    /// bold heading that is cut keeps its weight.
+    pub fn truncate_to_width_face_into(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        max_width: f32,
+        face: FontFace,
+        out: &mut ShapedText,
+    ) {
         const ELLIPSIS: &str = "…";
         // Force a single line; alignment is irrelevant to truncation.
-        let opts = ShapeOptions::new(size_px).wrap(WrapMode::NoWrap);
+        let opts = ShapeOptions::new(size_px).wrap(WrapMode::NoWrap).face(face);
 
         self.shape_core(text, &opts, None, out);
         if text.is_empty() || out.width <= max_width {

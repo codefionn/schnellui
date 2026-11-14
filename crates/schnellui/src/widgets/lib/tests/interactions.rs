@@ -612,6 +612,56 @@ fn press_wash_comes_off_after_hover_is_taken_from_under_it() {
     }
 }
 
+/// A radio that fills its row is washed across the whole row under the pointer,
+/// dot and label alike, and not with a halo around the dot.
+#[test]
+fn a_row_radio_is_washed_across_its_row_under_the_pointer() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, _text, _atlas, root) = build_one(
+        runtime,
+        ThemeProvider::new(
+            crate::theme::LIGHT,
+            Column::new()
+                .size(300.0, 28.0)
+                .align(Align::Stretch)
+                .child(Radio::new(false).row(28.0)),
+        ),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 300.0,
+            height: 28.0,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+    let id = scene.node(root).unwrap().children[0];
+    let row = scene.layout(id).unwrap().rect;
+    assert!(update_pointer_proximity(
+        runtime,
+        &mut scene,
+        Point {
+            x: row.x + 200.0,
+            y: row.y + 14.0,
+        }
+    ));
+    let wash = scene
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .find_map(|p| match *p {
+            Primitive::SolidRect { rect, .. } if rect.width >= row.width => Some(rect),
+            _ => None,
+        })
+        .expect("a wash as wide as the row");
+    assert_eq!(wash.height, row.height);
+    assert_eq!(wash.width, row.width + 2.0 * TOGGLE_HALO);
+}
+
 /// A toggle's hover halo and focus ring are concentric with the control, with
 /// the same offset on every side, whatever sits beside it in its row.
 #[test]
@@ -982,4 +1032,103 @@ fn hover_within_reports_the_pointer_and_leaves_the_childs_hover_alone() {
     );
     assert_eq!(*seen.borrow(), [true, false]);
     assert!(!pointer_within(runtime, row));
+}
+
+// A container hears when keyboard focus comes to something inside it and
+// when it leaves, and not when it moves between two controls inside.
+#[test]
+fn focus_within_reports_focus_entering_and_leaving_the_area() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let (mut scene, mut layout, mut text, mut atlas, root) = build_one(
+        runtime,
+        Column::new()
+            .child(
+                FocusWithin::new(
+                    Row::new()
+                        .child(Button::new("first"))
+                        .child(Button::new("second")),
+                )
+                .on_change(move |inside| log.borrow_mut().push(inside)),
+            )
+            .child(Button::new("outside")),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 300.0,
+            height: 200.0,
+        },
+    );
+    let row = scene.node(root).unwrap().children[0];
+    let first = scene.node(row).unwrap().children[0];
+    let second = scene.node(row).unwrap().children[1];
+    let outside = scene.node(root).unwrap().children[1];
+
+    crate::widgets::dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(first));
+    assert_eq!(*seen.borrow(), [true]);
+    assert!(focus_within(runtime, row));
+
+    // Between two controls of the area: nothing new to report.
+    crate::widgets::dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(second));
+    assert_eq!(*seen.borrow(), [true]);
+
+    crate::widgets::dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(outside));
+    assert_eq!(*seen.borrow(), [true, false]);
+    assert!(!focus_within(runtime, row));
+
+    // Focus cleared from inside also counts as leaving.
+    crate::widgets::dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(first));
+    crate::widgets::dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, None);
+    assert_eq!(*seen.borrow(), [true, false, true, false]);
+}
+
+// A field the app marks invalid draws the invalid outline, with and without
+// focus, says so to assistive technology, and drops the mark on a new value.
+#[test]
+fn an_invalid_text_input_draws_the_invalid_outline() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, mut text, mut atlas, root) = build_one(
+        runtime,
+        Column::new()
+            .child(TextInput::new("wrong").label("Name").invalid(true))
+            .child(PasswordInput::new("wrong").label("Password").invalid(true))
+            .child(TextInput::new("fine").label("Other")),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 300.0,
+            height: 300.0,
+        },
+    );
+    let children = scene.node(root).unwrap().children.clone();
+    let outline = |scene: &Scene, id: WidgetId| match scene.paint(id).unwrap().primitives[0] {
+        Primitive::SolidRect { color, .. } => color,
+        ref other => panic!("{other:?}"),
+    };
+    let theme = crate::widgets::theme_for(runtime, children[0]);
+    for &field in &children[..2] {
+        assert_eq!(outline(&scene, field), theme.invalid_color());
+        let state = StateFlags(scene.a11y(field).unwrap().state);
+        assert!(state.contains(StateFlags::INVALID));
+    }
+    assert_eq!(outline(&scene, children[2]), theme.outline);
+
+    // Focus keeps the invalid outline: the ring is drawn outside it.
+    crate::widgets::dispatch_focus(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        Some(children[0]),
+    );
+    assert_eq!(outline(&scene, children[0]), theme.invalid_color());
 }

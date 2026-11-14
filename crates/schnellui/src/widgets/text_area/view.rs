@@ -836,7 +836,9 @@ fn surface(rect: Rect, focused: bool, invalid: bool, th: &crate::widgets::Theme)
             } else {
                 th.outline
             },
-            corner_radius: 3.0,
+            // The theme's corners, as a text input has them, so an area under an
+            // input is the same kind of box.
+            corner_radius: th.shape.radius(3.0, rect.height),
         },
         Primitive::SolidRect {
             rect: Rect::new(
@@ -846,7 +848,7 @@ fn surface(rect: Rect, focused: bool, invalid: bool, th: &crate::widgets::Theme)
                 (rect.height - 2.0 * INPUT_BORDER_W).max(0.0),
             ),
             color: th.surface,
-            corner_radius: 2.0,
+            corner_radius: (th.shape.radius(3.0, rect.height) - INPUT_BORDER_W).max(0.0),
         },
     ]
 }

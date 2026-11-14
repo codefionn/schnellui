@@ -521,6 +521,14 @@ struct HoverWithinState {
     on_change: Option<Box<dyn FnMut(bool) + 'static>>,
 }
 
+/// One [`FocusWithin`]: whether keyboard focus was inside at the last focus
+/// change, and who to tell when that changes.
+struct FocusWithinState {
+    inside: bool,
+    /// Taken out while it runs, so no registry borrow is held across user code.
+    on_change: Option<Box<dyn FnMut(bool) + 'static>>,
+}
+
 #[derive(Clone, Copy)]
 struct HoverTooltipState {
     base_primitive_end: usize,
@@ -1244,13 +1252,24 @@ impl TextLayout {
             #[cfg(test)]
             SHAPE_CALLS.with(|c| c.set(c.get() + 1));
             if self.ellipsis {
+                let face = if self.bold {
+                    FontFace::SansBold
+                } else {
+                    FontFace::Sans
+                };
                 match max_w {
-                    Some(mw) => {
-                        shaper.truncate_to_width_into(&self.text, phys, mw, &mut self.shaped)
-                    }
-                    None => {
-                        shaper.shape_into(&self.text, &ShapeOptions::new(phys), &mut self.shaped)
-                    }
+                    Some(mw) => shaper.truncate_to_width_face_into(
+                        &self.text,
+                        phys,
+                        mw,
+                        face,
+                        &mut self.shaped,
+                    ),
+                    None => shaper.shape_into(
+                        &self.text,
+                        &ShapeOptions::new(phys).face(face),
+                        &mut self.shaped,
+                    ),
                 }
             } else {
                 let mut opts = ShapeOptions::new(phys)
@@ -1527,6 +1546,10 @@ struct WidgetRuntime {
     hover_within: SecondaryMap<WidgetId, HoverWithinState>,
     /// Dense index of `hover_within` (walked on every pointer move).
     hover_within_ids: Vec<WidgetId>,
+    /// [`FocusWithin`].
+    focus_within: SecondaryMap<WidgetId, FocusWithinState>,
+    /// Dense index of `focus_within` (walked on every focus change).
+    focus_within_ids: Vec<WidgetId>,
     /// Pre-rasterized hover labels for compact buttons and meaningful images.
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
@@ -1707,6 +1730,8 @@ pub fn reset(runtime: &Runtime) {
         rt.proximity_ids.clear();
         rt.hover_within.clear();
         rt.hover_within_ids.clear();
+        rt.focus_within.clear();
+        rt.focus_within_ids.clear();
         rt.hover_tooltips.clear();
         rt.drop_tips.clear();
         rt.tooltip_ids.clear();
@@ -1826,6 +1851,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.spinners.remove(id);
             rt.proximity_reveals.remove(id);
             rt.hover_within.remove(id);
+            rt.focus_within.remove(id);
             rt.hover_tooltips.remove(id);
             rt.drop_tips.remove(id);
             rt.tooltip_when.remove(id);
@@ -1845,6 +1871,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
         rt.spinner_ids.retain(|id| !removed(*id));
         rt.proximity_ids.retain(|id| !removed(*id));
         rt.hover_within_ids.retain(|id| !removed(*id));
+        rt.focus_within_ids.retain(|id| !removed(*id));
         rt.tooltip_ids.retain(|id| !removed(*id));
         rt.dynamic_image_ids.retain(|id| !removed(*id));
         rt.edit_ids.retain(|id| !removed(*id));

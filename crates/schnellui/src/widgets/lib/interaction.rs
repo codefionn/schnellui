@@ -1038,7 +1038,27 @@ fn apply_interaction_style(
         // A toggle is too small to tint in place: its wash is a soft halo
         // behind the control, round for the round ones.
         let halo = component == Some(InteractionComponent::Toggle);
-        let (wash, corner_radius) = if halo {
+        // A radio that fills its row (`Radio::row`) lies over its label. The whole
+        // row is the target, so the whole row takes the wash, dot and label alike,
+        // with a little room before the dot.
+        let radio_row = (kind == Some(WidgetKind::Radio)
+            && runtime.with(|rt| {
+                rt.borrow()
+                    .handlers
+                    .get(id)
+                    .is_some_and(|h| h.radio_row.is_some())
+            }))
+        .then(|| scene.layout(id).map(|layout| layout.rect))
+        .flatten();
+        let (wash, corner_radius) = if let Some(rect) = radio_row {
+            let wash = Rect::new(
+                rect.x - TOGGLE_HALO,
+                rect.y,
+                rect.width + 2.0 * TOGGLE_HALO,
+                rect.height,
+            );
+            (wash, shape.radius(3.0, wash.height))
+        } else if halo {
             // A radio's box may be as tall as its row. Its halo is a circle
             // around the dot in the middle, not a pill as tall as the row.
             let rect = if kind == Some(WidgetKind::Radio) {
@@ -2133,6 +2153,103 @@ fn report_hover_within(runtime: &Runtime, scene: &Scene, point: Point, hit: Opti
         handler(inside);
         runtime.with(|rt| {
             if let Some(state) = rt.borrow_mut().hover_within.get_mut(id) {
+                state.on_change.get_or_insert(handler);
+            }
+        });
+    }
+}
+
+/// Tells an area whether keyboard focus is on something inside it. Wrap any
+/// view: `FocusWithin::new(row).on_change(|inside| ..)`.
+///
+/// The area is the wrapped view's subtree, its own root included. The wrapper
+/// adds no node. The handler runs with `true` when focus comes to a
+/// descendant from outside and with `false` when it leaves, once per change;
+/// focus that moves between two descendants reports nothing. Pointer focus
+/// counts like keyboard focus. A view removed while it holds focus gets no
+/// last call, and an area built around a node that already has focus hears
+/// of it at the next focus change.
+pub struct FocusWithin {
+    child: Box<dyn View>,
+    on_change: Option<Box<dyn FnMut(bool) + 'static>>,
+}
+
+impl FocusWithin {
+    pub fn new(child: impl View) -> FocusWithin {
+        FocusWithin {
+            child: Box::new(child),
+            on_change: None,
+        }
+    }
+
+    /// Called with `true` when focus comes inside the area and with `false`
+    /// when it leaves, once per change.
+    pub fn on_change(mut self, f: impl FnMut(bool) + 'static) -> FocusWithin {
+        self.on_change = Some(Box::new(f));
+        self
+    }
+}
+
+impl View for FocusWithin {
+    fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
+        let FocusWithin { child, on_change } = *self;
+        let id = child.build(ctx, parent);
+        ctx.runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            let state = FocusWithinState {
+                inside: false,
+                on_change,
+            };
+            if rt.focus_within.insert(id, state).is_none() {
+                rt.focus_within_ids.push(id);
+            }
+        });
+        id
+    }
+}
+
+/// Whether keyboard focus is inside the [`FocusWithin`] area whose root is
+/// `id`, as of the last focus change.
+pub fn focus_within(runtime: &Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| rt.borrow().focus_within.get(id).is_some_and(|s| s.inside))
+}
+
+/// Runs the handlers of the [`FocusWithin`] areas focus entered or left.
+/// Called after every focus change.
+pub(crate) fn report_focus_within(runtime: &Runtime, scene: &Scene) {
+    let focused = schnellui::a11y::focused(scene);
+    let changed: Vec<(WidgetId, bool)> = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let rt = &mut *rt;
+        let mut changed = Vec::new();
+        for &id in &rt.focus_within_ids {
+            let Some(state) = rt.focus_within.get_mut(id) else {
+                continue;
+            };
+            let inside = focused.is_some_and(|focused| {
+                std::iter::successors(Some(focused), |n| {
+                    scene.node(*n).and_then(|node| node.parent)
+                })
+                .any(|n| n == id)
+            });
+            if inside != state.inside {
+                state.inside = inside;
+                changed.push((id, inside));
+            }
+        }
+        changed
+    });
+    for (id, inside) in changed {
+        let handler = runtime.with(|rt| {
+            rt.borrow_mut()
+                .focus_within
+                .get_mut(id)
+                .and_then(|state| state.on_change.take())
+        });
+        let Some(mut handler) = handler else { continue };
+        handler(inside);
+        runtime.with(|rt| {
+            if let Some(state) = rt.borrow_mut().focus_within.get_mut(id) {
                 state.on_change.get_or_insert(handler);
             }
         });

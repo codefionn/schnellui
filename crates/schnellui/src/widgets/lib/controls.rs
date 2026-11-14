@@ -971,6 +971,7 @@ pub struct TextInput {
     pub(crate) hint: bool,
     pub(crate) min_height: f32,
     pub(crate) required: bool,
+    pub(crate) invalid: bool,
 }
 
 impl TextInput {
@@ -987,7 +988,17 @@ impl TextInput {
             hint: false,
             min_height: 0.0,
             required: false,
+            invalid: false,
         }
+    }
+    /// Marks the field as holding a value the app rejected: its outline takes
+    /// the theme's invalid color and assistive technology hears "invalid".
+    /// The focus ring still shows around it while the field has focus. The
+    /// mark goes when the user changes the value, as a [`Form`]'s own mark
+    /// does.
+    pub fn invalid(mut self, invalid: bool) -> TextInput {
+        self.invalid = invalid;
+        self
     }
     /// Requires a value before the enclosing [`Form`] can be submitted. A submit
     /// with this field empty marks it invalid and focuses it.
@@ -1098,9 +1109,14 @@ impl View for TextInput {
                 acts.insert(ActionFlags::SHOW_CONTEXT_MENU);
             }
             a.actions = acts.0;
+            let mut state = StateFlags::default();
             if this.required {
-                let mut state = StateFlags::default();
                 state.insert(StateFlags::REQUIRED);
+            }
+            if this.invalid {
+                state.insert(StateFlags::INVALID);
+            }
+            if this.required || this.invalid {
                 a.state = state.0;
             }
         }
@@ -1163,6 +1179,12 @@ impl PasswordInput {
     }
     pub fn on_input(mut self, f: impl FnMut(&str) + 'static) -> PasswordInput {
         self.0.on_input = Some(Box::new(f));
+        self
+    }
+    /// Marks the field as holding a rejected value, as [`TextInput::invalid`]
+    /// does.
+    pub fn invalid(mut self, invalid: bool) -> PasswordInput {
+        self.0.invalid = invalid;
         self
     }
     /// Requires a value before the enclosing [`Form`] can be submitted, as
