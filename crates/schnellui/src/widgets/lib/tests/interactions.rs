@@ -1132,3 +1132,59 @@ fn an_invalid_text_input_draws_the_invalid_outline() {
     );
     assert_eq!(outline(&scene, children[0]), theme.invalid_color());
 }
+
+/// A list row under the pointer keeps the colour of its avatar disc: the wash
+/// goes over the row's ground and under the disc, not over both.
+#[test]
+fn a_list_row_wash_lies_under_its_avatar_disc() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let disc = Color::rgb(0x40, 0xA0, 0x80);
+    let (mut scene, mut layout, _text, _atlas, root) = build_one(
+        runtime,
+        Column::new().child(
+            crate::widgets::ListRow::new("Carol")
+                .leading_mark("Ca", disc, Color::rgb(0x10, 0x20, 0x18), 32.0)
+                .width(240.0),
+        ),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 320.0,
+            height: 180.0,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+    let row = scene.node(root).unwrap().children[0];
+    let rect = scene.layout(row).unwrap().rect;
+    let disc_at = |scene: &Scene| {
+        scene
+            .paint(row)
+            .unwrap()
+            .primitives
+            .iter()
+            .position(|p| matches!(p, Primitive::SolidRect { color, .. } if *color == disc))
+            .expect("the disc is painted")
+    };
+    let before = disc_at(&scene);
+    let count = scene.paint(row).unwrap().primitives.len();
+    assert!(update_pointer_proximity(
+        runtime,
+        &mut scene,
+        Point {
+            x: rect.x + rect.width * 0.5,
+            y: rect.y + rect.height * 0.5,
+        }
+    ));
+    assert_eq!(scene.paint(row).unwrap().primitives.len(), count + 1);
+    // The wash went in before the disc, so the disc moved one place back and
+    // nothing translucent is drawn after it but text.
+    assert_eq!(disc_at(&scene), before + 1);
+    assert!(matches!(
+        scene.paint(row).unwrap().primitives[1],
+        Primitive::SolidRect { color, .. } if color != disc
+    ));
+}

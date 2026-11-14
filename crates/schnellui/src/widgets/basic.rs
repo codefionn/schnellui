@@ -639,6 +639,28 @@ mod tests {
         assert!(knob_on.x > knob_off.x, "the knob moves right when on");
     }
 
+    /// An off switch is an outlined track with the knob in the text colour, an
+    /// on switch a filled accent track: off reads as off, not as disabled.
+    #[test]
+    fn an_off_switch_is_an_outline_and_an_on_switch_a_fill() {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let (scene_off, _l, _t, _a, off) = build_one(runtime, Switch::new(false));
+        let (scene_on, _l2, _t2, _a2, on) = build_one(runtime, Switch::new(true));
+        let theme = crate::widgets::theme_for(runtime, off);
+        let off_paint = &scene_off.paint(off).unwrap().primitives;
+        assert!(matches!(off_paint[0], Primitive::StrokeRect { .. }));
+        assert!(matches!(
+            off_paint[1],
+            Primitive::SolidRect { color, .. } if color == theme.text
+        ));
+        let on_paint = &scene_on.paint(on).unwrap().primitives;
+        assert!(matches!(
+            on_paint[0],
+            Primitive::SolidRect { color, .. } if color == theme.accent
+        ));
+    }
+
     // --- input handling: pointer and ActionRequest converge (SOUL §6.3) ---
 
     #[test]

@@ -1186,3 +1186,93 @@ fn the_gutter_is_decided_at_full_width() {
         assert_eq!(metrics.max_offset > 0.0, height < 40);
     }
 }
+
+/// The strips of an edge fade in a viewport's paint: `(y, alpha)` of each.
+fn fade_strips(scene: &Scene, id: WidgetId, ground: Color) -> Vec<(f32, u8)> {
+    scene.paint(id).map_or_else(Vec::new, |paint| {
+        paint
+            .primitives
+            .iter()
+            .filter_map(|primitive| match *primitive {
+                Primitive::SolidRect { rect, color, .. }
+                    if rect.height == 1.0
+                        && (color.r, color.g, color.b) == (ground.r, ground.g, ground.b) =>
+                {
+                    Some((rect.y, color.a))
+                }
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// An edge fades only while content lies beyond it: nothing at the top of a
+/// view at rest, both edges in the middle, nothing at the bottom at the end.
+#[test]
+fn an_edge_fade_shows_only_where_more_content_lies_beyond() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let ground = Color::rgb(0xF0, 0xF1, 0xF2);
+    let (mut scene, _layout, _text, _atlas, scroll) = build_and_layout(
+        runtime,
+        scroll_with_rows(40, 320.0, 220.0).edge_fade(ground, 12.0),
+        Size {
+            width: 400.0,
+            height: 300.0,
+        },
+    );
+    let viewport = scene.layout(scroll).unwrap().rect;
+    let middle = viewport.y + viewport.height * 0.5;
+    let at_rest = fade_strips(&scene, scroll, ground);
+    assert!(!at_rest.is_empty(), "more follows, so the bottom fades");
+    assert!(
+        at_rest.iter().all(|(y, _)| *y > middle),
+        "a view at its top has a clear top: {at_rest:?}"
+    );
+
+    assert!(dispatch_scroll(runtime, &mut scene, scroll, 60.0));
+    let scrolled = fade_strips(&scene, scroll, ground);
+    assert!(scrolled.iter().any(|(y, _)| *y < middle), "{scrolled:?}");
+    assert!(scrolled.iter().any(|(y, _)| *y > middle), "{scrolled:?}");
+    // One pixel row per strip and no two neighbours far apart: no visible band.
+    let mut top: Vec<(f32, u8)> = scrolled
+        .iter()
+        .copied()
+        .filter(|(y, _)| *y < middle)
+        .collect();
+    top.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(top.len() >= 8, "{top:?}");
+    for pair in top.windows(2) {
+        assert!(pair[0].1 >= pair[1].1, "the fade thins inward: {top:?}");
+        assert!(pair[0].1 - pair[1].1 <= 40, "a step that shows: {top:?}");
+    }
+    // The strips stay inside the viewport and inside the fade's height.
+    assert!(top
+        .iter()
+        .all(|(y, _)| *y >= viewport.y && *y < viewport.y + 12.0));
+
+    assert!(dispatch_scroll(runtime, &mut scene, scroll, 100_000.0));
+    let at_end = fade_strips(&scene, scroll, ground);
+    assert!(!at_end.is_empty());
+    assert!(
+        at_end.iter().all(|(y, _)| *y < middle),
+        "a view at its end has a clear bottom: {at_end:?}"
+    );
+}
+
+/// Content that fits has nothing beyond either edge, so nothing fades.
+#[test]
+fn an_edge_fade_draws_nothing_when_the_content_fits() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let ground = Color::rgb(0xF0, 0xF1, 0xF2);
+    let (scene, _layout, _text, _atlas, scroll) = build_and_layout(
+        runtime,
+        scroll_with_rows(2, 320.0, 220.0).edge_fade(ground, 12.0),
+        Size {
+            width: 400.0,
+            height: 300.0,
+        },
+    );
+    assert!(fade_strips(&scene, scroll, ground).is_empty());
+}

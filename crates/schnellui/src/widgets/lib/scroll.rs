@@ -94,7 +94,10 @@ const EDGE_FADE_STEP: f32 = 1.0;
 /// distances in logical pixels. Zero at an edge that is at rest.
 pub fn scroll_edge_distances(scene: &Scene, id: WidgetId) -> Option<(f32, f32)> {
     let metrics = scroll_metrics(scene, id)?;
-    Some((metrics.offset, (metrics.max_offset - metrics.offset).max(0.0)))
+    Some((
+        metrics.offset,
+        (metrics.max_offset - metrics.offset).max(0.0),
+    ))
 }
 
 /// Pushes the strips of an edge fade: `ground` laid over the content, strongest
@@ -159,9 +162,7 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             .map_or((false, None), |state| (state.scrollbar, state.edge_fade))
     });
     let metrics = scroll_metrics(scene, id);
-    let rects = enabled
-        .then(|| metrics.and_then(scrollbar_rects))
-        .flatten();
+    let rects = enabled.then(|| metrics.and_then(scrollbar_rects)).flatten();
     let mut chrome: SmallVec<[Primitive; 2]> = SmallVec::new();
     if let (Some((ground, height)), Some(metrics)) = (fade, metrics) {
         // The fade stops short of the bar's strip.
