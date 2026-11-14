@@ -188,6 +188,13 @@ where
         self
     }
 
+    /// Fades the rows into `ground` at an edge with more rows beyond it. See
+    /// [`Scroll::edge_fade`].
+    pub fn edge_fade(mut self, ground: crate::Color, height: f32) -> Self {
+        self.scroll = self.scroll.edge_fade(ground, height);
+        self
+    }
+
     /// Pins the list to its end while it is already at the end, including when
     /// streamed data changes the estimated or measured content extent.
     pub fn follow_end(mut self, enabled: bool) -> Self {

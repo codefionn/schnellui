@@ -659,7 +659,7 @@ fn a_row_radio_is_washed_across_its_row_under_the_pointer() {
         })
         .expect("a wash as wide as the row");
     assert_eq!(wash.height, row.height);
-    assert_eq!(wash.width, row.width + 2.0 * TOGGLE_HALO);
+    assert_eq!(wash.width, row.width + 2.0 * RADIO_ROW_PAD);
 }
 
 /// A toggle's hover halo and focus ring are concentric with the control, with

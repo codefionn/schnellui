@@ -388,6 +388,8 @@ struct DragPointerCapture {
 
 struct ScrollState {
     scrollbar: bool,
+    /// Colour and height of the fade at an edge with more content beyond it.
+    edge_fade: Option<(Color, f32)>,
     edge_auto_scroll: bool,
     follow_end: bool,
     restoration_key: Option<Cow<'static, str>>,

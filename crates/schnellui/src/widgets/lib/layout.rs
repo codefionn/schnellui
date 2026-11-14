@@ -564,6 +564,7 @@ pub struct Scroll {
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) scrollbar: bool,
     pub(crate) stable_gutter: bool,
+    pub(crate) edge_fade: Option<(Color, f32)>,
     pub(crate) edge_auto_scroll: bool,
     pub(crate) follow_end: bool,
     pub(crate) initial_offset: Option<f32>,
@@ -580,6 +581,7 @@ impl Scroll {
             name: None,
             scrollbar: false,
             stable_gutter: false,
+            edge_fade: None,
             edge_auto_scroll: false,
             follow_end: false,
             initial_offset: None,
@@ -597,6 +599,14 @@ impl Scroll {
     /// overflow.
     pub fn stable_gutter(mut self, stable: bool) -> Scroll {
         self.stable_gutter = stable;
+        self
+    }
+    /// Fades the content into `ground` over `height` pixels at an edge that has
+    /// more content beyond it: the top once the view is scrolled down, the bottom
+    /// while more follows. An edge at rest shows nothing, and the fade grows with
+    /// the distance scrolled, so it never pops in.
+    pub fn edge_fade(mut self, ground: Color, height: f32) -> Scroll {
+        self.edge_fade = (height > 0.0).then_some((ground, height));
         self
     }
     /// Sets the single scrollable child (SOUL §3.3 `.child(…)`).
@@ -749,6 +759,7 @@ impl View for Scroll {
                 id,
                 ScrollState {
                     scrollbar: this.scrollbar,
+                    edge_fade: this.edge_fade,
                     edge_auto_scroll: this.edge_auto_scroll,
                     follow_end: this.follow_end,
                     restoration_key: this.restoration_key,

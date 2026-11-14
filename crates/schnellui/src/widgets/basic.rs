@@ -205,8 +205,11 @@ fn switch_intrinsic(runtime: &crate::widgets::Runtime, id: WidgetId) -> Size {
     }
 }
 
-/// Emits a switch's paint: a pill track (blue when `on`, grey when off) plus a white
-/// knob, slid to the right when `on` and the left when off (SOUL §8.1). Geometry
+/// Width of the outline of an off switch's track.
+const SWITCH_OFF_OUTLINE: f32 = 1.5;
+
+/// Emits a switch's paint: a pill track (filled accent when `on`, an outline when off)
+/// plus a knob, slid to the right when `on` and the left when off (SOUL §8.1). Geometry
 /// derives from the laid-out rect — the density-scaled box keeps its proportions —
 /// and the pill radii square out under a low-roundness design ([`Shape::pill`]).
 pub(crate) fn emit_switch_paint(
@@ -244,35 +247,34 @@ pub(crate) fn emit_switch_paint(
         (rect.width - 2.0 * frame).max(0.0),
         (rect.height - 2.0 * frame).max(0.0),
     );
-    pd.primitives.push(Primitive::SolidRect {
-        rect: track,
-        color: if on || frame == 0.0 {
-            track_color
-        } else {
-            t.surface
-        },
-        corner_radius: t.shape.pill(track.height),
-    });
+    if on || frame > 0.0 {
+        pd.primitives.push(Primitive::SolidRect {
+            rect: track,
+            color: if on { track_color } else { t.surface },
+            corner_radius: t.shape.pill(track.height),
+        });
+    } else {
+        // Off is an outline, not a grey fill: a filled grey track reads as a
+        // control that cannot be used.
+        pd.primitives.push(Primitive::StrokeRect {
+            rect: track,
+            color: track_color,
+            corner_radius: t.shape.pill(track.height),
+            width: SWITCH_OFF_OUTLINE,
+        });
+    }
     let knob = (knob - 2.0 * frame).max(0.0);
     let knob_x = if on { knob_x - frame } else { knob_x + frame };
     pd.primitives.push(Primitive::SolidRect {
         rect: Rect::new(knob_x, rect.y + SWITCH_INSET + frame, knob, knob),
         // An on knob takes the color drawn on the accent, so it stands out
-        // from the track whatever the scheme. An off knob is the lighter of
-        // the surface and the text: the surface on a light page, the text on
-        // a dark one, where a surface knob was a dark dot on a grey track.
-        // Framed designs keep a surface track, so there the knob stays in
-        // muted text.
+        // from the track whatever the scheme. An off knob is the text colour
+        // inside the outlined track, on a light page and on a dark one. Framed
+        // designs keep a surface track, so there the knob stays in muted text.
         color: if on {
             t.on_accent
         } else if frame == 0.0 {
-            let light =
-                |c: schnellui::scene::Color| u16::from(c.r) + u16::from(c.g) + u16::from(c.b);
-            if light(t.text) > light(t.surface) {
-                t.text
-            } else {
-                t.surface
-            }
+            t.text
         } else {
             t.text_muted
         },

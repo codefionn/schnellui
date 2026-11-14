@@ -6,6 +6,9 @@ pub const FOCUS_RING_W: f32 = 2.0;
 pub const FOCUS_RING_GAP: f32 = 2.0;
 /// How far a toggle's hover halo reaches past the control.
 pub const TOGGLE_HALO: f32 = 4.0;
+
+/// Room a radio row's wash keeps before the dot and after the label's box.
+pub const RADIO_ROW_PAD: f32 = 8.0;
 /// One focus ring is a single [`Primitive::StrokeRect`].
 pub const FOCUS_RING_PRIMS: usize = 1;
 /// Hover border width, chosen not to alias either focus-ring stroke.
@@ -997,6 +1000,24 @@ fn link_rule(runtime: &Runtime, scene: &Scene, id: WidgetId) -> Option<(Rect, Co
     ))
 }
 
+/// Whether `id` is a list row whose first primitive is its own ground, the
+/// rectangle that carries the selection colour.
+fn list_row_ground(runtime: &Runtime, scene: &Scene, id: WidgetId) -> bool {
+    let flush = runtime.with(|rt| rt.borrow().handlers.get(id).is_some_and(|h| h.flush_row));
+    let Some(rect) = scene.layout(id).map(|layout| layout.rect) else {
+        return false;
+    };
+    flush
+        && scene.paint(id).is_some_and(|paint| {
+            matches!(
+                paint.primitives.first(),
+                Some(Primitive::SolidRect { rect: ground, .. })
+                    if (ground.width - rect.width).abs() < 0.5
+                        && (ground.height - rect.height).abs() < 0.5
+            )
+        })
+}
+
 fn apply_interaction_style(
     runtime: &Runtime,
     scene: &mut Scene,
@@ -1052,9 +1073,9 @@ fn apply_interaction_style(
         .flatten();
         let (wash, corner_radius) = if let Some(rect) = radio_row {
             let wash = Rect::new(
-                rect.x - TOGGLE_HALO,
+                rect.x - RADIO_ROW_PAD,
                 rect.y,
-                rect.width + 2.0 * TOGGLE_HALO,
+                rect.width + 2.0 * RADIO_ROW_PAD,
                 rect.height,
             );
             (wash, shape.radius(3.0, wash.height))
@@ -1108,6 +1129,11 @@ fn apply_interaction_style(
             0
         } else if on_top {
             end
+        } else if list_row_ground(runtime, scene, id) {
+            // A list row draws its ground first and then its bar, dot and avatar
+            // disc. The wash goes right over the ground, under those: a disc keeps
+            // its own colour whatever state the row is in.
+            1.min(end)
         } else {
             scene.paint(id).map_or(0, |paint| {
                 paint.primitives[..end]

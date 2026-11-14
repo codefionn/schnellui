@@ -84,36 +84,108 @@ pub(crate) fn thumb_paint(thumb: Rect) -> Rect {
     )
 }
 
+/// Strongest alpha of an edge fade, right at the edge.
+const EDGE_FADE_PEAK: f32 = 0.92;
+
+/// One pixel row per strip: a fade in steps this small shows no bands.
+const EDGE_FADE_STEP: f32 = 1.0;
+
+/// Which edges of a viewport have content beyond them, as `(top, bottom)`
+/// distances in logical pixels. Zero at an edge that is at rest.
+pub fn scroll_edge_distances(scene: &Scene, id: WidgetId) -> Option<(f32, f32)> {
+    let metrics = scroll_metrics(scene, id)?;
+    Some((metrics.offset, (metrics.max_offset - metrics.offset).max(0.0)))
+}
+
+/// Pushes the strips of an edge fade: `ground` laid over the content, strongest
+/// at the edge and gone `height` pixels in. An edge draws only while content
+/// lies beyond it, and comes in with the distance scrolled.
+fn edge_fade_strips(
+    out: &mut SmallVec<[Primitive; 2]>,
+    metrics: ScrollMetrics,
+    right: f32,
+    ground: Color,
+    height: f32,
+) {
+    let viewport = metrics.viewport;
+    let height = height.min(viewport.height * 0.25);
+    let width = (right - viewport.x).max(0.0);
+    if height < EDGE_FADE_STEP || width <= 0.0 {
+        return;
+    }
+    let steps = (height / EDGE_FADE_STEP).floor() as usize;
+    let beyond = [
+        (metrics.offset, true),
+        ((metrics.max_offset - metrics.offset).max(0.0), false),
+    ];
+    for (distance, top) in beyond {
+        // Under half a pixel is rounding, not content.
+        if distance < 0.5 {
+            continue;
+        }
+        let reach = (distance / height).min(1.0);
+        for step in 0..steps {
+            // Squared falloff: most of the strip is nearly clear, so text a few
+            // pixels from the edge still reads.
+            let left = 1.0 - (step as f32 + 0.5) / steps as f32;
+            let alpha = EDGE_FADE_PEAK * reach * left * left;
+            let alpha = (alpha * f32::from(ground.a)).round() as u8;
+            if alpha == 0 {
+                continue;
+            }
+            let offset = step as f32 * EDGE_FADE_STEP;
+            let y = if top {
+                viewport.y + offset
+            } else {
+                viewport.bottom() - offset - EDGE_FADE_STEP
+            };
+            out.push(Primitive::SolidRect {
+                rect: Rect::new(viewport.x, y, width, EDGE_FADE_STEP),
+                color: Color { a: alpha, ..ground },
+                corner_radius: 0.0,
+            });
+        }
+    }
+}
+
 /// Re-emits optional scroll chrome from final layout geometry. Scrollbar paint is
 /// attached to the viewport node and composited after its descendants by the WGPU
 /// renderer, so it stays fixed while content moves underneath it.
 pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
-    let enabled = runtime.with(|rt| {
+    let (enabled, fade) = runtime.with(|rt| {
         rt.borrow()
             .scrolls
             .get(id)
-            .is_some_and(|state| state.scrollbar)
+            .map_or((false, None), |state| (state.scrollbar, state.edge_fade))
     });
+    let metrics = scroll_metrics(scene, id);
     let rects = enabled
-        .then(|| scroll_metrics(scene, id).and_then(scrollbar_rects))
+        .then(|| metrics.and_then(scrollbar_rects))
         .flatten();
-    let desired = rects.map(|(track, thumb)| {
+    let mut chrome: SmallVec<[Primitive; 2]> = SmallVec::new();
+    if let (Some((ground, height)), Some(metrics)) = (fade, metrics) {
+        // The fade stops short of the bar's strip.
+        let right = rects.map_or(metrics.viewport.right(), |(track, _)| {
+            track.x - SCROLLBAR_INSET
+        });
+        edge_fade_strips(&mut chrome, metrics, right, ground, height);
+    }
+    if let Some((track, thumb)) = rects {
         let theme = theme_for(runtime, id);
-        [
-            Primitive::SolidRect {
-                rect: track,
-                // A quiet groove on the page, whatever the muted surface is
-                // (a yellow one in an ink-framed design).
-                color: crate::widgets::theme::mix_color(theme.page, theme.separator, 0.35),
-                corner_radius: theme.shape.pill(track.width),
-            },
-            Primitive::SolidRect {
-                rect: thumb_paint(thumb),
-                color: theme.track_color(),
-                corner_radius: theme.shape.pill(thumb.width - 2.0 * THUMB_PAINT_INSET),
-            },
-        ]
-    });
+        chrome.push(Primitive::SolidRect {
+            rect: track,
+            // A quiet groove on the page, whatever the muted surface is
+            // (a yellow one in an ink-framed design).
+            color: crate::widgets::theme::mix_color(theme.page, theme.separator, 0.35),
+            corner_radius: theme.shape.pill(track.width),
+        });
+        chrome.push(Primitive::SolidRect {
+            rect: thumb_paint(thumb),
+            color: theme.track_color(),
+            corner_radius: theme.shape.pill(thumb.width - 2.0 * THUMB_PAINT_INSET),
+        });
+    }
+    let desired = (!chrome.is_empty()).then_some(chrome);
     // The chrome is the viewport's ordinary paint. A wash laid under it and a
     // ring or border stroked after it are decorations, not ours to clear or
     // compare.
@@ -153,7 +225,7 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
             at += 1;
             at > end || washes.contains(&(at - 1))
         });
-        let chrome = desired.map_or(0, |primitives| primitives.len());
+        let chrome = desired.as_ref().map_or(0, |primitives| primitives.len());
         paint.primitives.splice(..0, desired.into_iter().flatten());
         runtime.with(|rt| {
             let mut rt = rt.borrow_mut();
