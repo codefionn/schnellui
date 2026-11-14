@@ -756,7 +756,7 @@ impl WindowedApp {
         let before = self.interaction_snapshot(point);
         let mut applied = Vec::with_capacity(replacements.len());
         let mut focus_after = None;
-        let mut ring = self.app.focus_ring_shown();
+        let mut ring = self.app.handoff_ring();
         for replacement in replacements {
             let target = replacement.target;
             let reason = replacement.reason;

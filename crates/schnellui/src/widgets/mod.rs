@@ -1046,6 +1046,53 @@ fn emit_slider_paint(
     });
 }
 
+/// Paints the slider `id` again at `laid`, its laid-out box, when that box is wider or
+/// narrower than the one its paint was made for. A slider that fills its row
+/// ([`Slider::fill`]) only learns its width from layout, and a plain slide would keep the
+/// classic track while the pointer scrubs across the whole box. Returns whether it painted.
+pub(crate) fn resize_slider_paint(
+    runtime: &Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+    laid: Rect,
+) -> bool {
+    if scene.node(id).map(|node| node.kind) != Some(WidgetKind::Slider) {
+        return false;
+    }
+    let painted = match scene.paint(id) {
+        Some(pd) => match (pd.origin, pd.primitives.first()) {
+            (Some(origin), Some(Primitive::SolidRect { rect, .. })) => {
+                // The rail is inset by half the thumb at both ends.
+                let inset = rect.x - origin.x;
+                rect.width + 2.0 * inset
+            }
+            _ => return false,
+        },
+        None => return false,
+    };
+    if (painted - laid.width).abs() < 0.5 {
+        return false;
+    }
+    let Some((value, min, max)) = runtime.with(|rt| {
+        rt.borrow()
+            .sliders
+            .get(id)
+            .map(|state| (state.value, state.min, state.max))
+    }) else {
+        return false;
+    };
+    let frac = if max > min {
+        ((value - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let disabled = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::DISABLED));
+    emit_slider_paint(runtime, scene, id, frac, disabled);
+    true
+}
+
 /// Emits a solid placeholder box for media leaves (image/icon) (SOUL §8.1).
 fn emit_media_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, intrinsic: Size) {
     let rect = node_rect(scene, id, intrinsic);

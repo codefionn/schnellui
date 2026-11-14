@@ -182,7 +182,9 @@ pub fn emit_scrollbar_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId) 
         });
         chrome.push(Primitive::SolidRect {
             rect: thumb_paint(thumb),
-            color: theme.track_color(),
+            // Halfway from the track grey to the muted text, so the thumb meets 3:1
+            // against its groove and not only against the page.
+            color: crate::widgets::theme::mix_color(theme.track_color(), theme.text_muted, 0.5),
             corner_radius: theme.shape.pill(thumb.width - 2.0 * THUMB_PAINT_INSET),
         });
     }
@@ -949,6 +951,10 @@ pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: R
     moved
 }
 
+/// Room a keyboard reveal keeps between a focused control's ring and the edge of
+/// the viewport it scrolls into.
+pub const FOCUS_REVEAL_AIR: f32 = 6.0;
+
 /// What a reveal of the control `id` aims at: its laid-out box with the
 /// keyboard focus ring around it, or for the focused text area the caret row
 /// plus the area's padding, so typing and arrows keep the caret in view rather
@@ -974,7 +980,9 @@ pub fn reveal_target(
             crate::widgets::text_area::caret_rect(runtime, shaper, id, rect).unwrap_or(rect),
         );
     }
-    let reach = focus_ring_reach(scene, id);
+    // Past the ring, a little air: a ring that stops on the viewport's edge reads
+    // as cut off by whatever borders the viewport.
+    let reach = focus_ring_reach(scene, id) + FOCUS_REVEAL_AIR;
     Some(Rect::new(
         rect.x - reach,
         rect.y - reach,

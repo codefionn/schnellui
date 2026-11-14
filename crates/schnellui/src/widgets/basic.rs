@@ -36,6 +36,12 @@ const PROGRESS_TRACK_FADE: f32 = 0.45;
 /// Default loading-spinner edge and number of radial strokes.
 const SPINNER_SIZE: f32 = 24.0;
 const SPINNER_SEGMENTS: usize = 12;
+/// A spoke's width as a share of the spinner's edge.
+const SPINNER_STROKE: f32 = 0.12;
+/// The thinnest spoke, in pixels.
+const SPINNER_MIN_STROKE: f32 = 2.0;
+/// The faintest spoke's alpha, far from the highlight: still a visible part of the ring.
+const SPINNER_FLOOR_ALPHA: f32 = 100.0;
 /// The spinner rotation, declared once for every backend: the GPU path samples
 /// it against a monotonic clock (frame-rate independent), the HTML renderer
 /// compiles it to the CSS `@keyframes`/`animation` pair. One revolution per
@@ -149,7 +155,9 @@ pub(crate) fn emit_spinner_paint(
     };
     let outer = rect.width.min(rect.height) * 0.46;
     let inner = outer * 0.58;
-    let stroke = (edge * 0.095).max(1.5);
+    // Thick enough that a small spinner beside a line of text reads as a mark, not a haze:
+    // under two pixels the antialiased spokes came out paler than the accent.
+    let stroke = (edge * SPINNER_STROKE).max(SPINNER_MIN_STROKE);
     let accent = theme_for(runtime, id).indicator_color();
     let pd = scene.paint_mut(id);
     pd.primitives.clear();
@@ -174,7 +182,7 @@ pub(crate) fn emit_spinner_paint(
         let distance = (segment as f32 - highlight)
             .abs()
             .min(SPINNER_SEGMENTS as f32 - (segment as f32 - highlight).abs());
-        let alpha = (255.0 - distance * 17.0).max(55.0) as u8;
+        let alpha = (255.0 - distance * 17.0).max(SPINNER_FLOOR_ALPHA) as u8;
         let color = schnellui::scene::Color {
             a: ((accent.a as u16 * alpha as u16) / 255) as u8,
             ..accent
@@ -207,6 +215,8 @@ fn switch_intrinsic(runtime: &crate::widgets::Runtime, id: WidgetId) -> Size {
 
 /// Width of the outline of an off switch's track.
 const SWITCH_OFF_OUTLINE: f32 = 1.5;
+/// The share of the knob an off knob gives up on each side.
+const SWITCH_OFF_KNOB_SHRINK: f32 = 0.15;
 
 /// Emits a switch's paint: a pill track (filled accent when `on`, an outline when off)
 /// plus a knob, slid to the right when `on` and the left when off (SOUL §8.1). Geometry
@@ -265,20 +275,34 @@ pub(crate) fn emit_switch_paint(
     }
     let knob = (knob - 2.0 * frame).max(0.0);
     let knob_x = if on { knob_x - frame } else { knob_x + frame };
+    // An off knob is smaller and in the track's grey, so the one full, saturated
+    // state is on: a dark knob as big as the on one read as "set" in a light
+    // window. It keeps its centre where the full knob would sit.
+    let shrink = if on || frame > 0.0 {
+        0.0
+    } else {
+        (knob * SWITCH_OFF_KNOB_SHRINK).round()
+    };
+    let size = knob - 2.0 * shrink;
     pd.primitives.push(Primitive::SolidRect {
-        rect: Rect::new(knob_x, rect.y + SWITCH_INSET + frame, knob, knob),
+        rect: Rect::new(
+            knob_x + shrink,
+            rect.y + SWITCH_INSET + frame + shrink,
+            size,
+            size,
+        ),
         // An on knob takes the color drawn on the accent, so it stands out
-        // from the track whatever the scheme. An off knob is the text colour
-        // inside the outlined track, on a light page and on a dark one. Framed
-        // designs keep a surface track, so there the knob stays in muted text.
+        // from the track whatever the scheme. An off knob takes the outlined
+        // track's own grey. Framed designs keep a surface track, so there the
+        // knob stays in muted text.
         color: if on {
             t.on_accent
         } else if frame == 0.0 {
-            t.text
+            track_color
         } else {
             t.text_muted
         },
-        corner_radius: t.shape.pill(knob),
+        corner_radius: t.shape.pill(size),
     });
 }
 
@@ -630,7 +654,12 @@ mod tests {
         let (scene_on, _l2, _t2, _a2, on) = build_one(runtime, Switch::new(true));
         let knob_off = rect_of(&scene_off, off, 1);
         let knob_on = rect_of(&scene_on, on, 1);
-        assert_eq!(knob_off.x, SWITCH_INSET, "off knob sits at the left inset");
+        // The smaller off knob keeps the centre the full knob would have.
+        assert_eq!(
+            knob_off.x,
+            SWITCH_INSET + (SWITCH_KNOB * SWITCH_OFF_KNOB_SHRINK).round(),
+            "off knob sits at the left inset"
+        );
         assert_eq!(
             knob_on.x,
             SWITCH_WIDTH - SWITCH_INSET - SWITCH_KNOB,
@@ -639,8 +668,8 @@ mod tests {
         assert!(knob_on.x > knob_off.x, "the knob moves right when on");
     }
 
-    /// An off switch is an outlined track with the knob in the text colour, an
-    /// on switch a filled accent track: off reads as off, not as disabled.
+    /// An off switch is an outlined track with a smaller knob in the track's grey,
+    /// an on switch a filled accent track: off reads as off, not as disabled.
     #[test]
     fn an_off_switch_is_an_outline_and_an_on_switch_a_fill() {
         let runtime_handle = crate::widgets::Runtime::new();
@@ -652,7 +681,7 @@ mod tests {
         assert!(matches!(off_paint[0], Primitive::StrokeRect { .. }));
         assert!(matches!(
             off_paint[1],
-            Primitive::SolidRect { color, .. } if color == theme.text
+            Primitive::SolidRect { color, .. } if color == theme.track_color()
         ));
         let on_paint = &scene_on.paint(on).unwrap().primitives;
         assert!(matches!(
@@ -689,7 +718,10 @@ mod tests {
         assert!(crate::widgets::dispatch_click(runtime, &mut scene, id));
         assert!(!StateFlags(scene.a11y(id).unwrap().state).contains(StateFlags::CHECKED));
         assert!(!last.get());
-        assert_eq!(rect_of(&scene, id, 1).x, SWITCH_INSET);
+        assert_eq!(
+            rect_of(&scene, id, 1).x,
+            SWITCH_INSET + (SWITCH_KNOB * SWITCH_OFF_KNOB_SHRINK).round()
+        );
     }
 
     #[test]

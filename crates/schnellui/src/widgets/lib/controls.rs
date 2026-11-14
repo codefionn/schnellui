@@ -843,6 +843,7 @@ pub struct Slider {
     pub(crate) step: Option<f32>,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) disabled: bool,
+    pub(crate) fill: bool,
     pub(crate) on_change: Option<Box<dyn FnMut(f32) + 'static>>,
 }
 
@@ -855,8 +856,15 @@ impl Slider {
             step: None,
             name: None,
             disabled: false,
+            fill: false,
             on_change: None,
         }
+    }
+    /// Makes the track as wide as the width it is given, never narrower than its
+    /// classic width: a slider in a row of a form runs on to the value after it.
+    pub fn fill(mut self) -> Slider {
+        self.fill = true;
+        self
     }
     /// Sets the value increment used by arrows, assistive actions, and pointer
     /// snapping. Invalid/non-positive values fall back to 1% of the range.
@@ -947,8 +955,18 @@ impl View for Slider {
         };
         emit_slider_paint(&ctx.runtime, ctx.scene, id, frac, this.disabled);
         let intrinsic = slider_intrinsic(&ctx.runtime, id);
-        ctx.layout
-            .set_measure(id, Box::new(move |_avail| intrinsic));
+        let fill = this.fill;
+        ctx.layout.set_measure(
+            id,
+            Box::new(move |avail| Size {
+                width: if fill && avail.width.is_finite() {
+                    avail.width.max(intrinsic.width)
+                } else {
+                    intrinsic.width
+                },
+                height: intrinsic.height,
+            }),
+        );
         if let Some(c) = this.on_change {
             with_handlers(&ctx.runtime, id, |h| h.change = Some(c));
         }

@@ -113,7 +113,7 @@ impl App {
     /// `:focus-visible`: ordinary pointer-focused controls do not wear the
     /// keyboard ring. Text editables do wear it and also paint their focused
     /// border and caret, matching browser keyboard-input heuristics.
-    pub(crate) fn pointer_focus(&mut self, target: Option<scene::WidgetId>) -> bool {
+    pub fn pointer_focus(&mut self, target: Option<scene::WidgetId>) -> bool {
         self.keyboard_modality = false;
         let previous = self.focused_input_semantics();
         let target = self.pointer_focus_target(target);
@@ -663,6 +663,24 @@ impl App {
         })
     }
 
+    /// Whether focus that moves on from the focused control, after a structural
+    /// replacement, keeps the keyboard ring. A text field wears the ring after a
+    /// pointer press too, as browsers draw it, so its ring says nothing about the
+    /// keyboard: from a text field the ring goes on only while the keyboard was
+    /// the last input. A panel that opens while the user clicked into a field
+    /// and typed nothing then gets no ring.
+    pub(crate) fn handoff_ring(&self) -> bool {
+        let from_text = self.focused_widget().is_some_and(|id| {
+            self.scene.node(id).is_some_and(|node| {
+                matches!(
+                    node.kind,
+                    scene::WidgetKind::TextInput | scene::WidgetKind::TextArea
+                )
+            })
+        });
+        self.focus_ring_shown() && (!from_text || self.keyboard_modality)
+    }
+
     /// Shows the keyboard ring on the focused control: a key closed something that
     /// leaves focus where it is.
     fn show_focus_ring(&mut self) {
@@ -684,6 +702,18 @@ impl App {
             Some(target) => self.focus_ringed(target, false, true),
             None => self.focus(None),
         }
+    }
+
+    /// Focuses the first control in the widget `reference` names, as
+    /// [`Self::focus_without_ring`] does: for a host whose first screen asks
+    /// for one thing and hands that field the keyboard when the window opens.
+    /// Returns `false` when nothing carries `reference` or focus did not move.
+    pub fn focus_ref_without_ring(&mut self, reference: scene::ComponentRef) -> bool {
+        let Some(widget) = self.scene.resolve_ref(reference) else {
+            return false;
+        };
+        let widget = self.first_focusable_in(widget).unwrap_or(widget);
+        self.focus_without_ring(Some(widget))
     }
 
     /// Focuses `target` after a structural replacement, with the ring shown
@@ -722,6 +752,13 @@ impl App {
     /// The widget currently holding keyboard focus, if any (SOUL §6.2).
     pub fn focused_widget(&self) -> Option<scene::WidgetId> {
         schnellui::a11y::focused(&self.scene)
+    }
+
+    /// The focused widget when it wears the keyboard's focus ring. A pointer or
+    /// a mount can focus a control without the ring, and then this is `None`.
+    pub fn focus_ring_target(&self) -> Option<scene::WidgetId> {
+        self.focused_widget()
+            .filter(|&id| schnellui::widgets::focus_ring_visible(&self.widgets, id))
     }
 
     /// Routes one text-editing key to the **focused** text input (SOUL §6.3) —

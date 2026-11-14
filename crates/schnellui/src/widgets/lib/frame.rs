@@ -649,6 +649,10 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
         ),
         _ => return,
     };
+    // A filling slider learns its width from layout: it paints again at the laid-out box.
+    if crate::widgets::resize_slider_paint(runtime, scene, id, lay_rect) {
+        return;
+    }
     // A Divider is a *width-spanning* hairline (SOUL §8.1): its build-time paint
     // carries a provisional zero width (a leaf cannot know its span before layout),
     // so the generic translate-only path below would keep it invisible. Anchor it by

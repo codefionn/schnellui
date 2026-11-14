@@ -118,7 +118,7 @@ impl App {
         replacement: SubtreeReplacement,
     ) -> Result<scene::WidgetId, MissingSubtreeTarget> {
         let focus_after = replacement.focus_after;
-        let ring = replacement.focus_ring || self.focus_ring_shown();
+        let ring = replacement.focus_ring || self.handoff_ring();
         let region = self.region_focus_before(replacement.target);
         let root = self.replace_subtree_boxed(replacement.target, replacement.view)?;
         self.note_region_return(
@@ -148,7 +148,7 @@ impl App {
             .resolve_ref(target)
             .is_some_and(|root| schnellui::widgets::is_in_subtree(&self.scene, focused, root));
         RegionFocus {
-            outside: (!inside).then(|| (focused, self.focus_ring_shown())),
+            outside: (!inside).then(|| (focused, self.handoff_ring())),
             inside,
         }
     }
@@ -187,7 +187,7 @@ impl App {
                 .is_some_and(|id| schnellui::widgets::is_in_subtree(&self.scene, id, root));
             if !kept {
                 if let Some(first) = self.first_focusable_in(root) {
-                    let ring = self.focus_ring_shown();
+                    let ring = self.handoff_ring();
                     let _ = self.focus_after_replacement(first, ring);
                 }
             }
@@ -342,7 +342,7 @@ impl App {
             .filter(|focused| removed_nodes.contains(focused))
             .or_else(|| self.pressed_dialog_stand_in(|panel| removed_nodes.contains(&panel)))
         {
-            let ring = self.focus_ring_shown();
+            let ring = self.handoff_ring();
             let reference = self.scene.component_ref(focused);
             let likeness = self.likeness_in(&removed_nodes, focused);
             let opener = self

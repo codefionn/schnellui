@@ -1054,31 +1054,35 @@ fn apply_interaction_style(
         );
     }
 
+    // A radio that fills its row (`Radio::row`) lies over its label. The whole
+    // row is the target, so the whole row takes the wash and the focus ring, dot
+    // and label alike, with a little room before the dot.
+    let radio_row = (kind == Some(WidgetKind::Radio)
+        && runtime.with(|rt| {
+            rt.borrow()
+                .handlers
+                .get(id)
+                .is_some_and(|h| h.radio_row.is_some())
+        }))
+    .then(|| scene.layout(id).map(|layout| layout.rect))
+    .flatten()
+    .map(|rect| {
+        let row = Rect::new(
+            rect.x - RADIO_ROW_PAD,
+            rect.y,
+            rect.width + 2.0 * RADIO_ROW_PAD,
+            rect.height,
+        );
+        (row, theme_for(runtime, id).shape.radius(3.0, row.height))
+    });
     let background = style.background.map(|color| {
         let shape = theme_for(runtime, id).shape;
         // A toggle is too small to tint in place: its wash is a soft halo
         // behind the control, round for the round ones.
-        let halo = component == Some(InteractionComponent::Toggle);
-        // A radio that fills its row (`Radio::row`) lies over its label. The whole
-        // row is the target, so the whole row takes the wash, dot and label alike,
-        // with a little room before the dot.
-        let radio_row = (kind == Some(WidgetKind::Radio)
-            && runtime.with(|rt| {
-                rt.borrow()
-                    .handlers
-                    .get(id)
-                    .is_some_and(|h| h.radio_row.is_some())
-            }))
-        .then(|| scene.layout(id).map(|layout| layout.rect))
-        .flatten();
-        let (wash, corner_radius) = if let Some(rect) = radio_row {
-            let wash = Rect::new(
-                rect.x - RADIO_ROW_PAD,
-                rect.y,
-                rect.width + 2.0 * RADIO_ROW_PAD,
-                rect.height,
-            );
-            (wash, shape.radius(3.0, wash.height))
+        // A radio row is washed like any row, not haloed.
+        let halo = component == Some(InteractionComponent::Toggle) && radio_row.is_none();
+        let (wash, corner_radius) = if let Some(row) = radio_row {
+            row
         } else if halo {
             // A radio's box may be as tall as its row. Its halo is a circle
             // around the dot in the middle, not a pill as tall as the row.
@@ -1174,11 +1178,23 @@ fn apply_interaction_style(
         // words in the label's own colour, as a link in a page has.
         let (rect, color, corner_radius) = match link_rule(runtime, scene, id) {
             Some((rule, ink)) => (rule, ink, 0.0),
-            None => (
-                wash,
-                crate::widgets::theme::wash_over(color, backdrop),
-                corner_radius,
-            ),
+            None => {
+                // A halo is a thin ring of colour around a small control, not a
+                // field under a row: at a row's strength it did not show.
+                let color = if halo {
+                    Color {
+                        a: color.a.saturating_mul(2),
+                        ..color
+                    }
+                } else {
+                    color
+                };
+                (
+                    wash,
+                    crate::widgets::theme::wash_over(color, backdrop),
+                    corner_radius,
+                )
+            }
         };
         // The new rect shifts the later primitives of this node, including the
         // colour restores of decorations already applied.
@@ -1234,7 +1250,10 @@ fn apply_interaction_style(
                 .get(id)
                 .is_some_and(|handlers| handlers.flush_row)
         });
-        let outset = border_width == FOCUS_RING_W && ring_outsets(component, kind) && !flush_row;
+        let outset = border_width == FOCUS_RING_W
+            && ring_outsets(component, kind)
+            && !flush_row
+            && radio_row.is_none();
         let inset = if outset {
             -(FOCUS_RING_W + FOCUS_RING_GAP)
         } else if kind == Some(WidgetKind::Scroll) && border_width == FOCUS_RING_W {
@@ -1270,6 +1289,9 @@ fn apply_interaction_style(
             .flatten();
         let (rect, radius) = match thumb {
             Some(thumb) => thumb,
+            // A radio row is ringed where it is washed: around the dot and its label,
+            // inside the row, since the rows of a list sit flush.
+            None if radio_row.is_some() => radio_row.unwrap_or((rect, 0.0)),
             None if viewport.is_some() => (viewport.unwrap_or(rect), 0.0),
             None if kind == Some(WidgetKind::Link) => (rect, LINK_RING_RADIUS),
             None => (rect, surface_radius(runtime, scene, owner)),
