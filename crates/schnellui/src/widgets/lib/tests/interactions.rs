@@ -1021,8 +1021,9 @@ fn hover_within_reports_the_pointer_and_leaves_the_childs_hover_alone() {
     update_pointer_proximity(runtime, &mut scene, at(row_rect, row_rect.width - 2.0));
     assert_eq!(*seen.borrow(), [true]);
 
-    // Under the row: left.
-    update_pointer_proximity(
+    // Under the row: left. Nothing there paints a hover, and the update
+    // still asks for a frame, so what the handler changed shows.
+    let frame = update_pointer_proximity(
         runtime,
         &mut scene,
         Point {
@@ -1030,6 +1031,7 @@ fn hover_within_reports_the_pointer_and_leaves_the_childs_hover_alone() {
             y: row_rect.bottom() + 20.0,
         },
     );
+    assert!(frame, "leaving the area asks for a frame");
     assert_eq!(*seen.borrow(), [true, false]);
     assert!(!pointer_within(runtime, row));
 }

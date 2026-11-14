@@ -1977,7 +1977,8 @@ pub(super) fn update_control_hover(
 }
 
 /// Reveals or hides pointer feedback, proximity UI such as [`DragHandle`]s, and
-/// hover tooltips. Returns `true` only when paint changed.
+/// hover tooltips, and tells [`HoverWithin`] areas. Returns `true` when paint
+/// changed or an area's handler ran, so a frame is due.
 pub fn update_pointer_proximity(runtime: &Runtime, scene: &mut Scene, point: Point) -> bool {
     let hit = hit_test(runtime, scene, point);
     update_pointer_proximity_hit(runtime, scene, point, hit)
@@ -2091,8 +2092,10 @@ fn update_pointer_state(
         }
         changed
     });
-    report_hover_within(runtime, scene, point, hit);
-    control_changed | proximity_changed
+    // A handler changes the app's own state, and the app shows that on the
+    // next frame: an area the pointer entered or left wants one.
+    let within_changed = report_hover_within(runtime, scene, point, hit);
+    control_changed | proximity_changed | within_changed
 }
 
 /// Tells an area whether the pointer is inside it. Wrap any view, a
@@ -2104,7 +2107,8 @@ fn update_pointer_state(
 /// tooltips and clicks, and the pointer on a child still counts as inside.
 /// A dialog or menu drawn over the area ends the hover, and so does the
 /// pointer leaving the window. A view removed while the pointer is inside it
-/// gets no last call.
+/// gets no last call. The pointer update that runs a handler asks for a
+/// frame, so what the handler changed shows at once.
 pub struct HoverWithin {
     child: Box<dyn View>,
     on_change: Option<Box<dyn FnMut(bool) + 'static>>,
@@ -2151,7 +2155,13 @@ pub fn pointer_within(runtime: &Runtime, id: WidgetId) -> bool {
 }
 
 /// Runs the handlers of the [`HoverWithin`] areas the pointer entered or left.
-fn report_hover_within(runtime: &Runtime, scene: &Scene, point: Point, hit: Option<WidgetId>) {
+/// Returns whether any area changed.
+fn report_hover_within(
+    runtime: &Runtime,
+    scene: &Scene,
+    point: Point,
+    hit: Option<WidgetId>,
+) -> bool {
     let changed: Vec<(WidgetId, bool)> = runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         let rt = &mut *rt;
@@ -2168,6 +2178,7 @@ fn report_hover_within(runtime: &Runtime, scene: &Scene, point: Point, hit: Opti
         }
         changed
     });
+    let any = !changed.is_empty();
     for (id, inside) in changed {
         let handler = runtime.with(|rt| {
             rt.borrow_mut()
@@ -2183,6 +2194,7 @@ fn report_hover_within(runtime: &Runtime, scene: &Scene, point: Point, hit: Opti
             }
         });
     }
+    any
 }
 
 /// Tells an area whether keyboard focus is on something inside it. Wrap any
