@@ -117,8 +117,17 @@ where
         self.len() == 0
     }
 
-    fn note_scroll(&self, offset: f32) {
-        self.inner.borrow_mut().note_scroll(offset);
+    /// Whether the viewport shows the end of the list, as of the last scroll or layout.
+    pub fn at_end(&self) -> bool {
+        self.inner.borrow().at_end
+    }
+
+    /// Notes a user scroll. Returns the new end state when it changed.
+    fn note_scroll(&self, offset: f32) -> Option<bool> {
+        let mut inner = self.inner.borrow_mut();
+        let before = inner.at_end;
+        inner.note_scroll(offset);
+        (inner.at_end != before).then_some(inner.at_end)
     }
 }
 
@@ -135,6 +144,7 @@ pub struct VirtualList<K> {
     row: Option<RowFactory<K>>,
     scroll: Scroll,
     align_end: bool,
+    on_end_change: Option<Rc<dyn Fn(bool)>>,
 }
 
 impl<K> VirtualList<K>
@@ -153,6 +163,7 @@ where
             row: Some(Box::new(move |key| Box::new(row(key)))),
             scroll: Scroll::new(),
             align_end: false,
+            on_end_change: None,
         }
     }
 
@@ -214,6 +225,13 @@ where
         self.align_end = enabled;
         self
     }
+
+    /// Calls `f` with the new state when a user scroll brings the end of the list into
+    /// view or takes it out. Runs after the controller is released, so `f` may use it.
+    pub fn on_end_change(mut self, f: impl Fn(bool) + 'static) -> Self {
+        self.on_end_change = Some(Rc::new(f));
+        self
+    }
 }
 
 impl<K> View for VirtualList<K>
@@ -226,9 +244,14 @@ where
         this.controller.inner.borrow_mut().align_end = this.align_end;
         let controller = this.controller.clone();
         let callback_controller = controller.clone();
-        this.scroll = this
-            .scroll
-            .on_scroll(move |offset| callback_controller.note_scroll(offset));
+        let on_end_change = this.on_end_change.take();
+        this.scroll = this.scroll.on_scroll(move |offset| {
+            if let (Some(at_end), Some(f)) =
+                (callback_controller.note_scroll(offset), &on_end_change)
+            {
+                f(at_end);
+            }
+        });
         let content = VirtualListContent {
             controller,
             row: this

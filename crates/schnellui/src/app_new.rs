@@ -133,6 +133,7 @@ impl App {
             theme_mode: ThemeMode::Fixed(active_theme),
             color_scheme: ColorScheme::Light,
             color_scheme_observer: None,
+            window_focus_observer: None,
             active_theme,
             theme_transition_duration: Duration::ZERO,
             theme_transition: None,

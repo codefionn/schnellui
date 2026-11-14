@@ -670,6 +670,7 @@ pub struct App {
     /// Told every platform color scheme [`App::apply_color_scheme`] receives, whatever the
     /// theme mode does with it.
     color_scheme_observer: Option<Box<dyn FnMut(ColorScheme)>>,
+    window_focus_observer: Option<Box<dyn FnMut(bool)>>,
     active_theme: Theme,
     theme_transition_duration: Duration,
     theme_transition: Option<ActiveThemeTransition>,

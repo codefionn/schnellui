@@ -99,6 +99,12 @@ impl App {
         });
     }
 
+    /// Calls `observer` with `true` when the window gains the focus and `false` when it
+    /// loses it, whichever widget holds the keyboard, or none.
+    pub fn on_window_focus(&mut self, observer: impl FnMut(bool) + 'static) {
+        self.window_focus_observer = Some(Box::new(observer));
+    }
+
     /// Registers a full-fidelity input handler for a focused widget identified
     /// by accessible role and optional name.
     ///
@@ -262,6 +268,14 @@ impl App {
     /// focused widget. This public path makes raw surfaces fully testable without
     /// starting a native event loop.
     pub fn dispatch_focused_input(&mut self, event: FocusedInputEvent) -> FocusedInputResult {
+        if let FocusedInputEvent::Focus(
+            focus @ (RawFocusEvent::WindowGained | RawFocusEvent::WindowLost),
+        ) = event
+        {
+            if let Some(observer) = self.window_focus_observer.as_mut() {
+                observer(focus == RawFocusEvent::WindowGained);
+            }
+        }
         let index = self
             .focused_widget()
             .and_then(|id| self.scene.a11y(id))

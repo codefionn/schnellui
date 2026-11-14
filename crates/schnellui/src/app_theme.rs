@@ -188,6 +188,7 @@ impl App {
         replacement.theme_mode = self.theme_mode;
         replacement.color_scheme = self.color_scheme;
         replacement.color_scheme_observer = self.color_scheme_observer.take();
+        replacement.window_focus_observer = self.window_focus_observer.take();
         replacement.active_theme = selected;
         replacement.theme_transition_duration = self.theme_transition_duration;
         replacement.theme_transition = self.theme_transition;
