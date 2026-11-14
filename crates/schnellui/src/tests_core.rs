@@ -1230,6 +1230,48 @@ fn focus_step_leaves_a_radio_group_for_the_next_control() {
     assert_eq!(app.focused_widget(), Some(daily));
 }
 
+/// A `List` of buttons, nested a few levels deep as a rail's entries are, is one Tab stop:
+/// Tab enters at the selected button, the next Tab leaves the list.
+#[test]
+fn a_list_of_buttons_is_one_tab_stop_entered_at_the_selected_one() {
+    use schnellui::widgets::{Button, Column, List, Row, Stack};
+
+    let entry = |name: &'static str, selected: bool| {
+        Row::new().child(
+            Stack::new()
+                .size(40.0, 40.0)
+                .child(Column::new().child(Button::new(name).selected(selected))),
+        )
+    };
+    let view = Column::new()
+        .child(Button::new("before"))
+        .child(
+            List::new()
+                .align(schnellui::layout::Align::Start)
+                .child(entry("Home", false))
+                .child(entry("Space", true))
+                .child(entry("Profile", false)),
+        )
+        .child(Button::new("after"));
+    let mut app = App::mount_with_size(view, 400, 300);
+    app.frame();
+
+    let before = app.find_widget(Role::Button, Some("before")).unwrap();
+    let space = app.find_widget(Role::Button, Some("Space")).unwrap();
+    let after = app.find_widget(Role::Button, Some("after")).unwrap();
+
+    assert!(app.focus_step(false));
+    assert_eq!(app.focused_widget(), Some(before));
+    assert!(app.focus_step(false));
+    assert_eq!(
+        app.focused_widget(),
+        Some(space),
+        "Tab enters at the selected button"
+    );
+    assert!(app.focus_step(false), "Tab leaves the list");
+    assert_eq!(app.focused_widget(), Some(after));
+}
+
 /// `arrows_select(false)`: arrows walk the group without selecting, Space selects.
 #[test]
 fn radios_without_arrow_selection_move_focus_only() {

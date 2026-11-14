@@ -349,6 +349,10 @@ pub(crate) fn apply(
 }
 
 fn apply_disabled_paint(runtime: &Runtime, scene: &mut Scene, id: WidgetId, disabled: bool) {
+    if scene.node(id).map(|n| n.kind) == Some(WidgetKind::TextInput) {
+        recolor_field(runtime, scene, id, disabled);
+        return;
+    }
     let appearance = runtime.with(|rt| rt.borrow().button_appearances.get(id).copied());
     let Some(appearance) = appearance else {
         return;
@@ -581,4 +585,34 @@ pub(crate) fn reapply_retained_font(ctx: &mut BuildCtx, id: WidgetId) {
         id,
         AttributeValue::Number(size),
     );
+}
+
+/// Recolors the frame and the fill of a text input, its first two rects, for `disabled`.
+/// The glyphs keep their colors: the value stays readable while the field is off.
+fn recolor_field(runtime: &Runtime, scene: &mut Scene, id: WidgetId, disabled: bool) {
+    let theme = theme_for(runtime, id);
+    let (focused, invalid) = scene.a11y(id).map_or((false, false), |a| {
+        let state = StateFlags(a.state);
+        (
+            state.contains(StateFlags::FOCUSED),
+            state.contains(StateFlags::INVALID),
+        )
+    });
+    let (frame, fill) = crate::widgets::text_edit::field_colors(&theme, focused, invalid, disabled);
+    let mut wants = [frame, fill].into_iter();
+    let mut changed = false;
+    for primitive in scene.paint_mut(id).primitives.iter_mut() {
+        if let Primitive::SolidRect { color, .. } = primitive {
+            let Some(want) = wants.next() else {
+                break;
+            };
+            if *color != want {
+                *color = want;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        scene.mark_dirty(id, DirtyFlags::PAINT);
+    }
 }

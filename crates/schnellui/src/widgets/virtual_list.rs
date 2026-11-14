@@ -144,6 +144,7 @@ pub struct VirtualList<K> {
     row: Option<RowFactory<K>>,
     scroll: Scroll,
     align_end: bool,
+    roving: bool,
     on_end_change: Option<Rc<dyn Fn(bool)>>,
 }
 
@@ -163,8 +164,17 @@ where
             row: Some(Box::new(move |key| Box::new(row(key)))),
             scroll: Scroll::new(),
             align_end: false,
+            roving: false,
             on_end_change: None,
         }
+    }
+
+    /// Makes the rows one Tab stop, as the rows of a [`List`](crate::widgets::List) are:
+    /// Tab enters at the selected row, else the first mounted one, and the arrow keys move
+    /// between rows. The focused row scrolls into view, which mounts the rows past it.
+    pub fn roving(mut self, roving: bool) -> Self {
+        self.roving = roving;
+        self
     }
 
     pub fn label(mut self, name: impl Into<std::borrow::Cow<'static, str>>) -> Self {
@@ -253,6 +263,7 @@ where
             }
         });
         let content = VirtualListContent {
+            roving: this.roving,
             controller,
             row: this
                 .row
@@ -264,6 +275,7 @@ where
 }
 
 struct VirtualListContent<K> {
+    roving: bool,
     controller: VirtualListController<K>,
     row: RowFactory<K>,
 }
@@ -274,7 +286,14 @@ where
 {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
         let scroll = parent.expect("VirtualListContent must be mounted below Scroll");
-        let content = ctx.scene.insert(WidgetKind::Column, Some(scroll));
+        // A roving list's content is a list, so its rows are one Tab stop. It lays out
+        // as the column it otherwise is.
+        let kind = if self.roving {
+            WidgetKind::List
+        } else {
+            WidgetKind::Column
+        };
+        let content = ctx.scene.insert(kind, Some(scroll));
         ctx.scene.a11y_mut(content).role = Role::List.as_u16();
         ctx.layout
             .set_container(content, ContainerStyle::new(Container::Column));

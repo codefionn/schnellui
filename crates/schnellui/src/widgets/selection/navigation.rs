@@ -516,6 +516,7 @@ impl View for Tab {
 pub struct List {
     pub(crate) children: Vec<AnyView>,
     pub(crate) style: ContainerStyle,
+    pub(crate) align: Option<schnellui::layout::Align>,
 }
 
 impl List {
@@ -524,7 +525,20 @@ impl List {
         List {
             children: Vec::new(),
             style: ContainerStyle::new(Container::Column),
+            align: None,
         }
+    }
+    /// Fills the parent on both axes, as [`Column::fill`](crate::widgets::Column::fill)
+    /// does: a list that is a whole sidebar spans its height.
+    pub fn fill(mut self) -> List {
+        self.style.fill = true;
+        self
+    }
+    /// Places the children on the cross axis. A list stretches its rows by default; a rail
+    /// of round entries keeps them at their own width.
+    pub fn align(mut self, align: schnellui::layout::Align) -> List {
+        self.align = Some(align);
+        self
     }
     /// Appends a child (usually a [`ListItem`], SOUL §3.3 `.child(…)`).
     pub fn child(mut self, c: impl View) -> List {
@@ -562,7 +576,7 @@ impl View for List {
         // Rows span the list, so a short label is as easy to hit as a long
         // one and the selection reads as a band rather than a ragged chip.
         let mut style = this.style;
-        style.align = schnellui::layout::Align::Stretch;
+        style.align = this.align.unwrap_or(schnellui::layout::Align::Stretch);
         ctx.layout.set_container(id, style);
         for child in this.children {
             child.build(ctx, Some(id));

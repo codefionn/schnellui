@@ -153,6 +153,36 @@ fn clip_glyphs_x(primitives: &mut Vec<Primitive>, first: usize, x0: f32, x1: f32
 /// slides the whole set — glyph insets preserved — exactly like a button); after
 /// layout they are emitted at absolute laid-out coordinates and the slide is a
 /// no-op (idempotent, SOUL §8.1).
+/// The frame and the fill of a text input. A failed validation outranks focus; the focus
+/// ring still shows on top. A disabled field fades its frame toward the surface and takes a
+/// tint of the disabled fill, so a field the app has taken reads as one that is not open to
+/// typing, as a disabled button does.
+pub(crate) fn field_colors(
+    t: &crate::widgets::Theme,
+    focused: bool,
+    invalid: bool,
+    disabled: bool,
+) -> (schnellui::scene::Color, schnellui::scene::Color) {
+    let frame = if invalid {
+        t.invalid_color()
+    } else if disabled {
+        crate::widgets::theme::mix_color(t.outline, t.surface, DISABLED_FIELD_FADE)
+    } else if focused {
+        t.accent
+    } else {
+        t.outline
+    };
+    let fill = if disabled {
+        crate::widgets::theme::mix_color(t.surface, t.disabled, DISABLED_FIELD_FADE)
+    } else {
+        t.surface
+    };
+    (frame, fill)
+}
+
+/// How far a disabled field's frame and fill move toward the faded colors.
+const DISABLED_FIELD_FADE: f32 = 0.5;
+
 pub(crate) fn emit_text_input_paint(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
@@ -160,11 +190,12 @@ pub(crate) fn emit_text_input_paint(
     atlas: &mut GlyphAtlas,
     id: WidgetId,
 ) -> Size {
-    let (focused, invalid) = scene.a11y(id).map_or((false, false), |a| {
+    let (focused, invalid, disabled) = scene.a11y(id).map_or((false, false, false), |a| {
         let state = StateFlags(a.state);
         (
             state.contains(StateFlags::FOCUSED),
             state.contains(StateFlags::INVALID),
+            state.contains(StateFlags::DISABLED),
         )
     });
     let Some((
@@ -327,16 +358,10 @@ pub(crate) fn emit_text_input_paint(
     pd.primitives.clear();
     // field surface: border rect + inset background (two SolidRects — the renderer
     // has no stroked-rect primitive, SOUL §3.2)
+    let (frame, fill) = field_colors(&t, focused, invalid, disabled);
     pd.primitives.push(Primitive::SolidRect {
         rect,
-        // A failed validation outranks focus; the focus ring still shows on top.
-        color: if invalid {
-            t.invalid_color()
-        } else if focused {
-            t.accent
-        } else {
-            t.outline
-        },
+        color: frame,
         corner_radius: radius,
     });
     pd.primitives.push(Primitive::SolidRect {
@@ -346,7 +371,7 @@ pub(crate) fn emit_text_input_paint(
             (rect.width - 2.0 * bw).max(0.0),
             (rect.height - 2.0 * bw).max(0.0),
         ),
-        color: t.surface,
+        color: fill,
         corner_radius: (radius - bw).max(0.0),
     });
     // selection wash behind the glyphs (only meaningful while focused; a

@@ -454,6 +454,7 @@ pub struct Button {
     pub(crate) display: Option<Cow<'static, str>>,
     pub(crate) menu: Option<crate::widgets::ContextMenu>,
     pub(crate) submit: bool,
+    pub(crate) selected: bool,
 }
 
 impl Button {
@@ -479,7 +480,16 @@ impl Button {
             display: None,
             menu: None,
             submit: false,
+            selected: false,
         }
+    }
+
+    /// Marks the button as the selected entry of its group (`StateFlags::SELECTED`): the
+    /// open place in a rail of buttons, say. Tab enters a [`List`](crate::widgets::List)
+    /// of buttons at its selected one. It changes no paint; the app draws the selection.
+    pub fn selected(mut self, selected: bool) -> Button {
+        self.selected = selected;
+        self
     }
 
     /// Makes this a submit button: activating it by pointer, Enter or Space, or
@@ -641,11 +651,14 @@ impl View for Button {
                 acts.insert(ActionFlags::SHOW_CONTEXT_MENU);
             }
             a.actions = acts.0;
-            if this.disabled {
-                let mut st = StateFlags::default();
-                st.insert(StateFlags::DISABLED);
-                a.state = st.0;
+            let mut st = StateFlags::default();
+            if this.selected {
+                st.insert(StateFlags::SELECTED);
             }
+            if this.disabled {
+                st.insert(StateFlags::DISABLED);
+            }
+            a.state = st.0;
         }
         // Shape the label once → background SolidRect + real glyph quads, and the
         // glyph-exact label size that drives the intrinsic measure (SOUL §8.1).

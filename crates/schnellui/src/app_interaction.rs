@@ -1576,6 +1576,10 @@ enum RovingStep {
     Last,
 }
 
+/// How many levels up from a button its `List` may stand for the button to be one of the
+/// list's rows.
+const ROVING_LIST_DEPTH: usize = 12;
+
 /// The group a focusable member belongs to, for widgets that share one Tab
 /// stop: tabs in a tab list, radios in a row, items in a list, rows in a
 /// table. `None` for every other widget.
@@ -1604,10 +1608,11 @@ pub(crate) fn roving_group(scene: &scene::Scene, id: scene::WidgetId) -> Option<
             Some(parent)
         }
         // Rows in a `List` (a settings nav, say) are one Tab stop too, even
-        // when they sit in a few levels of rows that indent them.
+        // when they sit in a few levels of rows that indent them, or in the
+        // rows a virtual list mounts and the themes and stacks they wear.
         WidgetKind::Button => {
             let mut ancestor = Some(parent);
-            for _ in 0..4 {
+            for _ in 0..ROVING_LIST_DEPTH {
                 let node = ancestor?;
                 if scene.node(node)?.kind == WidgetKind::List {
                     return Some(node);
