@@ -42,6 +42,8 @@ struct LeadingMark {
     fill: Color,
     ink: Color,
     size: f32,
+    /// Size of the letters, in the bold face. `None`: the meta size, regular.
+    text_size: Option<f32>,
 }
 
 /// A left-aligned clickable row. See the module docs.
@@ -66,6 +68,7 @@ pub struct ListRow {
     trailing_inline: bool,
     trailing_centered: bool,
     pill: Option<Color>,
+    pill_ink: Option<Color>,
     subtitle_color: Option<Color>,
     value: Option<Cow<'static, str>>,
     on_click: Option<ClickHandler>,
@@ -96,6 +99,7 @@ impl ListRow {
             trailing_inline: false,
             trailing_centered: false,
             pill: None,
+            pill_ink: None,
             subtitle_color: None,
             value: None,
             on_click: None,
@@ -185,6 +189,15 @@ impl ListRow {
         self
     }
 
+    /// Like [`ListRow::trailing_pill`], with the text in `ink` and in the bold
+    /// face: for a pill whose fill is not the accent, where `on_accent` may not
+    /// read, and for a count that must be legible at a small size.
+    pub fn trailing_pill_ink(mut self, color: Color, ink: Color) -> ListRow {
+        self.pill = Some(color);
+        self.pill_ink = Some(ink);
+        self
+    }
+
     /// Paints the subtitle in this color instead of the muted one.
     pub fn subtitle_color(mut self, color: Color) -> ListRow {
         self.subtitle_color = Some(color);
@@ -234,7 +247,18 @@ impl ListRow {
             fill,
             ink,
             size: if size.is_finite() { size.max(0.0) } else { 0.0 },
+            text_size: None,
         });
+        self
+    }
+
+    /// Draws the letters of the leading mark `size` logical px high in the
+    /// bold face, instead of at the meta size: for initials that must read
+    /// at a glance. Without a leading mark it does nothing.
+    pub fn leading_mark_text(mut self, size: f32) -> ListRow {
+        if let Some(mark) = &mut self.mark {
+            mark.text_size = (size.is_finite() && size > 0.0).then_some(size);
+        }
         self
     }
 
@@ -385,10 +409,20 @@ impl View for ListRow {
                 0.0
             }
             + this.mark.as_ref().map_or(0.0, |mark| mark.size + DOT_GAP);
-        let trailing = this
-            .trailing
-            .as_ref()
-            .map(|text| shape_fit(ctx.text, text, meta_phys, this.width * 0.5, ctx.scale));
+        let trailing = this.trailing.as_ref().map(|text| {
+            shape_fit_face(
+                ctx.text,
+                text,
+                meta_phys,
+                this.width * 0.5,
+                ctx.scale,
+                if this.pill_ink.is_some() {
+                    FontFace::SansBold
+                } else {
+                    FontFace::Sans
+                },
+            )
+        });
         let pill_pad = if this.pill.is_some() { PILL_PAD_H } else { 0.0 };
         let trailing_width = trailing
             .as_ref()
@@ -497,13 +531,23 @@ impl View for ListRow {
                 color: mark.fill,
                 corner_radius: mark.size * 0.5,
             });
-            let letters = ctx.text.shape(&mark.text, meta_phys, None);
+            let (mark_phys, face) = match mark.text_size {
+                Some(size) => (phys_size_px(size, ctx.scale), FontFace::SansBold),
+                None => (meta_phys, FontFace::Sans),
+            };
+            let letters = ctx.text.shape_with(
+                &mark.text,
+                &ShapeOptions {
+                    face,
+                    ..ShapeOptions::new(mark_phys)
+                },
+            );
             rasterize_and_push(
                 pd,
                 ctx.text,
                 ctx.atlas,
                 &letters,
-                meta_phys as u32,
+                mark_phys as u32,
                 mark.ink,
                 ctx.scale,
                 Point {
@@ -552,7 +596,7 @@ impl View for ListRow {
                         color: pill,
                         corner_radius: height * 0.5,
                     });
-                    theme.on_accent
+                    this.pill_ink.unwrap_or(theme.on_accent)
                 }
                 None => meta,
             };

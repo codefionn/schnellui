@@ -9,6 +9,7 @@ pub struct Dropdown {
     pub(crate) on_toggle: Option<ClickHandler>,
     pub(crate) text_size: Option<f32>,
     pub(crate) min_width: f32,
+    pub(crate) min_height: f32,
     pub(crate) placeholder: Option<Cow<'static, str>>,
 }
 
@@ -23,6 +24,7 @@ impl Dropdown {
             on_toggle: None,
             text_size: None,
             min_width: 0.0,
+            min_height: 0.0,
             placeholder: None,
         }
     }
@@ -37,6 +39,16 @@ impl Dropdown {
     pub fn min_width(mut self, width: f32) -> Dropdown {
         self.min_width = if width.is_finite() {
             width.max(0.0)
+        } else {
+            0.0
+        };
+        self
+    }
+    /// Sets the least logical height of the trigger, so it lines up with the
+    /// fields and buttons of its form. The label centers in a taller trigger.
+    pub fn min_height(mut self, height: f32) -> Dropdown {
+        self.min_height = if height.is_finite() {
+            height.max(0.0)
         } else {
             0.0
         };
@@ -98,6 +110,7 @@ fn emit_dropdown_trigger_paint(
     open: bool,
     scale: f32,
     min_width: f32,
+    min_height: f32,
     text_size: f32,
 ) -> Size {
     let inv = 1.0 / norm_scale(scale);
@@ -113,7 +126,7 @@ fn emit_dropdown_trigger_paint(
     let f = f.max(TRIGGER_BORDER);
     let intrinsic = Size {
         width: (ts.width + 2.0 * (pad_h + f) + CARET_SPACE).max(min_width),
-        height: ts.height + 2.0 * (pad_v + f),
+        height: (ts.height + 2.0 * (pad_v + f)).max(min_height),
     };
     let rect = node_rect(scene, id, intrinsic);
     // A trigger is an outlined field, like a text input, so it reads as a
@@ -165,7 +178,7 @@ fn emit_dropdown_trigger_paint(
         scale,
         Point {
             x: rect.x + f + pad_h,
-            y: rect.y + f + pad_v,
+            y: rect.y + ((rect.height - ts.height) * 0.5).max(f),
         },
     );
     ts
@@ -178,6 +191,7 @@ pub(crate) struct TriggerPaint {
     open: bool,
     scale: f32,
     min_width: f32,
+    min_height: f32,
     text_size: f32,
 }
 
@@ -206,6 +220,7 @@ pub fn relabel_dropdown_triggers(
             paint.open,
             paint.scale,
             paint.min_width,
+            paint.min_height,
             paint.text_size,
         );
         scene.mark_dirty(id, DirtyFlags::PAINT);
@@ -300,8 +315,10 @@ impl View for Dropdown {
             this.open,
             ctx.scale,
             shared_width,
+            this.min_height,
             text_size,
         );
+        let trigger_h = (ts.height + 2.0 * (pad_v + f)).max(this.min_height);
         ctx.runtime.with(|rt| {
             rt.borrow_mut().dropdown_triggers.insert(
                 id,
@@ -309,6 +326,7 @@ impl View for Dropdown {
                     open: this.open,
                     scale: ctx.scale,
                     min_width: shared_width,
+                    min_height: this.min_height,
                     text_size,
                 },
             );
@@ -317,7 +335,7 @@ impl View for Dropdown {
             id,
             Box::new(move |_avail| Size {
                 width: (ts.width + 2.0 * (pad_h + f) + CARET_SPACE).max(shared_width),
-                height: ts.height + 2.0 * (pad_v + f),
+                height: trigger_h,
             }),
         );
         if let Some(cb) = this.on_toggle {
@@ -338,7 +356,7 @@ impl View for Dropdown {
             let mut style = ContainerStyle::new(Container::Pad(EdgeInsets::all(inset)));
             style.anchor = Some(Point {
                 x: 0.0,
-                y: ts.height + 2.0 * (pad_v + f) + POPUP_GAP,
+                y: trigger_h + POPUP_GAP,
             });
             style.anchor_above = Some(-POPUP_GAP);
             ctx.layout.set_container(popup, style);

@@ -448,6 +448,8 @@ pub struct Button {
     pub(crate) show_label: bool,
     pub(crate) tooltip: Option<Cow<'static, str>>,
     pub(crate) tooltip_side: crate::widgets::TooltipSide,
+    pub(crate) tooltip_gap: f32,
+    pub(crate) side_pad: Option<f32>,
     pub(crate) text_size: Option<f32>,
     pub(crate) display: Option<Cow<'static, str>>,
     pub(crate) menu: Option<crate::widgets::ContextMenu>,
@@ -471,6 +473,8 @@ impl Button {
             show_label: true,
             tooltip: None,
             tooltip_side: crate::widgets::TooltipSide::Above,
+            tooltip_gap: 0.0,
+            side_pad: None,
             text_size: None,
             display: None,
             menu: None,
@@ -579,6 +583,22 @@ impl Button {
         self
     }
 
+    /// Moves the tooltip `extra` logical pixels further from the button than
+    /// the usual gap. For a button in a bar whose tooltip should clear the
+    /// whole bar, not only the button.
+    pub fn tooltip_gap(mut self, extra: f32) -> Button {
+        self.tooltip_gap = extra;
+        self
+    }
+
+    /// Keeps at least `pad` logical pixels between the label and each side of
+    /// the button, where the theme's density alone would give less. A button
+    /// that shows no label, and a link, ignore it.
+    pub fn side_pad(mut self, pad: f32) -> Button {
+        self.side_pad = (pad.is_finite() && pad > 0.0).then_some(pad);
+        self
+    }
+
     /// Overrides the label font size (logical points before DPI scaling).
     /// Defaults to the widget crate's standard button label size.
     pub fn text_size(mut self, size: f32) -> Button {
@@ -648,6 +668,37 @@ impl View for Button {
             this.text_size,
             ctx.scale,
         );
+        // The side padding is a least width: the label is centered, so a wider
+        // button has the room on both sides of it.
+        let padded = match this.side_pad {
+            Some(pad) if this.show_label && this.appearance != ButtonAppearance::Link => {
+                Some(ts.width + 2.0 * pad)
+            }
+            _ => None,
+        };
+        let width = match (this.width, padded) {
+            (Some(width), Some(padded)) => Some(width.max(padded)),
+            (width, padded) => width.or(padded),
+        };
+        let ts = if width == this.width {
+            ts
+        } else {
+            emit_button_paint(
+                &ctx.runtime,
+                ctx.scene,
+                ctx.text,
+                ctx.atlas,
+                id,
+                &shown,
+                this.show_label,
+                this.disabled,
+                width,
+                this.height,
+                this.appearance,
+                this.text_size,
+                ctx.scale,
+            )
+        };
         // Shape tokens are baked here (theme reads are build-time, SOUL §8.1);
         // a theme change remounts, so the closure never goes stale.
         // An icon-only button paints no label, so the hidden label's size
@@ -657,7 +708,7 @@ impl View for Button {
             ts
         } else {
             Size {
-                width: if this.width.is_some() { 0.0 } else { ts.width },
+                width: if width.is_some() { 0.0 } else { ts.width },
                 height: if this.height.is_some() {
                     0.0
                 } else {
@@ -665,14 +716,8 @@ impl View for Button {
                 },
             }
         };
-        let intrinsic = sized_button_intrinsic(
-            &ctx.runtime,
-            id,
-            ts,
-            this.width,
-            this.height,
-            this.appearance,
-        );
+        let intrinsic =
+            sized_button_intrinsic(&ctx.runtime, id, ts, width, this.height, this.appearance);
         if let Some(menu) = this.menu {
             crate::widgets::context_menu::register_context_menu(&ctx.runtime, id, menu);
             crate::widgets::context_menu::register_context_menu_trigger(&ctx.runtime, id, id);
@@ -689,6 +734,7 @@ impl View for Button {
                 ctx.scale,
             );
             crate::widgets::set_tooltip_side(&ctx.runtime, id, this.tooltip_side);
+            crate::widgets::set_tooltip_gap(&ctx.runtime, id, this.tooltip_gap);
             crate::widgets::elevate_tooltip_host(ctx.scene, id);
         }
         ctx.layout

@@ -787,6 +787,23 @@ impl App {
         self.paste_text_for(id, text)
     }
 
+    /// Inserts `text` at the caret of the text input or text area `target`
+    /// names, replacing its selection. The editable need not have the focus,
+    /// so a picker beside a text area can add to it. See
+    /// [`insert_text`](schnellui::widgets::insert_text).
+    pub fn insert_text(&mut self, target: scene::ComponentRef, text: &str) -> bool {
+        let Some(id) = self.scene.resolve_ref(target) else {
+            return false;
+        };
+        self.paste_text_for(id, text)
+    }
+
+    /// Reads the caret of the text input or text area `target` names.
+    pub fn text_caret(&self, target: scene::ComponentRef) -> Option<schnellui::widgets::TextCaret> {
+        let id = self.scene.resolve_ref(target)?;
+        schnellui::widgets::text_caret(&self.widgets, &self.scene, id)
+    }
+
     pub(crate) fn paste_text_for(&mut self, id: scene::WidgetId, text: &str) -> bool {
         let changed = schnellui::widgets::dispatch_paste(
             &self.widgets,

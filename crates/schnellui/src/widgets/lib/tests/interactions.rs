@@ -825,3 +825,142 @@ fn applying_a_focus_ring_takes_it_off_the_last_control() {
     assert_eq!(ring_lines(&scene, one), 0);
     assert_eq!(ring_lines(&scene, two), FOCUS_RING_PRIMS);
 }
+
+// Filled buttons and the quieter kinds wear separate hover and pressed
+// states, so a theme can darken an accent fill and tint an outline.
+#[test]
+fn filled_buttons_wear_their_own_states_and_other_kinds_the_plain_ones() {
+    use crate::widgets::ButtonAppearance;
+    let states = |seed: u8| InteractionStates {
+        hover: InteractionStyle::background(Color::rgba(seed, 22, 33, 44)),
+        focus: InteractionStyle::NONE,
+        active: InteractionStyle::background(Color::rgba(seed, 24, 35, 46)),
+    };
+    let plain = states(11);
+    let filled = states(201);
+    let has_wash = |scene: &Scene, id: WidgetId, wash: Option<Color>| {
+        let rgb = |c: Color| (c.r, c.g, c.b);
+        scene.paint(id).unwrap().primitives.iter().any(|primitive| {
+            matches!(primitive, Primitive::SolidRect { color, .. } if wash.map(rgb) == Some(rgb(*color)))
+        })
+    };
+    let cases = [
+        (ButtonAppearance::Solid, Some(filled), filled),
+        (ButtonAppearance::Outline, Some(filled), plain),
+        (ButtonAppearance::Ghost, Some(filled), plain),
+        (ButtonAppearance::Link, Some(filled), plain),
+        // A theme that names no filled states keeps the old behaviour.
+        (ButtonAppearance::Solid, None, plain),
+    ];
+    for (appearance, filled_button, expected) in cases {
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let themed = Theme {
+            component_interactions: ComponentInteractions {
+                button: Some(plain),
+                filled_button,
+                ..ComponentInteractions::NONE
+            },
+            ..Theme::default()
+        };
+        let (mut scene, mut layout, _text, _atlas, id) = build_one(
+            runtime,
+            ThemeProvider::new(themed, Button::new("state").appearance(appearance)),
+        );
+        layout.sync_tree(&scene, id);
+        layout.compute(
+            &mut scene,
+            id,
+            Size {
+                width: 160.0,
+                height: 48.0,
+            },
+        );
+        reposition_paint(runtime, &mut scene);
+        let rect = scene.layout(id).unwrap().rect;
+        let center = Point {
+            x: rect.x + rect.width * 0.5,
+            y: rect.y + rect.height * 0.5,
+        };
+        assert!(update_pointer_proximity(runtime, &mut scene, center));
+        assert!(
+            has_wash(&scene, id, expected.hover.background),
+            "{appearance:?} hover"
+        );
+        update_pointer_proximity(
+            runtime,
+            &mut scene,
+            Point {
+                x: f32::NEG_INFINITY,
+                y: f32::NEG_INFINITY,
+            },
+        );
+        assert!(set_active_interaction(runtime, &mut scene, Some(id)));
+        assert!(
+            has_wash(&scene, id, expected.active.background),
+            "{appearance:?} pressed"
+        );
+    }
+}
+
+// A container hears when the pointer comes inside its box and when it
+// leaves, and the button inside still gets its own hover.
+#[test]
+fn hover_within_reports_the_pointer_and_leaves_the_childs_hover_alone() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let (mut scene, mut layout, _text, _atlas, root) = build_one(
+        runtime,
+        Column::new().child(
+            HoverWithin::new(
+                Row::new()
+                    .child(Button::new("inside").width(80.0).height(40.0))
+                    .child(Text::new("label")),
+            )
+            .on_change(move |inside| log.borrow_mut().push(inside)),
+        ),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 300.0,
+            height: 200.0,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+    let row = scene.node(root).unwrap().children[0];
+    let button = scene.node(row).unwrap().children[0];
+    let row_rect = scene.layout(row).unwrap().rect;
+    let button_rect = scene.layout(button).unwrap().rect;
+    let at = |rect: Rect, dx: f32| Point {
+        x: rect.x + dx,
+        y: rect.y + rect.height * 0.5,
+    };
+
+    // On the button: the row is entered and the button is the hover target.
+    update_pointer_proximity(runtime, &mut scene, at(button_rect, 10.0));
+    assert_eq!(*seen.borrow(), [true]);
+    assert!(pointer_within(runtime, row));
+    let hovered = runtime.with(|rt| rt.borrow().hover.as_ref().map(|h| h.target));
+    assert_eq!(hovered, Some(button));
+
+    // Off the button, still in the row: nothing new to report.
+    update_pointer_proximity(runtime, &mut scene, at(row_rect, row_rect.width - 2.0));
+    assert_eq!(*seen.borrow(), [true]);
+
+    // Under the row: left.
+    update_pointer_proximity(
+        runtime,
+        &mut scene,
+        Point {
+            x: row_rect.x + 10.0,
+            y: row_rect.bottom() + 20.0,
+        },
+    );
+    assert_eq!(*seen.borrow(), [true, false]);
+    assert!(!pointer_within(runtime, row));
+}

@@ -877,8 +877,9 @@ pub(crate) fn stylesheet(width: u32, height: u32, theme: Theme, responsive_css: 
 
     let shape = theme.shape;
     use schnellui::widgets::{InteractionComponent as Component, InteractionState as State};
+    // The page's buttons are the filled kind, or ghost ones that take the navigation states.
     let button_hover = interaction_css(
-        theme.interaction_style(Component::Button, State::Hover),
+        theme.interaction_style(Component::FilledButton, State::Hover),
         None,
     );
     let navigation_hover = interaction_css(
@@ -918,7 +919,7 @@ pub(crate) fn stylesheet(width: u32, height: u32, theme: Theme, responsive_css: 
         Some(2),
     );
     let button_active = interaction_css(
-        theme.interaction_style(Component::Button, State::Active),
+        theme.interaction_style(Component::FilledButton, State::Active),
         None,
     );
     let navigation_active = interaction_css(

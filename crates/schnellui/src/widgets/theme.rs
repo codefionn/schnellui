@@ -164,6 +164,10 @@ impl InteractionStates {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionComponent {
     Button,
+    /// A button with the solid accent fill. A wash that suits an outlined or bare button
+    /// barely shows on the fill, so a theme may style it apart. Without
+    /// `ComponentInteractions::filled_button` it takes the states of `Button`.
+    FilledButton,
     Navigation,
     Toggle,
     Editable,
@@ -176,6 +180,8 @@ pub enum InteractionComponent {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ComponentInteractions {
     pub button: Option<InteractionStates>,
+    /// States of a solid, accent-filled button. `None` takes `button`.
+    pub filled_button: Option<InteractionStates>,
     pub navigation: Option<InteractionStates>,
     pub toggle: Option<InteractionStates>,
     pub editable: Option<InteractionStates>,
@@ -185,6 +191,7 @@ pub struct ComponentInteractions {
 impl ComponentInteractions {
     pub const NONE: Self = Self {
         button: None,
+        filled_button: None,
         navigation: None,
         toggle: None,
         editable: None,
@@ -255,6 +262,10 @@ impl Theme {
     ) -> InteractionStyle {
         let override_states = match component {
             InteractionComponent::Button => self.component_interactions.button,
+            InteractionComponent::FilledButton => match self.component_interactions.filled_button {
+                Some(states) => Some(states),
+                None => self.component_interactions.button,
+            },
             InteractionComponent::Navigation => self.component_interactions.navigation,
             InteractionComponent::Toggle => self.component_interactions.toggle,
             InteractionComponent::Editable => self.component_interactions.editable,
@@ -488,6 +499,11 @@ impl Theme {
                 button: optional_states(
                     self.component_interactions.button,
                     other.component_interactions.button,
+                    t,
+                ),
+                filled_button: optional_states(
+                    self.component_interactions.filled_button,
+                    other.component_interactions.filled_button,
                     t,
                 ),
                 navigation: optional_states(

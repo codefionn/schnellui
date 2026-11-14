@@ -1515,6 +1515,23 @@ pub(crate) fn selected_area_text(
     })
 }
 
+/// The area's caret and the other end of its selection. During a
+/// composition these are the ones from before it.
+pub(crate) fn area_caret(
+    runtime: &crate::widgets::Runtime,
+    id: WidgetId,
+) -> Option<crate::widgets::TextCaret> {
+    runtime.with(|rt| {
+        let rt = rt.borrow();
+        let state = rt.areas.get(id)?;
+        let (caret, anchor) = match &state.compose {
+            Some(compose) => (compose.caret, compose.anchor),
+            None => (state.caret, state.anchor),
+        };
+        Some(crate::widgets::TextCaret { caret, anchor })
+    })
+}
+
 /// Re-emits paint + flags channels for a `Change`; `Text` also refreshes the
 /// accessible value and fires `on_input` (identical to the TextInput commit).
 fn commit_area_change(
@@ -1958,6 +1975,73 @@ mod tests {
 
     fn area_value(runtime: &crate::widgets::Runtime, id: WidgetId) -> String {
         runtime.with(|rt| rt.borrow().areas.get(id).map(|s| s.value.clone()).unwrap())
+    }
+
+    // App code reads the caret and inserts at it, as an emoji picker does.
+    #[test]
+    fn app_code_reads_the_caret_and_inserts_at_it_replacing_the_selection() {
+        use crate::widgets::{insert_text, text_caret, TextCaret};
+        let runtime_handle = crate::widgets::Runtime::new();
+        let runtime = &runtime_handle;
+        let heard = Rc::new(RefCell::new(String::new()));
+        let sink = heard.clone();
+        let (mut scene, _l, mut text, mut atlas, id) = build_area(
+            runtime,
+            TextArea::new("one two").on_input(move |v| *sink.borrow_mut() = v.to_string()),
+        );
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        let key = |scene: &mut Scene, text: &mut TextShaper, atlas: &mut GlyphAtlas, key| {
+            dispatch_edit_key(runtime, scene, text, atlas, id, key)
+        };
+        key(
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            EditKey::DocStart { select: false },
+        );
+        for _ in 0..3 {
+            key(
+                &mut scene,
+                &mut text,
+                &mut atlas,
+                EditKey::Right {
+                    select: false,
+                    word: false,
+                },
+            );
+        }
+        assert_eq!(
+            text_caret(runtime, &scene, id),
+            Some(TextCaret {
+                caret: 3,
+                anchor: 3
+            })
+        );
+
+        // The focus goes elsewhere, as it does to a picker: the caret stays.
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, None);
+        assert!(insert_text(
+            runtime, &mut scene, &mut text, &mut atlas, id, " and"
+        ));
+        assert_eq!(area_value(runtime, id), "one and two");
+        assert_eq!(*heard.borrow(), "one and two");
+        assert_eq!(text_caret(runtime, &scene, id).map(|c| c.caret), Some(7));
+
+        // A selection is replaced.
+        dispatch_focus(runtime, &mut scene, &mut text, &mut atlas, Some(id));
+        key(
+            &mut scene,
+            &mut text,
+            &mut atlas,
+            EditKey::DocEnd { select: true },
+        );
+        let caret = text_caret(runtime, &scene, id).unwrap();
+        assert_eq!(caret.range(), 7..11);
+        assert!(insert_text(
+            runtime, &mut scene, &mut text, &mut atlas, id, "!"
+        ));
+        assert_eq!(area_value(runtime, id), "one and!");
+        assert_eq!(text_caret(runtime, &scene, id).unwrap().range(), 8..8);
     }
 
     #[test]

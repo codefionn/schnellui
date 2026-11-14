@@ -25,6 +25,7 @@ fn layered_theme() -> Theme {
         interactions: states(10),
         component_interactions: ComponentInteractions {
             button: Some(states(70)),
+            filled_button: None,
             navigation: Some(states(130)),
             toggle: None,
             editable: Some(states(190)),

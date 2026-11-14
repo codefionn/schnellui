@@ -263,6 +263,14 @@ pub(crate) fn emit_text_input_paint(
         .max(min_height),
     };
     let rect = node_rect(scene, id, intrinsic);
+    // A labelled field taller than its two lines need shares the spare height
+    // between the three gaps: above the label, between label and value, under
+    // the value. Without this the lines would sit at the top of a tall field.
+    let label_slack = if hint || placeholder.is_empty() {
+        0.0
+    } else {
+        ((rect.height - (content_h + float_label_sz.height + 3.0 * pad_v)) / 3.0).max(0.0)
+    };
     // Glyph rows start on a whole device pixel. A field laid out at a
     // fractional y would otherwise sample the atlas between texel rows and
     // smear every glyph vertically.
@@ -272,7 +280,7 @@ pub(crate) fn emit_text_input_paint(
         y: snap(if hint || placeholder.is_empty() {
             rect.y + ((rect.height - content_h) * 0.5).max(pad_v)
         } else {
-            rect.y + float_label_sz.height + 2.0 * pad_v
+            rect.y + float_label_sz.height + 2.0 * pad_v + 2.0 * label_slack
         }),
     };
 
@@ -383,7 +391,7 @@ pub(crate) fn emit_text_input_paint(
         // The label ends at the value's clip edge, with an ellipsis when cut.
         let label = shaper.truncate_to_width(&placeholder, label_phys, view_w / inv);
         let rest_y = rect.y + (rect.height - full_label_sz.height) * 0.5;
-        let float_y = rect.y + pad_v;
+        let float_y = rect.y + pad_v + label_slack;
         // A hint starts where typed text starts, as a browser's placeholder
         // does, so the first letter typed lands where the hint's began.
         let label_origin = Point {

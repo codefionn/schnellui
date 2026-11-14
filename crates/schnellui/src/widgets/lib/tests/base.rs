@@ -1771,3 +1771,52 @@ fn layout_moves_inset_control_paint_by_the_box_not_by_the_ink() {
         );
     }
 }
+
+// A tooltip takes the side asked for, flips when the window is close, and
+// an extra gap moves it further from its control.
+#[test]
+fn tooltip_sides_flip_and_the_extra_gap_moves_the_tooltip_away() {
+    use crate::widgets::{hover_tooltip_origin, TooltipSide};
+    let viewport = Rect::new(0.0, 0.0, 400.0, 300.0);
+    let tip = Size {
+        width: 60.0,
+        height: 20.0,
+    };
+    let middle = Rect::new(170.0, 140.0, 40.0, 40.0);
+    let below = hover_tooltip_origin(middle, tip, viewport, TooltipSide::Below, 0.0);
+    assert!(below.y >= middle.bottom());
+    let above = hover_tooltip_origin(middle, tip, viewport, TooltipSide::Above, 0.0);
+    assert!(above.y + tip.height <= middle.y);
+    let far = hover_tooltip_origin(middle, tip, viewport, TooltipSide::Above, 30.0);
+    assert_eq!(far.y, above.y - 30.0);
+
+    // Below has no room at the bottom edge, above none at the top edge.
+    let low = Rect::new(170.0, 270.0, 40.0, 24.0);
+    let flipped = hover_tooltip_origin(low, tip, viewport, TooltipSide::Below, 0.0);
+    assert!(flipped.y + tip.height <= low.y);
+    let high = Rect::new(170.0, 4.0, 40.0, 24.0);
+    let flipped = hover_tooltip_origin(high, tip, viewport, TooltipSide::Above, 0.0);
+    assert!(flipped.y >= high.bottom());
+
+    // Beside: the opposite side when the asked one runs out of the window.
+    let left_edge = Rect::new(8.0, 140.0, 40.0, 40.0);
+    let flipped = hover_tooltip_origin(left_edge, tip, viewport, TooltipSide::Before, 0.0);
+    assert!(flipped.x >= left_edge.right());
+    let right_edge = Rect::new(352.0, 140.0, 40.0, 40.0);
+    let flipped = hover_tooltip_origin(right_edge, tip, viewport, TooltipSide::After, 0.0);
+    assert!(flipped.x + tip.width <= right_edge.x);
+    // No tooltip covers its own control.
+    for side in [
+        TooltipSide::Above,
+        TooltipSide::Below,
+        TooltipSide::Before,
+        TooltipSide::After,
+    ] {
+        let at = hover_tooltip_origin(middle, tip, viewport, side, 0.0);
+        let covers = at.x < middle.right()
+            && at.x + tip.width > middle.x
+            && at.y < middle.bottom()
+            && at.y + tip.height > middle.y;
+        assert!(!covers, "{side:?}");
+    }
+}

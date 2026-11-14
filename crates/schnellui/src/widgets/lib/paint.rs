@@ -416,6 +416,9 @@ pub(crate) fn button_colors(
         (ButtonAppearance::Solid, true) => mix_color(t.text_muted, t.disabled, DISABLED_LABEL_FADE),
         (_, true) => mix_color(t.text_muted, t.surface, DISABLED_BARE_LABEL_FADE),
         (ButtonAppearance::Solid, false) => t.on_accent,
+        // A link is the accent, as the theme's `accent` says: without a fill or
+        // a frame, the color is all that tells it from the text beside it.
+        (ButtonAppearance::Link, false) => t.accent,
         (_, false) => t.text,
     };
     ButtonColors {

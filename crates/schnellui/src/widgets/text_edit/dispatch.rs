@@ -392,6 +392,60 @@ pub fn selected_text(
     }
 }
 
+/// Where the caret of a text input or text area is: byte offsets into its
+/// value. `anchor` is the other end of the selection, and equals `caret`
+/// when nothing is selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextCaret {
+    pub caret: usize,
+    pub anchor: usize,
+}
+
+impl TextCaret {
+    /// The selected bytes, start before end. Empty when nothing is selected.
+    pub fn range(self) -> std::ops::Range<usize> {
+        self.caret.min(self.anchor)..self.caret.max(self.anchor)
+    }
+}
+
+/// Reads the caret of the text input or text area `id`, focused or not.
+/// While an input method composes, this is where the caret was before the
+/// composition. `None` for anything that is not an editable.
+pub fn text_caret(
+    runtime: &crate::widgets::Runtime,
+    scene: &Scene,
+    id: WidgetId,
+) -> Option<TextCaret> {
+    match editable_kind(scene, id) {
+        Some(WidgetKind::TextArea) => crate::widgets::text_area::area_caret(runtime, id),
+        Some(WidgetKind::TextInput) => runtime.with(|rt| {
+            let rt = rt.borrow();
+            let state = rt.edits.get(id)?;
+            Some(TextCaret {
+                caret: state.caret,
+                anchor: state.anchor,
+            })
+        }),
+        _ => None,
+    }
+}
+
+/// Inserts `text` at the caret of the text input or text area `id`,
+/// replacing its selection, and leaves the caret after the inserted text.
+/// The editable need not have the focus. It is one undo step and fires
+/// `on_input`, as typing does. Line breaks are treated as a paste treats
+/// them. Returns false for a read-only or disabled editable.
+pub fn insert_text(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    id: WidgetId,
+    text: &str,
+) -> bool {
+    dispatch_paste(runtime, scene, shaper, atlas, id, text)
+}
+
 /// Deletes only the active selection(s). A collapsed caret is a no-op.
 pub fn delete_text_selection(
     runtime: &crate::widgets::Runtime,

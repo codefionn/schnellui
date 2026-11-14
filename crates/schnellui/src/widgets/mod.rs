@@ -495,18 +495,30 @@ const TOOLTIP_PAD_Y: f32 = 4.0;
 const TOOLTIP_VIEWPORT_MARGIN: f32 = 4.0;
 
 /// Where a hover tooltip sits against its control. A side that has no room in
-/// the window falls back to [`TooltipSide::Above`].
+/// the window flips to the opposite side, and `Before` and `After` fall back
+/// to [`TooltipSide::Above`] when neither has room.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TooltipSide {
     /// Above the control, or below it when the top of the window is close.
     #[default]
     Above,
+    /// Below the control, or above it when the bottom of the window is close.
+    /// For a control whose neighbour above is another control or a heading.
+    Below,
     /// Left of the control, level with it. For small controls in a row of a
     /// list, whose neighbours above and below are other rows.
     Before,
     /// Right of the control, level with it. For a column of icons along the
     /// window's left edge, where above would cover the icon before it.
     After,
+}
+
+/// One [`HoverWithin`]: whether the pointer was inside at the last pointer
+/// update, and who to tell when that changes.
+struct HoverWithinState {
+    inside: bool,
+    /// Taken out while it runs, so no registry borrow is held across user code.
+    on_change: Option<Box<dyn FnMut(bool) + 'static>>,
 }
 
 #[derive(Clone, Copy)]
@@ -520,6 +532,9 @@ struct HoverTooltipState {
     text_color: Color,
     visible: bool,
     side: TooltipSide,
+    /// Extra distance between the control and the tooltip, on top of the
+    /// usual gap. See [`set_tooltip_gap`].
+    extra_gap: f32,
     /// Primitives in the host's own paint (before `base_primitive_end`) that show
     /// only with the tooltip, each with its shown colour: a chart tints the
     /// hovered mark this way. See [`set_tooltip_highlights`].
@@ -581,13 +596,34 @@ pub(crate) fn set_tooltip_side(runtime: &Runtime, id: WidgetId, side: TooltipSid
     });
 }
 
-fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, side: TooltipSide) -> Point {
-    let x = match side {
-        TooltipSide::Above => None,
-        TooltipSide::Before => Some(target.x - TOOLTIP_GAP - tooltip.width),
-        TooltipSide::After => Some(target.right() + TOOLTIP_GAP),
+/// Sets how much further than the usual gap the hover tooltip of `id` sits
+/// from its control. Call after [`register_hover_tooltip`]; a host without a
+/// tooltip is left alone.
+pub(crate) fn set_tooltip_gap(runtime: &Runtime, id: WidgetId, extra: f32) {
+    runtime.with(|registry| {
+        if let Some(tooltip) = registry.borrow_mut().hover_tooltips.get_mut(id) {
+            tooltip.extra_gap = extra.max(0.0);
+        }
+    });
+}
+
+fn hover_tooltip_origin(
+    target: Rect,
+    tooltip: Size,
+    viewport: Rect,
+    side: TooltipSide,
+    extra_gap: f32,
+) -> Point {
+    let gap = TOOLTIP_GAP + extra_gap;
+    let before = target.x - gap - tooltip.width;
+    let after = target.right() + gap;
+    // The side asked for first, then the opposite one.
+    let beside = match side {
+        TooltipSide::Above | TooltipSide::Below => [None, None],
+        TooltipSide::Before => [Some(before), Some(after)],
+        TooltipSide::After => [Some(after), Some(before)],
     };
-    if let Some(x) = x {
+    for x in beside.into_iter().flatten() {
         let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
         let bottom = (viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN - tooltip.height).max(top);
         if x >= viewport.x + TOOLTIP_VIEWPORT_MARGIN
@@ -611,12 +647,15 @@ fn hover_tooltip_origin(target: Rect, tooltip: Size, viewport: Rect, side: Toolt
 
     let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
     let bottom = viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN;
-    let above = target.y - TOOLTIP_GAP - tooltip.height;
-    let below = target.bottom() + TOOLTIP_GAP;
-    let y = if above >= top {
-        above
-    } else if below + tooltip.height <= bottom {
+    let above = target.y - gap - tooltip.height;
+    let below = target.bottom() + gap;
+    let above_fits = above >= top;
+    let below_fits = below + tooltip.height <= bottom;
+    let prefer_below = side == TooltipSide::Below;
+    let y = if below_fits && (prefer_below || !above_fits) {
         below
+    } else if above_fits {
+        above
     } else {
         above.clamp(top, (bottom - tooltip.height).max(top))
     };
@@ -661,7 +700,13 @@ fn position_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
     let mut drawn = target;
     drawn.x += offset.x;
     drawn.y += offset.y;
-    let origin = hover_tooltip_origin(drawn, tooltip.size, viewport, tooltip.side);
+    let origin = hover_tooltip_origin(
+        drawn,
+        tooltip.size,
+        viewport,
+        tooltip.side,
+        tooltip.extra_gap,
+    );
     let dx = origin.x - offset.x - rect.x;
     let dy = origin.y - offset.y - rect.y;
     if dx.abs() < 0.001 && dy.abs() < 0.001 {
@@ -753,6 +798,7 @@ fn emit_hover_tooltip(
         text_color: tooltip_ink(&theme),
         visible: false,
         side: TooltipSide::Above,
+        extra_gap: 0.0,
         highlights: [None; 2],
     }
 }
@@ -1476,6 +1522,11 @@ struct WidgetRuntime {
     proximity_reveals: SecondaryMap<WidgetId, ProximityRevealState>,
     /// Dense index of `proximity_reveals` (walked on every pointer move).
     proximity_ids: Vec<WidgetId>,
+    /// Subtrees that report whether the pointer is inside them. See
+    /// [`HoverWithin`].
+    hover_within: SecondaryMap<WidgetId, HoverWithinState>,
+    /// Dense index of `hover_within` (walked on every pointer move).
+    hover_within_ids: Vec<WidgetId>,
     /// Pre-rasterized hover labels for compact buttons and meaningful images.
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
@@ -1654,6 +1705,8 @@ pub fn reset(runtime: &Runtime) {
         rt.pending_submit = None;
         rt.proximity_reveals.clear();
         rt.proximity_ids.clear();
+        rt.hover_within.clear();
+        rt.hover_within_ids.clear();
         rt.hover_tooltips.clear();
         rt.drop_tips.clear();
         rt.tooltip_ids.clear();
@@ -1772,6 +1825,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.scrolls.remove(id);
             rt.spinners.remove(id);
             rt.proximity_reveals.remove(id);
+            rt.hover_within.remove(id);
             rt.hover_tooltips.remove(id);
             rt.drop_tips.remove(id);
             rt.tooltip_when.remove(id);
@@ -1790,6 +1844,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
         rt.dialog_layer_ids.retain(|id| !removed(*id));
         rt.spinner_ids.retain(|id| !removed(*id));
         rt.proximity_ids.retain(|id| !removed(*id));
+        rt.hover_within_ids.retain(|id| !removed(*id));
         rt.tooltip_ids.retain(|id| !removed(*id));
         rt.dynamic_image_ids.retain(|id| !removed(*id));
         rt.edit_ids.retain(|id| !removed(*id));

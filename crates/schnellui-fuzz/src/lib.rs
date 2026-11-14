@@ -112,6 +112,7 @@ pub const EVERY: Theme = Theme {
     interactions: all_channels(10),
     component_interactions: ComponentInteractions {
         button: Some(all_channels(70)),
+        filled_button: None,
         navigation: Some(all_channels(130)),
         toggle: None,
         editable: Some(all_channels(190)),

@@ -618,7 +618,11 @@ pub(crate) fn restore_decorations(runtime: &Runtime, scene: &mut Scene, lifted: 
 fn ring_outsets(component: Option<InteractionComponent>, kind: Option<WidgetKind>) -> bool {
     matches!(
         component,
-        Some(InteractionComponent::Button | InteractionComponent::Toggle)
+        Some(
+            InteractionComponent::Button
+                | InteractionComponent::FilledButton
+                | InteractionComponent::Toggle
+        )
     ) || kind == Some(WidgetKind::Link)
 }
 
@@ -655,6 +659,23 @@ fn interaction_component(scene: &Scene, id: WidgetId) -> Option<InteractionCompo
         | WidgetKind::RichText => Some(InteractionComponent::RawSurface),
         _ => None,
     }
+}
+
+/// The component whose hover and pressed states `id` wears. A button with the solid fill is
+/// its own component, so a theme can darken the fill and tint the other kinds.
+fn styled_component(
+    runtime: &Runtime,
+    scene: &Scene,
+    id: WidgetId,
+) -> Option<InteractionComponent> {
+    let component = interaction_component(scene, id)?;
+    if component == InteractionComponent::Button
+        && runtime.with(|rt| rt.borrow().button_appearances.get(id).copied())
+            == Some(crate::widgets::ButtonAppearance::Solid)
+    {
+        return Some(InteractionComponent::FilledButton);
+    }
+    Some(component)
 }
 
 /// A background was inserted (`delta` 1) or removed (-1) in `owner` at `at`:
@@ -1186,7 +1207,7 @@ pub fn strip_hover_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
 
 pub(crate) fn apply_hover_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
     strip_hover_decoration(runtime, scene);
-    let Some(component) = interaction_component(scene, id) else {
+    let Some(component) = styled_component(runtime, scene, id) else {
         return false;
     };
     let mut style = interaction_style_for(runtime, id, component, InteractionState::Hover);
@@ -1238,7 +1259,7 @@ pub fn strip_active_decoration(runtime: &Runtime, scene: &mut Scene) -> bool {
 
 pub(crate) fn apply_active_decoration(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> bool {
     strip_active_decoration(runtime, scene);
-    let Some(component) = interaction_component(scene, id) else {
+    let Some(component) = styled_component(runtime, scene, id) else {
         return false;
     };
     let style = interaction_style_for(runtime, id, component, InteractionState::Active);
@@ -1266,7 +1287,7 @@ pub fn set_active_interaction(
                 && ActionFlags(a.actions).contains(ActionFlags::FOCUS)
         });
         if enabled
-            && interaction_component(scene, id).is_some_and(|component| {
+            && styled_component(runtime, scene, id).is_some_and(|component| {
                 interaction_style_for(runtime, id, component, InteractionState::Active)
                     != InteractionStyle::NONE
             })
@@ -1746,7 +1767,7 @@ pub(crate) fn hover_target_at(
         if disabled {
             return None;
         }
-        let paints_hover = interaction_component(scene, id).is_some_and(|component| {
+        let paints_hover = styled_component(runtime, scene, id).is_some_and(|component| {
             interaction_style_for(runtime, id, component, InteractionState::Hover)
                 != InteractionStyle::NONE
         });
@@ -1952,7 +1973,98 @@ fn update_pointer_state(
         }
         changed
     });
+    report_hover_within(runtime, scene, point, hit);
     control_changed | proximity_changed
+}
+
+/// Tells an area whether the pointer is inside it. Wrap any view, a
+/// [`Row`], [`Column`] or [`Stack`] included:
+/// `HoverWithin::new(row).on_change(|inside| ..)`.
+///
+/// The area is the wrapped view's box as drawn. The wrapper adds no node and
+/// takes no part in hit testing, so the controls inside keep their own hover,
+/// tooltips and clicks, and the pointer on a child still counts as inside.
+/// A dialog or menu drawn over the area ends the hover, and so does the
+/// pointer leaving the window. A view removed while the pointer is inside it
+/// gets no last call.
+pub struct HoverWithin {
+    child: Box<dyn View>,
+    on_change: Option<Box<dyn FnMut(bool) + 'static>>,
+}
+
+impl HoverWithin {
+    pub fn new(child: impl View) -> HoverWithin {
+        HoverWithin {
+            child: Box::new(child),
+            on_change: None,
+        }
+    }
+
+    /// Called with `true` when the pointer comes inside the area and with
+    /// `false` when it leaves, once per change.
+    pub fn on_change(mut self, f: impl FnMut(bool) + 'static) -> HoverWithin {
+        self.on_change = Some(Box::new(f));
+        self
+    }
+}
+
+impl View for HoverWithin {
+    fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
+        let HoverWithin { child, on_change } = *self;
+        let id = child.build(ctx, parent);
+        ctx.runtime.with(|rt| {
+            let mut rt = rt.borrow_mut();
+            let state = HoverWithinState {
+                inside: false,
+                on_change,
+            };
+            if rt.hover_within.insert(id, state).is_none() {
+                rt.hover_within_ids.push(id);
+            }
+        });
+        id
+    }
+}
+
+/// Whether the pointer is inside the [`HoverWithin`] area whose root is `id`,
+/// as of the last pointer update.
+pub fn pointer_within(runtime: &Runtime, id: WidgetId) -> bool {
+    runtime.with(|rt| rt.borrow().hover_within.get(id).is_some_and(|s| s.inside))
+}
+
+/// Runs the handlers of the [`HoverWithin`] areas the pointer entered or left.
+fn report_hover_within(runtime: &Runtime, scene: &Scene, point: Point, hit: Option<WidgetId>) {
+    let changed: Vec<(WidgetId, bool)> = runtime.with(|rt| {
+        let mut rt = rt.borrow_mut();
+        let rt = &mut *rt;
+        let mut changed = Vec::new();
+        for &id in &rt.hover_within_ids {
+            let Some(state) = rt.hover_within.get_mut(id) else {
+                continue;
+            };
+            let inside = scene.composited_rect(id).contains(point) && uncovered(scene, id, hit);
+            if inside != state.inside {
+                state.inside = inside;
+                changed.push((id, inside));
+            }
+        }
+        changed
+    });
+    for (id, inside) in changed {
+        let handler = runtime.with(|rt| {
+            rt.borrow_mut()
+                .hover_within
+                .get_mut(id)
+                .and_then(|state| state.on_change.take())
+        });
+        let Some(mut handler) = handler else { continue };
+        handler(inside);
+        runtime.with(|rt| {
+            if let Some(state) = rt.borrow_mut().hover_within.get_mut(id) {
+                state.on_change.get_or_insert(handler);
+            }
+        });
+    }
 }
 
 /// Whether the pointer that hit `hit` is on `id` rather than on a layer

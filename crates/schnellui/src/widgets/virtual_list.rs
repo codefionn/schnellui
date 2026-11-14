@@ -85,6 +85,14 @@ where
         self.inner.borrow_mut().refresh_all();
     }
 
+    /// Scrolls so the row named `key` starts at the top of the viewport, or as
+    /// near to it as the end of the list allows. The row need not be mounted.
+    /// The next retained frame moves the viewport and mounts the rows around
+    /// it. Returns false, and scrolls nothing, when the list has no such key.
+    pub fn scroll_to_key(&self, key: &K) -> bool {
+        self.inner.borrow_mut().scroll_to_key(key)
+    }
+
     /// Sets the retained overscan in logical pixels.
     pub fn overscan(&self, pixels: f32) {
         let mut inner = self.inner.borrow_mut();
@@ -749,6 +757,27 @@ where
         }
     }
 
+    fn scroll_to_key(&mut self, key: &K) -> bool {
+        let Some(&index) = self.positions.get(key) else {
+            return false;
+        };
+        let top = self.heights.prefix(index);
+        // Before the first layout the viewport is unknown, and the scene clamps
+        // the offset once it is.
+        let max = if self.viewport > 0.0 {
+            (self.heights.total() - self.viewport).max(0.0)
+        } else {
+            top
+        };
+        self.offset = top.min(max);
+        // A list that follows its end stops following unless the row is there.
+        self.at_end = self.viewport > 0.0 && max - self.offset <= 1.0;
+        self.anchor = None;
+        self.scroll_sync = Some(self.offset);
+        self.dirty = true;
+        true
+    }
+
     /// Reconciles the controller with the position that layout actually kept.
     /// Unlike [`note_scroll`], `at_end` comes from the scene's measured extent,
     /// which may temporarily differ from this controller's estimates.
@@ -1049,6 +1078,37 @@ mod tests {
         controller.insert(0, "before");
         assert_eq!(controller.offset, 35.0);
         assert_eq!(controller.take_scroll_sync(), Some(35.0));
+    }
+
+    #[test]
+    fn scroll_to_key_puts_the_row_at_the_top_or_stops_at_the_end() {
+        let keys: Vec<_> = (0..100).collect();
+        let mut controller = Controller::new(keys, 20.0);
+        controller.set_viewport(100.0);
+        assert!(controller.set_height(&3, 50.0));
+        controller.take_scroll_sync();
+
+        // Row 40 starts after 39 rows of 20 and one of 50.
+        assert!(controller.scroll_to_key(&40));
+        assert_eq!(controller.offset, 830.0);
+        assert_eq!(controller.take_scroll_sync(), Some(830.0));
+        let (start, end) = controller.window();
+        assert!(start <= 40 && 40 < end, "the row is in the mounted window");
+        assert!(!controller.at_end);
+
+        // The last row cannot reach the top: the list stops at its end.
+        assert!(controller.scroll_to_key(&99));
+        assert_eq!(controller.offset, controller.heights.total() - 100.0);
+        assert!(controller.at_end);
+
+        // An unknown key scrolls nothing.
+        controller.take_scroll_sync();
+        assert!(!controller.scroll_to_key(&1_000));
+        assert_eq!(controller.take_scroll_sync(), None);
+
+        let handle = super::VirtualListController::new(0..10, 20.0);
+        assert!(handle.scroll_to_key(&5));
+        assert!(!handle.scroll_to_key(&50));
     }
 
     #[test]
