@@ -667,7 +667,9 @@ pub fn reposition_node(runtime: &Runtime, scene: &mut Scene, id: WidgetId) {
         // the hairline actually needs to change.
         let new = match scene.paint(id).and_then(|pd| pd.primitives.first()) {
             Some(Primitive::SolidRect { rect, .. }) => {
-                let new = Rect::new(lay_rect.x, lay_rect.y, lay_rect.width, rect.height);
+                // On a whole pixel: a hairline centred at half a pixel, as between a row's
+                // text and its middle, spread over two rows at half strength and all but went.
+                let new = Rect::new(lay_rect.x, lay_rect.y.round(), lay_rect.width, rect.height);
                 (*rect != new).then_some(new)
             }
             _ => None,

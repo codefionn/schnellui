@@ -492,8 +492,8 @@ fn phys_size_px(size_px: f32, scale: f32) -> f32 {
 /// rect the same way the built-in leaves do, instead of re-deriving the layout/mount
 /// fallback rule.
 const TOOLTIP_GAP: f32 = 8.0;
-const TOOLTIP_PAD_X: f32 = 7.0;
-const TOOLTIP_PAD_Y: f32 = 4.0;
+const TOOLTIP_PAD_X: f32 = 8.0;
+const TOOLTIP_PAD_Y: f32 = 5.0;
 const TOOLTIP_VIEWPORT_MARGIN: f32 = 4.0;
 
 /// Where a hover tooltip sits against its control. A side that has no room in

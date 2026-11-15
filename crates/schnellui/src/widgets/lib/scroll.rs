@@ -952,8 +952,9 @@ pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: R
 }
 
 /// Room a keyboard reveal keeps between a focused control's ring and the edge of
-/// the viewport it scrolls into.
-pub const FOCUS_REVEAL_AIR: f32 = 16.0;
+/// the viewport it scrolls into: about one row, so the row after it shows too and
+/// the ring never sits in an edge fade.
+pub const FOCUS_REVEAL_AIR: f32 = 40.0;
 
 /// What a reveal of the control `id` aims at: its laid-out box with the
 /// keyboard focus ring around it, or for the focused text area the caret row
@@ -982,7 +983,15 @@ pub fn reveal_target(
     }
     // Past the ring, a little air: a ring that stops on the viewport's edge reads
     // as cut off by whatever borders the viewport.
-    let reach = focus_ring_reach(scene, id) + FOCUS_REVEAL_AIR;
+    // The air shrinks in a viewport too short for it on both sides, so the control itself
+    // still comes fully into view.
+    let ring = focus_ring_reach(scene, id);
+    let air = enclosing_scroll(scene, id)
+        .and_then(|viewport| scroll_metrics(scene, viewport))
+        .map_or(FOCUS_REVEAL_AIR, |metrics| {
+            FOCUS_REVEAL_AIR.min(((metrics.viewport.height - rect.height) / 2.0 - ring).max(0.0))
+        });
+    let reach = ring + air;
     Some(Rect::new(
         rect.x - reach,
         rect.y - reach,
