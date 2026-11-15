@@ -1636,7 +1636,9 @@ fn roving_members<'a>(
         .filter(move |&id| roving_group(scene, id) == Some(group))
 }
 
-/// Where Tab enters a group: its selected or checked member, else its first.
+/// Where Tab enters a group: its selected or checked member, else its first
+/// member in full view, else its first. A long scrolled list, a timeline say,
+/// is entered where the user is reading, not scrolled back to its top.
 pub(crate) fn roving_entry(
     scene: &scene::Scene,
     order: &[scene::WidgetId],
@@ -1648,7 +1650,26 @@ pub(crate) fn roving_entry(
             state.contains(a11y::StateFlags::SELECTED) || state.contains(a11y::StateFlags::CHECKED)
         })
     });
-    chosen.or_else(|| roving_members(scene, order, group).next())
+    chosen
+        .or_else(|| roving_members(scene, order, group).find(|&id| in_full_view(scene, id)))
+        .or_else(|| roving_members(scene, order, group).next())
+}
+
+/// Whether no enclosing viewport cuts any of `id` off. Focusing it scrolls no
+/// more than the air a reveal keeps around a ring.
+fn in_full_view(scene: &scene::Scene, id: scene::WidgetId) -> bool {
+    let Some(layout) = scene.layout(id) else {
+        return false;
+    };
+    let (offset, clip) = scene.composite_context(id);
+    let rect = scene::Rect::new(
+        layout.rect.x + offset.x,
+        layout.rect.y + offset.y,
+        layout.rect.width,
+        layout.rect.height,
+    );
+    let shown = rect.intersect(&clip);
+    !rect.is_empty() && shown.width >= rect.width - 0.5 && shown.height >= rect.height - 0.5
 }
 
 /// The member an arrow key moves focus to, wrapping at the ends.

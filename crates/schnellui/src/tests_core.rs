@@ -1272,6 +1272,44 @@ fn a_list_of_buttons_is_one_tab_stop_entered_at_the_selected_one() {
     assert_eq!(app.focused_widget(), Some(after));
 }
 
+/// A scrolled list of buttons with nothing selected is entered at its first
+/// button in view, so Tab does not scroll the list back to its top.
+#[test]
+fn a_scrolled_list_of_buttons_is_entered_at_its_first_button_in_view() {
+    use schnellui::widgets::{Button, Column, List, Scroll};
+
+    let mut list = List::new().align(schnellui::layout::Align::Start);
+    for i in 0..30 {
+        list = list.child(Button::new(format!("Message {i}")));
+    }
+    let view = Column::new()
+        .child(Button::new("before"))
+        .child(Scroll::new().size(320.0, 200.0).child(list));
+    let mut app = App::mount_with_size(view, 400, 300);
+    app.frame();
+    let sv = app.find_widget(Role::ScrollView, None).unwrap();
+    let viewport = app.scene().layout(sv).unwrap().rect;
+    let point = schnellui::scene::Point {
+        x: viewport.x + 10.0,
+        y: viewport.y + 10.0,
+    };
+    assert!(app.dispatch_wheel_at(point, 300.0));
+    app.frame();
+    let offset = app.scene().scroll_offset(sv).y;
+    assert!(offset > 0.0, "the list scrolled");
+
+    assert!(app.focus_step(false));
+    assert!(app.focus_step(false));
+    let focused = app.focused_widget().unwrap();
+    let first = app.find_widget(Role::Button, Some("Message 0")).unwrap();
+    assert_ne!(focused, first, "Tab does not go back to the top");
+    let moved = (app.scene().scroll_offset(sv).y - offset).abs();
+    assert!(
+        moved <= schnellui::widgets::FOCUS_REVEAL_AIR + 4.0,
+        "the focused button was in view: the list moved only {moved} px for its ring"
+    );
+}
+
 /// `arrows_select(false)`: arrows walk the group without selecting, Space selects.
 #[test]
 fn radios_without_arrow_selection_move_focus_only() {

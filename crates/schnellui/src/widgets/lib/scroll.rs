@@ -953,7 +953,7 @@ pub fn reveal_rect(runtime: &Runtime, scene: &mut Scene, from: WidgetId, rect: R
 
 /// Room a keyboard reveal keeps between a focused control's ring and the edge of
 /// the viewport it scrolls into.
-pub const FOCUS_REVEAL_AIR: f32 = 6.0;
+pub const FOCUS_REVEAL_AIR: f32 = 16.0;
 
 /// What a reveal of the control `id` aims at: its laid-out box with the
 /// keyboard focus ring around it, or for the focused text area the caret row
