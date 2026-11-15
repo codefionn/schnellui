@@ -645,15 +645,9 @@ fn hover_tooltip_origin(
     }
     let left = viewport.x + TOOLTIP_VIEWPORT_MARGIN;
     let right = (viewport.right() - TOOLTIP_VIEWPORT_MARGIN - tooltip.width).max(left);
-    // A target in the left half of the window starts its tooltip at its own
-    // left edge, so the tooltip grows into the window and not over what sits
-    // left of the target; one in the right half ends at its right edge.
-    let x = if target.x + target.width * 0.5 < viewport.x + viewport.width * 0.5 {
-        target.x
-    } else {
-        target.right() - tooltip.width
-    }
-    .clamp(left, right);
+    // Centred on the target, so it reads as the target's name; a target near
+    // a window edge pushes it inward.
+    let x = (target.x + (target.width - tooltip.width) * 0.5).clamp(left, right);
 
     let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
     let bottom = viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN;
@@ -814,10 +808,15 @@ fn emit_hover_tooltip(
 }
 
 /// The text color of a tooltip, whose fill is the theme's text color: the
-/// surface while it reads at 7:1 on it, else black or white. A muted theme
-/// (a status bar's) has a mid-tone text color the surface falls short on.
+/// surface while it reads at 7:1 on it and is the darker of the two, else
+/// black or white. A muted theme (a status bar's) has a mid-tone text color
+/// the surface falls short on, and a dark theme's surface is a tinted grey
+/// that reads weaker on the pale fill than black does.
 fn tooltip_ink(theme: &Theme) -> Color {
-    if crate::widgets::theme::contrast_ratio(theme.surface, theme.text) >= 7.0 {
+    use crate::widgets::theme::{contrast_ratio, luminance};
+    if contrast_ratio(theme.surface, theme.text) >= 7.0
+        && luminance(theme.surface) > luminance(theme.text)
+    {
         theme.surface
     } else {
         theme.ink_on(theme.text)

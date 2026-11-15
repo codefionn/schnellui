@@ -4270,13 +4270,12 @@ mod overlays_in_a_window {
 
     #[test]
     fn a_tooltip_above_a_windows_top_edge_is_not_clipped_by_the_window() {
-        // In the right half, so the tooltip ends at the button's right edge and
-        // reaches left past the window's.
+        // The tooltip, centred on the button, reaches past the window's edges.
         tooltip_clip_check((450.0, 20.0), (300.0, 160.0), false);
     }
 
     #[test]
-    fn a_tooltip_in_the_left_half_starts_at_its_buttons_left_edge() {
+    fn a_tooltip_is_centred_on_its_button() {
         let mut app = App::mount_with_size(
             Column::new().fill().child(
                 schnellui::widgets::Pad::all(200.0)
@@ -4297,7 +4296,8 @@ mod overlays_in_a_window {
         app.update_pointer_proximity(at);
         app.frame();
         let tip = tooltip_bounds(&app, button);
-        assert!((tip.x - rect.x).abs() < 1.0, "{tip:?} beside {rect:?}");
+        let (tip_mid, button_mid) = (tip.x + tip.width * 0.5, rect.x + rect.width * 0.5);
+        assert!((tip_mid - button_mid).abs() < 1.0, "{tip:?} over {rect:?}");
     }
 
     #[test]

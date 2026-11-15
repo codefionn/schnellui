@@ -559,7 +559,7 @@ fn linear_channel(channel: u8) -> f32 {
 }
 
 /// Relative luminance in linear-light sRGB.
-fn luminance(color: Color) -> f32 {
+pub(crate) fn luminance(color: Color) -> f32 {
     0.2126 * linear_channel(color.r)
         + 0.7152 * linear_channel(color.g)
         + 0.0722 * linear_channel(color.b)

@@ -17,6 +17,20 @@ pub const HOVER_BORDER_W: f32 = 1.5;
 pub const ACTIVE_BORDER_W: f32 = 2.5;
 /// A link has no surface of its own to take a corner radius from.
 const LINK_RING_RADIUS: f32 = 3.0;
+/// How much further out than other rings the ring of a link-styled button
+/// stands at its sides.
+const LINK_BUTTON_RING_SIDE: f32 = 2.0;
+/// The corner radius of a link-styled button's ring.
+const LINK_BUTTON_RING_RADIUS: f32 = 6.0;
+
+/// Whether `id` is a button with the link appearance: a word in a line.
+fn link_button(runtime: &Runtime, scene: &Scene, id: WidgetId) -> bool {
+    scene
+        .node(id)
+        .is_some_and(|node| node.kind == WidgetKind::Button)
+        && runtime.with(|rt| rt.borrow().button_appearances.get(id).copied())
+            == Some(crate::widgets::ButtonAppearance::Link)
+}
 /// One hover border is a single retained stroke.
 pub const HOVER_BORDER_PRIMS: usize = 1;
 
@@ -1294,6 +1308,18 @@ fn apply_interaction_style(
             None if radio_row.is_some() => radio_row.unwrap_or((rect, 0.0)),
             None if viewport.is_some() => (viewport.unwrap_or(rect), 0.0),
             None if kind == Some(WidgetKind::Link) => (rect, LINK_RING_RADIUS),
+            // A button that reads as a word in a line has no padding of its own: its
+            // ring stands a little further out at the sides, so it does not pinch the
+            // first and last letter, and takes the small rounding of a link's ring.
+            None if link_button(runtime, scene, id) => (
+                Rect::new(
+                    rect.x - LINK_BUTTON_RING_SIDE,
+                    rect.y,
+                    rect.width + 2.0 * LINK_BUTTON_RING_SIDE,
+                    rect.height,
+                ),
+                LINK_BUTTON_RING_RADIUS,
+            ),
             None => (rect, surface_radius(runtime, scene, owner)),
         };
         // A square tab or row still takes the design's small rounding on

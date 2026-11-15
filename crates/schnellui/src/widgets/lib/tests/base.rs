@@ -1789,6 +1789,9 @@ fn tooltip_sides_flip_and_the_extra_gap_moves_the_tooltip_away() {
     assert!(above.y + tip.height <= middle.y);
     let far = hover_tooltip_origin(middle, tip, viewport, TooltipSide::Above, 30.0);
     assert_eq!(far.y, above.y - 30.0);
+    // Above and below, it is centred on its control.
+    assert_eq!(above.x + tip.width * 0.5, middle.x + middle.width * 0.5);
+    assert_eq!(below.x + tip.width * 0.5, middle.x + middle.width * 0.5);
 
     // Below has no room at the bottom edge, above none at the top edge.
     let low = Rect::new(170.0, 270.0, 40.0, 24.0);
