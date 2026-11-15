@@ -1007,10 +1007,61 @@ pub fn reveal_widget(
     shaper: &mut TextShaper,
     id: WidgetId,
 ) -> bool {
+    // A control already in full view, ring and all, stays where it is: Tab onto it does not
+    // move the page for the sake of the air around it.
+    if ringed_rect(scene, id).is_some_and(|bare| rect_in_view(scene, id, bare)) {
+        return false;
+    }
     match reveal_target(runtime, scene, shaper, id) {
         Some(rect) => reveal_rect(runtime, scene, id, rect),
         None => false,
     }
+}
+
+/// The laid-out box of `id` with its focus ring around it, for a focused control that is not
+/// a text area (a text area reveals its caret). `None` otherwise.
+fn ringed_rect(scene: &Scene, id: WidgetId) -> Option<Rect> {
+    let rect = scene.layout(id).map(|b| b.rect).filter(|r| !r.is_empty())?;
+    let focused = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
+    let text_area = scene
+        .node(id)
+        .is_some_and(|n| n.kind == WidgetKind::TextArea);
+    if !focused || text_area {
+        return None;
+    }
+    let reach = focus_ring_reach(scene, id);
+    Some(Rect::new(
+        rect.x - reach,
+        rect.y - reach,
+        rect.width + 2.0 * reach,
+        rect.height + 2.0 * reach,
+    ))
+}
+
+/// Whether `rect` (window-space layout coordinates, scroll offsets not applied) shows in full
+/// through every [`WidgetKind::Scroll`] around `from`.
+fn rect_in_view(scene: &Scene, from: WidgetId, rect: Rect) -> bool {
+    let (mut top, mut bottom) = (rect.y, rect.bottom());
+    let mut cur = enclosing_scroll(scene, from);
+    while let Some(viewport) = cur {
+        if let Some(metrics) = scroll_metrics(scene, viewport) {
+            let visible_top = metrics.viewport.y + metrics.offset;
+            let visible_bottom = visible_top + metrics.viewport.height;
+            if top < visible_top - 0.5 || bottom > visible_bottom + 0.5 {
+                return false;
+            }
+            let shown_at = scene
+                .scroll_offset(viewport)
+                .y
+                .clamp(0.0, metrics.max_offset);
+            top -= shown_at;
+            bottom -= shown_at;
+        }
+        cur = enclosing_scroll(scene, viewport);
+    }
+    true
 }
 
 /// Asks for `id` to be revealed once layout has settled: a layout that is still
