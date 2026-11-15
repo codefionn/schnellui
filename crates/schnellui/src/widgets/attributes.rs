@@ -21,6 +21,8 @@ pub enum Attribute {
     Disabled,
     Checked,
     FontSize,
+    /// The value a [`Slider`] shows. Moving it does not fire the slider's `on_change`.
+    Value,
 }
 
 /// Typed values crossing the macro's retained property boundary.
@@ -318,6 +320,9 @@ pub(crate) fn apply(
                 emit_checkbox_paint(runtime, scene, id, enabled);
                 scene.mark_dirty(id, DirtyFlags::PAINT);
             }
+        }
+        (Attribute::Value, AttributeValue::Number(number)) => {
+            show_slider_value(runtime, scene, id, number);
         }
         (attr, AttributeValue::Number(number)) => {
             if attr == Attribute::Gap {

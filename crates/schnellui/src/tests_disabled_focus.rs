@@ -260,3 +260,32 @@ fn a_theme_rebuild_that_disables_the_focused_button_moves_the_ring() {
     assert_eq!(focused_name(&app).as_deref(), Some("After"));
     assert_ring_matches_focus(&app, Some(button(&app, "After")));
 }
+
+/// A reactive slider value moves the thumb in place: focus and the ring stay, and the
+/// slider's own `on_change` does not fire.
+#[test]
+fn a_reactive_slider_value_keeps_focus_and_does_not_report_a_change() {
+    let at = create_signal(0.25f32);
+    let changes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = changes.clone();
+    let view = page(ReactiveAttr::new(
+        Slider::new(0.25, 0.0, 1.0)
+            .name("Mid")
+            .on_change(move |_| counted.set(counted.get() + 1)),
+        move || at.get(),
+        Attribute::Value,
+    ));
+    let mut app = mount(view);
+    let slider = middle(&app);
+    assert!(app.focus(Some(slider)));
+    for v in [0.5f32, 0.75, 1.0] {
+        at.set(v);
+        app.frame();
+        assert_eq!(
+            app.scene().a11y(slider).unwrap().value.as_deref(),
+            Some(schnellui::widgets::format_slider_value(v).as_str())
+        );
+        assert_ring_matches_focus(&app, Some(slider));
+    }
+    assert_eq!(changes.get(), 0);
+}

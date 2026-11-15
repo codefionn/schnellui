@@ -792,6 +792,46 @@ pub fn dispatch_set_slider_value(
     true
 }
 
+/// Moves a slider to show `value` without firing its `on_change`: the program, not the
+/// user, moved it (a playback position, say). Clamps and snaps like a user change, repaints
+/// in place and keeps focus and the ring. Returns `true` if the value moved.
+pub fn show_slider_value(runtime: &Runtime, scene: &mut Scene, id: WidgetId, value: f32) -> bool {
+    if !matches!(scene.node(id), Some(n) if n.kind == WidgetKind::Slider) || !value.is_finite() {
+        return false;
+    }
+    let Some((old, min, max, step)) = runtime.with(|rt| {
+        rt.borrow()
+            .sliders
+            .get(id)
+            .map(|s| (s.value, s.min, s.max, s.step))
+    }) else {
+        return false;
+    };
+    let new = quantize_slider(value, min, max, step);
+    if (new - old).abs() <= f32::EPSILON {
+        return false;
+    }
+    runtime.with(|rt| {
+        if let Some(s) = rt.borrow_mut().sliders.get_mut(id) {
+            s.value = new;
+        }
+    });
+    let frac = if max > min {
+        ((new - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let disabled = scene
+        .a11y(id)
+        .map(|a| StateFlags(a.state).contains(StateFlags::DISABLED))
+        .unwrap_or(false);
+    emit_slider_paint(runtime, scene, id, frac, disabled);
+    redecorate_after_refill(runtime, scene, id);
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+    scene.set_a11y_value(id, Some(format_slider_value(new)));
+    true
+}
+
 /// Scrubs a slider from a logical pointer position. Positions outside the rail
 /// clamp to the nearest endpoint, matching native range controls.
 pub fn dispatch_slider_pointer(
