@@ -71,6 +71,7 @@ pub struct ListRow {
     pill_ink: Option<Color>,
     subtitle_color: Option<Color>,
     value: Option<Cow<'static, str>>,
+    tooltip: Option<Cow<'static, str>>,
     on_click: Option<ClickHandler>,
     context_menu: Option<ContextMenu>,
 }
@@ -102,6 +103,7 @@ impl ListRow {
             pill_ink: None,
             subtitle_color: None,
             value: None,
+            tooltip: None,
             on_click: None,
             context_menu: None,
         }
@@ -227,6 +229,13 @@ impl ListRow {
     /// A filled circle of this color before the title.
     pub fn dot(mut self, color: Color) -> ListRow {
         self.dot = Some(color);
+        self
+    }
+
+    /// Words shown on hover above the row, such as what its dot means.
+    pub fn tooltip(mut self, label: impl Into<Cow<'static, str>>) -> ListRow {
+        let label = label.into();
+        self.tooltip = (!label.is_empty()).then_some(label);
         self
     }
 
@@ -648,6 +657,18 @@ impl View for ListRow {
             );
         }
         ctx.layout.set_measure(id, Box::new(move |_available| size));
+        if let Some(tooltip) = &this.tooltip {
+            crate::widgets::register_hover_tooltip(
+                &ctx.runtime,
+                ctx.scene,
+                ctx.text,
+                ctx.atlas,
+                id,
+                tooltip,
+                size,
+                ctx.scale,
+            );
+        }
         if let Some(handler) = this.on_click {
             with_handlers(&ctx.runtime, id, |h| h.click = Some(handler));
         }

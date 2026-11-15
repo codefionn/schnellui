@@ -2368,6 +2368,11 @@ pub fn hide_hover_tooltip(runtime: &Runtime, scene: &mut Scene, id: WidgetId) ->
     })
 }
 
+/// The words of `id`'s hover tooltip, if it has one.
+pub fn hover_tooltip_label(runtime: &Runtime, id: WidgetId) -> Option<String> {
+    runtime.with(|registry| registry.borrow().tooltip_labels.get(id).cloned())
+}
+
 /// Hides every shown hover tooltip. Returns whether paint changed.
 pub fn hide_hover_tooltips(runtime: &Runtime, scene: &mut Scene) -> bool {
     runtime.with(|registry| {

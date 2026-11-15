@@ -850,6 +850,7 @@ pub(crate) fn register_hover_tooltip(
     let tooltip = emit_hover_tooltip(runtime, scene, shaper, atlas, id, label, target_size, scale);
     runtime.with(|registry| {
         let mut registry = registry.borrow_mut();
+        registry.tooltip_labels.insert(id, label.to_owned());
         if registry.hover_tooltips.insert(id, tooltip).is_none() {
             registry.tooltip_ids.push(id);
         }
@@ -1602,6 +1603,8 @@ struct WidgetRuntime {
     hover_tooltips: SecondaryMap<WidgetId, HoverTooltipState>,
     /// Dense index of `hover_tooltips` (walked on every pointer move).
     tooltip_ids: Vec<WidgetId>,
+    /// The words of each hover tooltip, for tests and tools that read them back.
+    tooltip_labels: SecondaryMap<WidgetId, String>,
     /// Hosts of `hover_tooltips` that show only while a drag hovers a drop
     /// target under them (see [`DropTip`]).
     drop_tips: SecondaryMap<WidgetId, ()>,
@@ -1781,6 +1784,7 @@ pub fn reset(runtime: &Runtime) {
         rt.focus_within.clear();
         rt.focus_within_ids.clear();
         rt.hover_tooltips.clear();
+        rt.tooltip_labels.clear();
         rt.drop_tips.clear();
         rt.tooltip_ids.clear();
         rt.tooltip_when.clear();
@@ -1901,6 +1905,7 @@ pub fn purge_nodes(runtime: &Runtime, scene: &mut Scene, nodes: &[WidgetId]) {
             rt.hover_within.remove(id);
             rt.focus_within.remove(id);
             rt.hover_tooltips.remove(id);
+            rt.tooltip_labels.remove(id);
             rt.drop_tips.remove(id);
             rt.tooltip_when.remove(id);
             rt.text_layouts.remove(id);

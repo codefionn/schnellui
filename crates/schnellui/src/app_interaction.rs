@@ -1435,6 +1435,11 @@ impl App {
         changed
     }
 
+    /// The words of the hover tooltip on `id`, if it has one.
+    pub fn tooltip_label(&self, id: scene::WidgetId) -> Option<String> {
+        schnellui::widgets::hover_tooltip_label(&self.widgets, id)
+    }
+
     /// Takes hover away from the resting pointer while the keyboard moves a
     /// highlight, as native lists do: a row the pointer happens to rest on no
     /// longer competes with the row the keys picked. Hover comes back when
