@@ -2210,6 +2210,8 @@ pub(crate) fn run_headless(
                 }
             }
             Some(PlatformEvent::AccessKit(_)) => {}
+            // A headless host has no window to raise.
+            Some(PlatformEvent::FocusRequested) => {}
             None => {}
         }
     }

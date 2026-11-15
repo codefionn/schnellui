@@ -45,6 +45,8 @@ enum PlatformEvent {
     /// The system menu bar reported a chosen item.
     GlobalMenu(crate::platform::GlobalMenuEvent),
     RedrawRequested,
+    /// The host asked to bring the window to the front, e.g. after a click on a notification.
+    FocusRequested,
     Debug(DebugRequest),
 }
 
@@ -54,6 +56,8 @@ enum PlatformEvent {
 struct RedrawSignalInner {
     wake: Mutex<Option<WakeTarget>>,
     pending: AtomicBool,
+    /// How many times `request_focus` was called; tests read it back.
+    focus_requests: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -102,6 +106,23 @@ impl RedrawSignal {
         if !sent {
             self.0.pending.store(false, Ordering::Release);
         }
+    }
+
+    /// Asks the window host to raise and focus the window (winit `Window::focus_window`). A
+    /// compositor may refuse it, e.g. Wayland without an activation token; then the window
+    /// is marked as wanting attention instead. Callable from any thread.
+    pub fn request_focus(&self) {
+        self.0.focus_requests.fetch_add(1, Ordering::AcqRel);
+        if let Ok(installed) = self.0.wake.lock() {
+            if let Some(wake) = installed.as_ref() {
+                wake.send(PlatformEvent::FocusRequested);
+            }
+        }
+    }
+
+    /// How many times [`RedrawSignal::request_focus`] was called on this signal or its clones.
+    pub fn focus_requests(&self) -> usize {
+        self.0.focus_requests.load(Ordering::Acquire)
     }
 
     /// Marks a controller wake as consumed before the host polls its structural

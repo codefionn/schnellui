@@ -230,6 +230,18 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     window.request_redraw();
                 }
             }
+            PlatformEvent::FocusRequested => {
+                if let Some(window) = &self.window {
+                    window.set_minimized(false);
+                    window.focus_window();
+                    // Where the compositor does not hand over focus, at least flag the window.
+                    if !window.has_focus() {
+                        window.request_user_attention(Some(
+                            winit::window::UserAttentionType::Informational,
+                        ));
+                    }
+                }
+            }
             PlatformEvent::Debug(request) => {
                 self.remount_trigger = "debug_instrumentation";
                 let reply = self.handle_debug_command(Some(event_loop), request.command);
