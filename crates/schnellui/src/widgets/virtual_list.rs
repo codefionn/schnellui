@@ -483,9 +483,9 @@ where
                     stale.push(*root);
                     // A row rebuilt in place that holds focus hands it to its new self.
                     if inside {
-                        if let Some(id) = focused.filter(|id| {
-                            crate::widgets::is_in_subtree(scene, *id, *root)
-                        }) {
+                        if let Some(id) =
+                            focused.filter(|id| crate::widgets::is_in_subtree(scene, *id, *root))
+                        {
                             *refocus = Some((key.clone(), *root, id));
                         }
                     }
@@ -537,8 +537,9 @@ where
                 },
                 Some(self.content),
             );
-            if let Some((_, role, name, nth, at, before, ring)) =
-                likeness.as_ref().filter(|(focus_key, ..)| *focus_key == key)
+            if let Some((_, role, name, nth, at, before, ring)) = likeness
+                .as_ref()
+                .filter(|(focus_key, ..)| *focus_key == key)
             {
                 // The same control, else the one at its place in the row. A row that lost
                 // controls gives focus to the one before the gone one (a revealed spoiler's

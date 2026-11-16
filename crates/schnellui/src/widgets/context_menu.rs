@@ -413,7 +413,12 @@ fn action_enabled(
 /// Where a menu of `size` goes for `anchor`: under or over it, see [`menu_top`]. A menu that
 /// fits on neither side of a control and would cover it opens beside the control instead,
 /// right of it or else left, so the control it hangs from stays in sight.
-fn menu_origin(anchor: Rect, (width, height): (f32, f32), viewport: Size, max_x: f32) -> (f32, f32) {
+fn menu_origin(
+    anchor: Rect,
+    (width, height): (f32, f32),
+    viewport: Size,
+    max_x: f32,
+) -> (f32, f32) {
     // A control in the window's right half lines the menu's right edge up with its own, so
     // the menu hangs over the column the control stands in and covers the same control of
     // the rows under it whole, not cut down the middle.
@@ -804,13 +809,7 @@ pub fn open_context_menu(
                     y: cy + h * 0.55,
                 };
                 for (from, to) in [
-                    (
-                        Point {
-                            x: cx - h,
-                            y: cy,
-                        },
-                        elbow,
-                    ),
+                    (Point { x: cx - h, y: cy }, elbow),
                     (
                         elbow,
                         Point {

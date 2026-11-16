@@ -555,7 +555,14 @@ impl View for ListRow {
             FontFace::Sans
         };
         let (first, rest) = if this.title_wrap {
-            split_title(ctx.text, &this.title, title_phys, title_room.max(8.0), ctx.scale, title_face)
+            split_title(
+                ctx.text,
+                &this.title,
+                title_phys,
+                title_room.max(8.0),
+                ctx.scale,
+                title_face,
+            )
         } else {
             (this.title.to_string(), None)
         };
@@ -588,8 +595,14 @@ impl View for ListRow {
         .max(8.0);
         let (subtitle_first, subtitle_rest) = match this.subtitle.as_ref() {
             Some(text) if this.subtitle_wrap => {
-                let (first, rest) =
-                    split_title(ctx.text, text, meta_phys, subtitle_room, ctx.scale, FontFace::Sans);
+                let (first, rest) = split_title(
+                    ctx.text,
+                    text,
+                    meta_phys,
+                    subtitle_room,
+                    ctx.scale,
+                    FontFace::Sans,
+                );
                 (Some(first), rest)
             }
             Some(text) => (Some(text.to_string()), None),

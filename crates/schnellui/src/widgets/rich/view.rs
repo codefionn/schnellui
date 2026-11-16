@@ -1118,7 +1118,10 @@ fn push_with_links(
             let start = line.glyph_start as usize;
             let glyphs = &rich.glyphs[start..start + line.glyph_count as usize];
             let mut extent: Option<(f32, f32)> = None;
-            for g in glyphs.iter().filter(|g| (g.tag & LINK_MASK) as usize == index + 1) {
+            for g in glyphs
+                .iter()
+                .filter(|g| (g.tag & LINK_MASK) as usize == index + 1)
+            {
                 let (l, r) = (g.x, g.x + g.advance);
                 extent = Some(match extent {
                     Some((s, e)) => (s.min(l), e.max(r)),
