@@ -286,6 +286,70 @@ impl App {
         Some((role, name, nth))
     }
 
+    /// Moves the open context menu onto the counterpart, in the branch at
+    /// `new_root`, of the control it opened from: by `reference`, else by
+    /// `likeness`. A counterpart whose menu has other rows opens it anew once
+    /// laid out; none closes the menu.
+    fn follow_context_menu(
+        &mut self,
+        new_root: scene::WidgetId,
+        reference: Option<scene::ComponentRef>,
+        likeness: Option<(u16, String, usize)>,
+    ) {
+        let counterpart = self.counterpart_in(new_root, reference, likeness, |app, id| {
+            schnellui::widgets::context_menu_source(&app.widgets, &app.scene, id) == Some(id)
+        });
+        let moved = counterpart.is_some_and(|source| {
+            schnellui::widgets::retarget_context_menu(
+                &self.widgets,
+                &mut self.scene,
+                &mut self.text,
+                &mut self.atlas,
+                source,
+                self.size,
+                self.scale,
+            )
+        });
+        if moved {
+            return;
+        }
+        let anchor = schnellui::widgets::open_context_menu_anchor(&self.widgets);
+        let _ = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+        if let (Some(source), Some((_, anchor, can_paste))) = (counterpart, anchor) {
+            self.reopen_context_menu = Some((source, anchor, can_paste));
+        }
+    }
+
+    /// The node of the branch at `new_root` that stands for a removed one:
+    /// the one with its `reference`, else the one with its role and name,
+    /// counted alike. Either must pass `accept`: a reference can sit on a
+    /// wrapper around the control.
+    fn counterpart_in(
+        &self,
+        new_root: scene::WidgetId,
+        reference: Option<scene::ComponentRef>,
+        likeness: Option<(u16, String, usize)>,
+        accept: impl Fn(&Self, scene::WidgetId) -> bool,
+    ) -> Option<scene::WidgetId> {
+        reference
+            .and_then(|reference| self.scene.resolve_ref(reference))
+            .filter(|id| schnellui::widgets::is_in_subtree(&self.scene, *id, new_root))
+            .filter(|id| accept(self, *id))
+            .or_else(|| {
+                let (role, name, nth) = likeness?;
+                self.scene
+                    .subtree_nodes(new_root)
+                    .into_iter()
+                    .filter(|id| {
+                        self.scene.a11y(*id).is_some_and(|a| {
+                            a.role == role && a.name.as_deref() == Some(name.as_str())
+                        })
+                    })
+                    .nth(nth)
+                    .filter(|id| accept(self, *id))
+            })
+    }
+
     pub(crate) fn replace_subtree_boxed(
         &mut self,
         target: scene::ComponentRef,
@@ -339,7 +403,32 @@ impl App {
         // the host already settled for this replacement: a dropdown closed by
         // its option or an outside press would toggle back open and the next
         // update would rebuild it expanded.
-        let _ = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+        //
+        // An open context menu stays open. One that goes with the branch, in a
+        // window of it, closes. One whose control goes moves onto the control's
+        // counterpart after the build, found as focus finds it: a slider in it
+        // that moved its own control's branch keeps moving.
+        // The control that gets focus back when the menu closes moves the same way.
+        let identity = |app: &Self, id: scene::WidgetId| {
+            removed_nodes.contains(&id).then(|| {
+                (
+                    app.scene.component_ref(id),
+                    app.likeness_in(&removed_nodes, id),
+                )
+            })
+        };
+        let menu_follow = match schnellui::widgets::open_context_menu_nodes(&self.widgets) {
+            Some((_, root)) if removed_nodes.contains(&root) => {
+                let _ = schnellui::widgets::dismiss_context_menu(&self.widgets, &mut self.scene);
+                None
+            }
+            Some((source, _)) => Some((
+                identity(self, source),
+                schnellui::widgets::context_menu_opener(&self.widgets)
+                    .and_then(|opener| identity(self, opener)),
+            )),
+            None => None,
+        };
         // When the focused node goes with the branch, focus should land on the
         // same-identity node of the replacement, else the nearest survivor in
         // the old tab order (next first, then previous), not on nothing.
@@ -485,6 +574,22 @@ impl App {
         }
         self.scene
             .mark_dirty(removed.parent.unwrap_or(new_root), scene::DirtyFlags::ALL);
+        if let Some((source, opener)) = menu_follow {
+            if let Some((reference, likeness)) = opener {
+                let focusable = |app: &Self, id: scene::WidgetId| {
+                    app.scene.a11y(id).is_some_and(|a| {
+                        a11y::ActionFlags(a.actions).contains(a11y::ActionFlags::FOCUS)
+                    })
+                };
+                if let Some(opener) = self.counterpart_in(new_root, reference, likeness, focusable)
+                {
+                    schnellui::widgets::set_context_menu_opener(&self.widgets, opener);
+                }
+            }
+            if let Some((reference, likeness)) = source {
+                self.follow_context_menu(new_root, reference, likeness);
+            }
+        }
         self.note_opened_modal(focus_before, &known);
         if let Some((reference, likeness, kin, opener, neighbour, ring, home_is_gone)) =
             displaced_focus

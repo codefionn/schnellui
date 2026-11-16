@@ -1988,3 +1988,163 @@ fn a_context_menu_opened_by_action_hangs_from_the_drawn_field() {
         "menu drawn at {menu_y}, field drawn down to {drawn_bottom}"
     );
 }
+
+/// Slider rows in a context menu.
+mod menu_slider {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use schnellui::widgets::{Column, ContextMenu, ContextMenuItem};
+
+    use super::*;
+
+    /// A menu with a heading, a slider from 0 to 10 at `level` that writes its moves to `moved`,
+    /// and a command.
+    fn level_menu(level: f32, moved: Rc<Cell<f32>>) -> ContextMenu {
+        ContextMenu::new()
+            .item(ContextMenuItem::heading(format!("Level {level}")))
+            .item(
+                ContextMenuItem::slider("Level", level, 0.0, 10.0)
+                    .step(1.0)
+                    .on_change(move |value| moved.set(value)),
+            )
+            .item(ContextMenuItem::new("Reset").on_select(|| {}))
+    }
+
+    fn set_slider(app: &mut App, slider: schnellui::scene::WidgetId, value: &str) -> bool {
+        use schnellui::a11y::accesskit_reexport::{Action, ActionData, ActionRequest, TreeId};
+        app.dispatch_action(&ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: schnellui::a11y::to_access_id(slider),
+            data: Some(ActionData::Value(value.into())),
+        })
+    }
+
+    #[test]
+    fn a_slider_row_moves_and_the_menu_stays_open() {
+        use schnellui::widgets::Button;
+
+        let moved = Rc::new(Cell::new(-1.0));
+        let mut app = App::mount_with_size(
+            Button::new("Volume").menu(level_menu(5.0, moved.clone())),
+            400,
+            300,
+        );
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Volume")).unwrap();
+        assert!(app.dispatch_click(button));
+        let slider = app.find_widget(Role::Slider, Some("Level")).unwrap();
+        assert_eq!(
+            app.scene().a11y(slider).unwrap().value.as_deref(),
+            Some("5")
+        );
+        // Its track runs inside the menu, beside the command's row.
+        let reset = app.find_widget(Role::MenuItem, Some("Reset")).unwrap();
+        let (track, row) = (
+            app.scene().layout(slider).unwrap().rect,
+            app.scene().layout(reset).unwrap().rect,
+        );
+        assert!(
+            track.x > row.x && track.right() < row.right(),
+            "{track:?} in {row:?}"
+        );
+
+        assert!(set_slider(&mut app, slider, "7"));
+        assert_eq!(moved.get(), 7.0);
+        assert!(app.context_menu_is_open(), "a move closed the menu");
+        // Picking the slider does nothing; it is set, not chosen.
+        assert!(app.activate_context_menu_item(slider).is_none());
+        assert!(app.context_menu_is_open());
+
+        // The keyboard: Right and Left step it, Enter leaves it be, Down walks on.
+        assert!(app.focus(Some(slider)));
+        assert!(app.dispatch_key(UiKey::Right {
+            shift: false,
+            ctrl: false
+        }));
+        assert_eq!(moved.get(), 8.0);
+        assert!(app.dispatch_key(UiKey::PageDown));
+        assert_eq!(moved.get(), 0.0);
+        assert!(!app.dispatch_key(UiKey::Enter));
+        assert!(
+            app.context_menu_is_open(),
+            "a key on the slider closed the menu"
+        );
+        assert!(app.dispatch_key(UiKey::Down { shift: false }));
+        assert_eq!(app.focused_widget(), Some(reset));
+
+        // Closing it takes the slider's state with it.
+        assert!(app.dispatch_key(UiKey::Escape));
+        assert!(!app.context_menu_is_open());
+        assert!(app.scene().node(slider).is_none());
+    }
+
+    #[test]
+    fn an_open_menu_follows_its_control_through_a_subtree_replacement() {
+        use schnellui::widgets::{Button, ComponentRef};
+
+        let (slot, other) = (ComponentRef::new(), ComponentRef::new());
+        let moved = Rc::new(Cell::new(-1.0));
+        let control = |level: f32| Button::new("Volume").menu(level_menu(level, moved.clone()));
+        let mut app = App::mount_with_size(
+            Column::new()
+                .child(
+                    Column::new()
+                        .with_ref(other)
+                        .child(Button::new("Elsewhere")),
+                )
+                .child(Column::new().with_ref(slot).child(control(5.0))),
+            400,
+            300,
+        );
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("Volume")).unwrap();
+        assert!(app.dispatch_click(button));
+        let slider = app.find_widget(Role::Slider, Some("Level")).unwrap();
+        assert!(app.focus(Some(slider)));
+        assert!(set_slider(&mut app, slider, "7"));
+
+        // The app rebuilds the control at the new level: the menu stays, on the same nodes, and
+        // shows the new value. The slider keeps the keyboard.
+        app.replace_subtree(slot, Column::new().child(control(7.0)))
+            .unwrap();
+        app.frame();
+        assert!(app.context_menu_is_open(), "the rebuild closed the menu");
+        assert_eq!(app.find_widget(Role::Slider, Some("Level")), Some(slider));
+        assert_eq!(app.focused_widget(), Some(slider));
+        assert_eq!(
+            app.scene().a11y(slider).unwrap().value.as_deref(),
+            Some("7")
+        );
+        // Its moves reach the rebuilt control's menu.
+        assert!(set_slider(&mut app, slider, "3"));
+        assert_eq!(moved.get(), 3.0);
+
+        // A rebuild of something else leaves the menu alone.
+        app.replace_subtree(other, Button::new("Elsewhere"))
+            .unwrap();
+        app.frame();
+        assert_eq!(app.find_widget(Role::Slider, Some("Level")), Some(slider));
+
+        // A control whose menu has other rows opens that menu where the old one was.
+        app.replace_subtree(
+            slot,
+            Column::new()
+                .child(Button::new("Volume").menu(
+                    ContextMenu::new().item(ContextMenuItem::new("Unmute").on_select(|| {})),
+                )),
+        )
+        .unwrap();
+        app.frame();
+        app.frame();
+        assert!(app.context_menu_is_open(), "the menu did not open again");
+        assert!(app.find_widget(Role::MenuItem, Some("Unmute")).is_some());
+        assert!(app.find_widget(Role::Slider, Some("Level")).is_none());
+
+        // A control that goes closes its menu.
+        app.replace_subtree(slot, Column::new()).unwrap();
+        app.frame();
+        assert!(!app.context_menu_is_open());
+    }
+}

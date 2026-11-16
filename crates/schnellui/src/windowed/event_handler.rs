@@ -925,7 +925,18 @@ impl WindowedApp {
                 let hit =
                     schnellui::widgets::hit_test(&self.app.widgets.clone(), self.app.scene(), p);
                 if self.app.context_menu_is_open() {
+                    let slider = hit.and_then(|id| {
+                        let changed = self.app.press_context_menu_slider(id, p)?;
+                        Some((id, changed))
+                    });
                     let changed = match hit {
+                        // A slider row is held and dragged; the menu stays open.
+                        Some(_) if slider.is_some() => {
+                            let (id, changed) = slider.expect("checked above");
+                            self.drag_slider = Some(id);
+                            self.drag_text = None;
+                            changed
+                        }
                         Some(id)
                             if schnellui::widgets::context_menu_item(
                                 &self.app.widgets,

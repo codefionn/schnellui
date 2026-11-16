@@ -329,6 +329,30 @@ impl App {
             return true;
         }
         if self.context_menu_is_open() {
+            // A slider row takes Left and Right, a step, and Page Up and Page
+            // Down, ten; Up and Down still walk the rows.
+            if let Some(row) = self.focused_context_menu_row().filter(|&row| {
+                self.scene.node(row).map(|node| node.kind) == Some(WidgetKind::Slider)
+            }) {
+                let adjust = match key {
+                    UiKey::Right { .. } => Some(Adjust::Steps(1)),
+                    UiKey::Left { .. } => Some(Adjust::Steps(-1)),
+                    UiKey::PageUp => Some(Adjust::Steps(10)),
+                    UiKey::PageDown => Some(Adjust::Steps(-10)),
+                    _ => None,
+                };
+                if let Some(adjust) = adjust {
+                    return schnellui::widgets::dispatch_adjust(
+                        &self.widgets,
+                        &mut self.scene,
+                        row,
+                        adjust,
+                    );
+                }
+                if matches!(key, UiKey::Enter | UiKey::Space { .. }) {
+                    return false;
+                }
+            }
             if let Some(changed) = self.step_context_menu(key) {
                 return changed;
             }
@@ -1186,6 +1210,29 @@ impl App {
         self.focused_context_menu_row()?;
         schnellui::widgets::context_menu_opener(&self.widgets)
             .filter(|&id| self.scene.node(id).is_some())
+    }
+
+    /// A pointer press at `point` on `id`, a slider row of the open menu: it
+    /// takes focus and jumps to the press. The host then drags it as any
+    /// slider. `None` when `id` is no such row, else whether anything changed.
+    pub fn press_context_menu_slider(
+        &mut self,
+        id: scene::WidgetId,
+        point: scene::Point,
+    ) -> Option<bool> {
+        let slider = schnellui::widgets::context_menu_item(&self.widgets, &self.scene, id)
+            && self.scene.node(id).map(|node| node.kind) == Some(WidgetKind::Slider);
+        if !slider {
+            return None;
+        }
+        if self.focused_context_menu_row().is_none() {
+            // Focus goes back where it was when the menu closes.
+            if let Some(opener) = self.focused_widget() {
+                schnellui::widgets::set_context_menu_opener(&self.widgets, opener);
+            }
+        }
+        let focused = self.pointer_focus(Some(id));
+        Some(focused | self.dispatch_slider_pointer(id, point))
     }
 
     /// Whether a transient context menu is currently open.

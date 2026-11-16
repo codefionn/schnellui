@@ -17,8 +17,9 @@ use schnellui::text::{GlyphAtlas, ShapedText, TextShaper};
 use slotmap::SecondaryMap;
 
 use crate::widgets::{
-    forget_node_theme, norm_scale, phys_size_px, rasterize_and_push, remember_node_theme,
-    theme_for, ClickHandler, BUTTON_TEXT_SIZE, PAD_H,
+    emit_slider_paint, forget_node_theme, format_slider_value, norm_scale, phys_size_px,
+    quantize_slider, rasterize_and_push, remember_node_theme, theme_for, ClickHandler, SliderState,
+    Theme, BUTTON_TEXT_SIZE, PAD_H, SLIDER_STEP_FRACTION,
 };
 
 /// How much of the window a control may span and still be a row that a menu takes the
@@ -53,6 +54,45 @@ pub enum ContextMenuAction {
 enum ItemAction {
     BuiltIn(ContextMenuAction),
     Custom(Option<ClickHandler>),
+    /// What a slider row runs on each move.
+    Slider(Option<Box<dyn FnMut(f32) + 'static>>),
+}
+
+/// Where a slider row stands and what it runs between.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SliderRange {
+    value: f32,
+    min: f32,
+    max: f32,
+    step: Option<f32>,
+}
+
+impl SliderRange {
+    /// The range as a slider keeps it: finite ends in order, a positive step and the value
+    /// snapped onto it, as [`crate::widgets::Slider`] makes them.
+    fn state(self) -> SliderState {
+        let min = if self.min.is_finite() { self.min } else { 0.0 };
+        let max = if self.max.is_finite() && self.max > min {
+            self.max
+        } else {
+            min
+        };
+        let step = self
+            .step
+            .filter(|step| step.is_finite() && *step > 0.0)
+            .unwrap_or(((max - min) * SLIDER_STEP_FRACTION).max(f32::EPSILON));
+        let value = if self.value.is_finite() {
+            self.value
+        } else {
+            min
+        };
+        SliderState {
+            value: quantize_slider(value, min, max, step),
+            min,
+            max,
+            step,
+        }
+    }
 }
 
 /// The layers of a menu's shadow: how far each reaches past the menu and
@@ -88,14 +128,16 @@ pub struct ContextMenuItem {
     danger: bool,
     action: ItemAction,
     kind: ItemKind,
+    range: SliderRange,
 }
 
-/// What a menu row is: a command, a rule between groups, or a group's caption.
+/// What a menu row is: a command, a rule between groups, a group's caption, or a slider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ItemKind {
     Command,
     Separator,
     Heading,
+    Slider,
 }
 
 impl ContextMenuItem {
@@ -109,6 +151,7 @@ impl ContextMenuItem {
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Command,
+            range: SliderRange::default(),
         }
     }
 
@@ -122,6 +165,7 @@ impl ContextMenuItem {
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Separator,
+            range: SliderRange::default(),
         }
     }
 
@@ -135,6 +179,35 @@ impl ContextMenuItem {
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Heading,
+            range: SliderRange::default(),
+        }
+    }
+
+    /// A slider across the menu that sets a value from `min` to `max`, such as how loud one
+    /// sound plays. `label` is its accessible name; the row draws no words, so put a
+    /// [`ContextMenuItem::heading`] above it that says what it sets. Dragging it or turning
+    /// it with the arrow keys keeps the menu open, and every move reaches
+    /// [`ContextMenuItem::on_change`]. Left and Right move it a step, Page Up and Page Down
+    /// ten; Up and Down walk the rows as they do in any menu.
+    pub fn slider(
+        label: impl Into<Cow<'static, str>>,
+        value: f32,
+        min: f32,
+        max: f32,
+    ) -> ContextMenuItem {
+        ContextMenuItem {
+            label: label.into(),
+            enabled: true,
+            selected: false,
+            danger: false,
+            action: ItemAction::Slider(None),
+            kind: ItemKind::Slider,
+            range: SliderRange {
+                value,
+                min,
+                max,
+                step: None,
+            },
         }
     }
 
@@ -162,6 +235,7 @@ impl ContextMenuItem {
             danger: false,
             action: ItemAction::BuiltIn(action),
             kind: ItemKind::Command,
+            range: SliderRange::default(),
         }
     }
 
@@ -190,6 +264,19 @@ impl ContextMenuItem {
     /// Sets the callback for a custom command.
     pub fn on_select(mut self, callback: impl FnMut() + 'static) -> ContextMenuItem {
         self.action = ItemAction::Custom(Some(Box::new(callback)));
+        self
+    }
+
+    /// Sets how far a slider row moves for one arrow key and where a drag snaps to. Without
+    /// it a step is 1% of the range, as for [`crate::widgets::Slider`].
+    pub fn step(mut self, step: f32) -> ContextMenuItem {
+        self.range.step = Some(step);
+        self
+    }
+
+    /// Sets what a slider row runs with its new value on each move. The menu stays open.
+    pub fn on_change(mut self, callback: impl FnMut(f32) + 'static) -> ContextMenuItem {
+        self.action = ItemAction::Slider(Some(Box::new(callback)));
         self
     }
 }
@@ -259,6 +346,8 @@ impl ContextMenu {
 struct OpenItem {
     source: WidgetId,
     action: ContextMenuAction,
+    /// A slider row: picking it does nothing, and the menu stays open while it moves.
+    slider: bool,
 }
 
 #[derive(Clone)]
@@ -267,7 +356,14 @@ struct OpenMenu {
     source: WidgetId,
     root: WidgetId,
     parent: WidgetId,
+    /// The nodes of the rows that act (commands and sliders), top to bottom.
     items: Vec<WidgetId>,
+    /// The kind of every row, the painted ones included: a rebuilt source whose menu has
+    /// the same kinds shows it in these rows.
+    kinds: Vec<ItemKind>,
+    /// The source's box in window coordinates when the menu opened, framed while it is
+    /// open. `None` for a text field.
+    opened_from: Option<Rect>,
     /// Where it was opened and whether Paste was offered, so a rebuilt tree
     /// can open the same menu on the source's counterpart.
     anchor: Rect,
@@ -390,6 +486,7 @@ struct RenderItem {
     kind: ItemKind,
     action: ContextMenuAction,
     custom_index: Option<usize>,
+    range: SliderRange,
     shaped: ShapedText,
 }
 
@@ -486,30 +583,27 @@ fn menu_top(anchor: Rect, height: f32, window_height: f32) -> f32 {
     preferred.clamp(edge, max_y)
 }
 
-/// Opens `source`'s configured menu hanging from `anchor`, a logical window
-/// rect: the field it belongs to, or a zero-size rect at the pointer. The menu
-/// opens below the anchor when it fits, above it when it does not, and is
-/// clamped into the window only when neither side has room.
-#[allow(clippy::too_many_arguments)]
-pub fn open_context_menu(
+/// What a menu shows, read from its source's configuration when it opens and again when the
+/// source is rebuilt under it.
+struct Contents {
+    items: Vec<RenderItem>,
+    /// Text size of the commands, in logical px.
+    size: f32,
+    /// The least height of a row, in logical px.
+    least_row: f32,
+    editable: bool,
+}
+
+/// The rows of `source`'s menu, shaped, with what each may do now. `None` when it has none.
+fn contents(
     runtime: &crate::widgets::Runtime,
-    scene: &mut Scene,
+    scene: &Scene,
     shaper: &mut TextShaper,
-    atlas: &mut GlyphAtlas,
     source: WidgetId,
-    anchor: Rect,
-    viewport: Size,
     scale: f32,
     can_paste: bool,
-) -> bool {
-    let _ = dismiss_context_menu(runtime, scene);
-    let Some(kind) = scene.node(source).map(|node| node.kind) else {
-        return false;
-    };
-    if context_menu_source(runtime, scene, source) != Some(source) {
-        return false;
-    }
-
+) -> Option<Contents> {
+    let kind = scene.node(source)?.kind;
     let editable = matches!(kind, WidgetKind::TextInput | WidgetKind::TextArea);
     let has_selection = editable && crate::widgets::selected_text(runtime, scene, source).is_some();
     let has_text = editable
@@ -527,8 +621,7 @@ pub fn open_context_menu(
         )
     });
     let phys = phys_size_px(size, scale);
-    let inv = 1.0 / norm_scale(scale);
-    let mut items = runtime.context_menu.with(|state| {
+    let items = runtime.context_menu.with(|state| {
         let state = state.borrow();
         let menu = state.menus.get(source)?;
         if menu.is_empty() {
@@ -542,6 +635,9 @@ pub fn open_context_menu(
                     let (action, custom_index, has_callback) = match &item.action {
                         ItemAction::BuiltIn(action) => (*action, None, true),
                         ItemAction::Custom(callback) => {
+                            (ContextMenuAction::Custom, Some(index), callback.is_some())
+                        }
+                        ItemAction::Slider(callback) => {
                             (ContextMenuAction::Custom, Some(index), callback.is_some())
                         }
                     };
@@ -569,32 +665,66 @@ pub fn open_context_menu(
                         kind: item.kind,
                         action,
                         custom_index,
+                        range: item.range,
                     }
                 })
                 .collect::<Vec<_>>(),
         )
-    });
-    let Some(ref mut items) = items else {
-        return false;
-    };
+    })?;
+    Some(Contents {
+        items,
+        size,
+        least_row,
+        editable,
+    })
+}
 
-    let theme = theme_for(runtime, source);
+/// The measures of an open menu: its box in window coordinates and the room of its rows.
+#[derive(Clone, Copy)]
+struct Measures {
+    rect: Rect,
+    inset: f32,
+    pad_h: f32,
+    row_height: f32,
+    separator_height: f32,
+}
+
+impl Measures {
+    /// How tall `item`'s row is.
+    fn height(&self, item: &RenderItem) -> f32 {
+        match item.kind {
+            ItemKind::Separator => self.separator_height,
+            ItemKind::Command | ItemKind::Heading | ItemKind::Slider => self.row_height,
+        }
+    }
+}
+
+/// Where a menu with `contents` goes for `anchor` and how its rows are measured.
+fn measure(
+    theme: Theme,
+    contents: &Contents,
+    anchor: Rect,
+    viewport: Size,
+    scale: f32,
+) -> Measures {
+    let inv = 1.0 / norm_scale(scale);
+    let items = &contents.items;
     let pad_h = theme.shape.pad(PAD_H + 4.0);
     let pad_v = theme.shape.pad(MENU_PAD_V);
     let row_height = items
         .iter()
         .map(|item| item.shaped.height * inv + 2.0 * pad_v)
-        .fold(least_row, f32::max);
-    // A row taller than its text keeps the text in its middle.
-    let text_top = |item: &RenderItem| (row_height - item.shaped.height * inv) * 0.5;
+        .fold(contents.least_row, f32::max);
     // A menu with a chosen row keeps room for the check mark at every row's end.
     let check_room = if items.iter().any(|item| item.selected) {
         CHECK_ROOM
     } else {
         0.0
     };
+    // A slider draws no words: it takes the width the others leave it.
     let desired_width = items
         .iter()
+        .filter(|item| item.kind != ItemKind::Slider)
         .map(|item| item.shaped.width * inv + 2.0 * pad_h + check_room)
         .fold(CONTEXT_MENU_MIN_WIDTH * theme.shape.density, f32::max);
     let inset = theme.shape.pad(MENU_INSET);
@@ -605,15 +735,45 @@ pub fn open_context_menu(
         .max(if row_wide { anchor.width } else { 0.0 })
         .min((viewport.width - 2.0 * CONTEXT_MENU_SIDE_MARGIN).max(1.0));
     let separator_height = theme.shape.pad(SEPARATOR_HEIGHT);
-    let item_height = |item: &RenderItem| match item.kind {
-        ItemKind::Separator => separator_height,
-        ItemKind::Command | ItemKind::Heading => row_height,
+    let mut measures = Measures {
+        rect: Rect::default(),
+        inset,
+        pad_h,
+        row_height,
+        separator_height,
     };
-    let height = items.iter().map(item_height).sum::<f32>() + 2.0 * inset;
+    let height = items.iter().map(|item| measures.height(item)).sum::<f32>() + 2.0 * inset;
     let max_x = (viewport.width - width - CONTEXT_MENU_SIDE_MARGIN).max(CONTEXT_MENU_SIDE_MARGIN);
     let (x, y) = menu_origin(anchor, (width, height), viewport, max_x);
-    let menu_rect = Rect::new(x, y, width, height);
+    measures.rect = Rect::new(x, y, width, height);
+    measures
+}
 
+/// Opens `source`'s configured menu hanging from `anchor`, a logical window
+/// rect: the field it belongs to, or a zero-size rect at the pointer. The menu
+/// opens below the anchor when it fits, above it when it does not, and is
+/// clamped into the window only when neither side has room.
+#[allow(clippy::too_many_arguments)]
+pub fn open_context_menu(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    source: WidgetId,
+    anchor: Rect,
+    viewport: Size,
+    scale: f32,
+    can_paste: bool,
+) -> bool {
+    let _ = dismiss_context_menu(runtime, scene);
+    if scene.node(source).is_none() || context_menu_source(runtime, scene, source) != Some(source) {
+        return false;
+    }
+    let Some(contents) = contents(runtime, scene, shaper, source, scale, can_paste) else {
+        return false;
+    };
+
+    let theme = theme_for(runtime, source);
     // Inside a modal the menu hangs off the dialog panel: the panel is the
     // accessibility root and the focus boundary while it is open, so a menu
     // beside it would be invisible to screen readers and the keyboard.
@@ -630,24 +790,6 @@ pub fn open_context_menu(
     // of `parent` would pull the menu into its flex flow, at the parent's
     // top-left, and slide the panel paint there while the items stay put.
     scene.set_placed_by_hand(root);
-    // `menu_rect` is in window coordinates, but layout boxes are in the
-    // parent's content space: a scroll view as the parent moves its children,
-    // and the menu with them. Place the menu so it is drawn at `menu_rect`.
-    let (inherited, _) = scene.overlay_inherited_context(root);
-    let menu_rect = Rect::new(
-        menu_rect.x - inherited.x,
-        menu_rect.y - inherited.y,
-        menu_rect.width,
-        menu_rect.height,
-    );
-    let (x, y) = (menu_rect.x, menu_rect.y);
-    scene.set_layout(
-        root,
-        LayoutBox {
-            rect: menu_rect,
-            content: menu_rect,
-        },
-    );
     let named = runtime.context_menu.with(|state| {
         state
             .borrow()
@@ -657,7 +799,7 @@ pub fn open_context_menu(
     });
     let menu_name = if let Some(name) = named {
         name
-    } else if editable {
+    } else if contents.editable {
         "Text editing".to_string()
     } else {
         scene
@@ -671,18 +813,131 @@ pub fn open_context_menu(
         semantics.role = Role::Menu.as_u16();
         semantics.name = Some(menu_name);
     }
+
+    // The rows that act get nodes of their own. Their boxes, words and paint come with the
+    // menu's below, and again when the source is rebuilt while the menu is open.
+    let mut item_ids = Vec::new();
+    for (index, item) in contents.items.iter().enumerate() {
+        let slider = match item.kind {
+            ItemKind::Separator | ItemKind::Heading => continue,
+            ItemKind::Command => false,
+            ItemKind::Slider => true,
+        };
+        let kind = if slider {
+            WidgetKind::Slider
+        } else {
+            WidgetKind::Button
+        };
+        let id = scene.insert(kind, Some(root));
+        remember_node_theme(runtime, id, theme);
+        if slider {
+            runtime.with(|rt| {
+                rt.borrow_mut().sliders.insert(id, item.range.state());
+            });
+            let change_runtime = runtime.clone();
+            crate::widgets::with_handlers(runtime, id, |handlers| {
+                handlers.change = Some(Box::new(move |value| {
+                    fire_slider(&change_runtime, index, value);
+                }));
+            });
+        } else {
+            // Rows sit flush against each other and the menu's frame, so the
+            // keyboard ring stays inside the row instead of past the frame.
+            crate::widgets::with_handlers(runtime, id, |handlers| handlers.flush_row = true);
+            if item.custom_index.is_some() {
+                let callback_runtime = runtime.clone();
+                crate::widgets::with_handlers(runtime, id, |handlers| {
+                    handlers.click = Some(Box::new(move || {
+                        fire_custom(&callback_runtime, index);
+                    }));
+                });
+            }
+        }
+        runtime.context_menu.with(|state| {
+            state.borrow_mut().actions.insert(
+                id,
+                OpenItem {
+                    source,
+                    action: item.action,
+                    slider,
+                },
+            );
+        });
+        item_ids.push(id);
+    }
+
+    // The control or row the menu belongs to keeps a frame while the menu is open, so the
+    // menu reads as its own and not as the neighbour's it covers. A text field keeps its
+    // look: its caret and selection already say where the menu acts.
+    let opened_from = (!contents.editable).then(|| scene.composited_rect(source));
+    let open = OpenMenu {
+        source,
+        root,
+        parent,
+        items: item_ids,
+        kinds: contents.items.iter().map(|item| item.kind).collect(),
+        opened_from,
+        anchor,
+        can_paste,
+        opener: None,
+    };
+    lay_out_menu(
+        runtime, scene, shaper, atlas, &open, &contents, viewport, scale,
+    );
+    scene.mark_dirty(parent, DirtyFlags::A11Y);
+    // The menu answers the hover that opened it: the control's tooltip would
+    // be drawn over the open menu.
+    let _ = crate::widgets::hide_hover_tooltip(runtime, scene, source);
+    runtime.context_menu.with(|state| {
+        state.borrow_mut().open = Some(open);
+    });
+    true
+}
+
+/// Places the menu `open` and its rows and paints them for `contents`: on opening, and again
+/// on the same nodes when its source is rebuilt.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_menu(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    open: &OpenMenu,
+    contents: &Contents,
+    viewport: Size,
+    scale: f32,
+) {
+    let root = open.root;
+    let theme = theme_for(runtime, root);
+    let size = contents.size;
+    let phys = phys_size_px(size, scale);
+    let inv = 1.0 / norm_scale(scale);
+    let measures = measure(theme, contents, open.anchor, viewport, scale);
+    // `measures.rect` is in window coordinates, but layout boxes are in the
+    // parent's content space: a scroll view as the parent moves its children,
+    // and the menu with them. Place the menu so it is drawn at `measures.rect`.
+    let (inherited, _) = scene.overlay_inherited_context(root);
+    let into = |at: Rect| Rect::new(at.x - inherited.x, at.y - inherited.y, at.width, at.height);
+    let menu_rect = into(measures.rect);
+    let (x, y, width) = (menu_rect.x, menu_rect.y, menu_rect.width);
+    let inset = measures.inset;
+    let pad_h = measures.pad_h;
+    let row_height = measures.row_height;
+    let separator_height = measures.separator_height;
+    // A row taller than its text keeps the text in its middle.
+    let text_top = |item: &RenderItem| (row_height - item.shaped.height * inv) * 0.5;
+    scene.set_layout(
+        root,
+        LayoutBox {
+            rect: menu_rect,
+            content: menu_rect,
+        },
+    );
     {
         let radius = theme.shape.radius(4.0, menu_rect.height);
         let frame = theme.shape.frame.max(1.0);
-        // The control or row the menu belongs to keeps a wash of the
-        // selection while the menu is open, so the menu reads as its own and
-        // not as the neighbour's it covers. A text field keeps its look: its
-        // caret and selection already say where the menu acts.
-        let opened_from = (!editable).then(|| {
-            let at = scene.composited_rect(source);
-            Rect::new(at.x - inherited.x, at.y - inherited.y, at.width, at.height)
-        });
         let paint = scene.paint_mut(root);
+        paint.primitives.clear();
         // A soft shadow under the menu, in layers that widen and fade, so
         // it lifts off whatever it covers, a terminal's text included.
         for (grow, alpha) in MENU_SHADOW {
@@ -697,7 +952,11 @@ pub fn open_context_menu(
                 corner_radius: radius + grow,
             });
         }
-        if let Some(at) = opened_from.filter(|at| at.width > 0.0 && at.height > 0.0) {
+        if let Some(at) = open
+            .opened_from
+            .map(into)
+            .filter(|at| at.width > 0.0 && at.height > 0.0)
+        {
             // A frame between the selection colour and the accent: the menu paints above
             // the source, so a fill would pale the source's own words and picture. The
             // selection colour alone was too faint on a page to read as a state.
@@ -730,13 +989,13 @@ pub fn open_context_menu(
     scene.mark_dirty(root, DirtyFlags::PAINT);
     scene.mark_dirty(root, DirtyFlags::A11Y);
 
-    let mut item_ids = Vec::with_capacity(items.len());
+    let mut rows = open.items.iter().copied();
     let mut top = y + inset;
-    for item in items.iter() {
+    for item in &contents.items {
         let row_top = top;
-        top += item_height(item);
+        top += measures.height(item);
         match item.kind {
-            ItemKind::Command => {}
+            ItemKind::Command | ItemKind::Slider => {}
             ItemKind::Separator => {
                 let line_y = (row_top + separator_height * 0.5).round();
                 scene.paint_mut(root).primitives.push(Primitive::SolidRect {
@@ -763,10 +1022,21 @@ pub fn open_context_menu(
                 continue;
             }
         }
-        let id = scene.insert(WidgetKind::Button, Some(root));
-        remember_node_theme(runtime, id, theme);
+        let Some(id) = rows.next() else {
+            break;
+        };
         let rect = Rect::new(x + inset, row_top, width - 2.0 * inset, row_height);
-        let row_radius = theme.shape.radius(3.0, row_height);
+        if item.kind == ItemKind::Slider {
+            // The track runs between the words' margins of the rows around it.
+            let rect = Rect::new(
+                rect.x + pad_h,
+                rect.y,
+                rect.width - 2.0 * pad_h,
+                rect.height,
+            );
+            place_slider(runtime, scene, id, item, rect);
+            continue;
+        }
         scene.set_layout(
             id,
             LayoutBox {
@@ -778,10 +1048,12 @@ pub fn open_context_menu(
             let semantics = scene.a11y_mut(id);
             semantics.role = Role::MenuItem.as_u16();
             semantics.name = Some(item.label.clone());
+            semantics.state = 0;
             if item.enabled {
                 // Focus lets the keyboard walk the rows.
                 semantics.actions = ActionFlags::CLICK.0 | ActionFlags::FOCUS.0;
             } else {
+                semantics.actions = 0;
                 semantics.state = StateFlags::DISABLED.0;
             }
             if item.selected {
@@ -789,7 +1061,9 @@ pub fn open_context_menu(
             }
         }
         {
+            let row_radius = theme.shape.radius(3.0, row_height);
             let paint = scene.paint_mut(id);
+            paint.primitives.clear();
             // The row's ground: clear, so hover and the keyboard's row draw
             // their wash on it.
             paint.primitives.push(Primitive::SolidRect {
@@ -848,53 +1122,131 @@ pub fn open_context_menu(
         }
         scene.mark_dirty(id, DirtyFlags::PAINT);
         scene.mark_dirty(id, DirtyFlags::A11Y);
-        // Rows sit flush against each other and the menu's frame, so the
-        // keyboard ring stays inside the row instead of past the frame.
-        crate::widgets::with_handlers(runtime, id, |handlers| handlers.flush_row = true);
-        runtime.context_menu.with(|state| {
-            state.borrow_mut().actions.insert(
-                id,
-                OpenItem {
-                    source,
-                    action: item.action,
-                },
-            );
-        });
-        if let Some(custom_index) = item.custom_index {
-            let callback_runtime = runtime.clone();
-            crate::widgets::with_handlers(runtime, id, |handlers| {
-                handlers.click = Some(Box::new(move || {
-                    fire_custom(&callback_runtime, source, custom_index);
-                }));
-            });
-        }
-        item_ids.push(id);
     }
-    scene.mark_dirty(parent, DirtyFlags::A11Y);
-    // The menu answers the hover that opened it: the control's tooltip would
-    // be drawn over the open menu.
-    let _ = crate::widgets::hide_hover_tooltip(runtime, scene, source);
+}
+
+/// Lays the slider row `id` into `rect` at `item`'s value and range, and names it. Its
+/// handler does not run: the program, not the user, set the value.
+fn place_slider(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    id: WidgetId,
+    item: &RenderItem,
+    rect: Rect,
+) {
+    scene.set_layout(
+        id,
+        LayoutBox {
+            rect,
+            content: rect,
+        },
+    );
+    let state = item.range.state();
+    let frac = if state.max > state.min {
+        ((state.value - state.min) / (state.max - state.min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let value = state.value;
+    runtime.with(|rt| {
+        rt.borrow_mut().sliders.insert(id, state);
+    });
+    {
+        let semantics = scene.a11y_mut(id);
+        semantics.role = Role::Slider.as_u16();
+        semantics.name = Some(item.label.clone());
+        semantics.value = Some(format_slider_value(value));
+        if item.enabled {
+            semantics.state &= !StateFlags::DISABLED.0;
+            semantics.actions = ActionFlags::SET_VALUE.0
+                | ActionFlags::INCREMENT.0
+                | ActionFlags::DECREMENT.0
+                | ActionFlags::FOCUS.0;
+        } else {
+            semantics.state |= StateFlags::DISABLED.0;
+            semantics.actions = 0;
+        }
+    }
+    emit_slider_paint(runtime, scene, id, frac, !item.enabled);
+    scene.mark_dirty(id, DirtyFlags::PAINT);
+    scene.mark_dirty(id, DirtyFlags::A11Y);
+}
+
+/// The open menu's source and its root node, if a menu is open.
+pub fn open_context_menu_nodes(runtime: &crate::widgets::Runtime) -> Option<(WidgetId, WidgetId)> {
     runtime.context_menu.with(|state| {
-        state.borrow_mut().open = Some(OpenMenu {
-            source,
-            root,
-            parent,
-            items: item_ids,
-            anchor,
-            can_paste,
-            opener: None,
-        });
+        state
+            .borrow()
+            .open
+            .as_ref()
+            .map(|open| (open.source, open.root))
+    })
+}
+
+/// Moves the open menu onto `source`, the counterpart of the control it opened from in a
+/// rebuilt branch, and shows `source`'s menu in the rows already open. The rows keep their
+/// nodes, so the keyboard's row, hover and a slider's drag stay where they are. `false`
+/// when no menu is open or `source`'s menu has other kinds of rows; the open menu is then
+/// left as it was, for the caller to close.
+#[allow(clippy::too_many_arguments)]
+pub fn retarget_context_menu(
+    runtime: &crate::widgets::Runtime,
+    scene: &mut Scene,
+    shaper: &mut TextShaper,
+    atlas: &mut GlyphAtlas,
+    source: WidgetId,
+    viewport: Size,
+    scale: f32,
+) -> bool {
+    let Some(mut open) = runtime
+        .context_menu
+        .with(|state| state.borrow().open.clone())
+    else {
+        return false;
+    };
+    if context_menu_source(runtime, scene, source) != Some(source) {
+        return false;
+    }
+    let Some(contents) = contents(runtime, scene, shaper, source, scale, open.can_paste) else {
+        return false;
+    };
+    if !contents
+        .items
+        .iter()
+        .map(|item| item.kind)
+        .eq(open.kinds.iter().copied())
+    {
+        return false;
+    }
+    open.source = source;
+    let lifted = crate::widgets::lift_decorations(runtime, scene, open.root);
+    lay_out_menu(
+        runtime, scene, shaper, atlas, &open, &contents, viewport, scale,
+    );
+    crate::widgets::restore_decorations(runtime, scene, lifted);
+    runtime.context_menu.with(|state| {
+        let mut state = state.borrow_mut();
+        for &id in &open.items {
+            if let Some(item) = state.actions.get_mut(id) {
+                item.source = source;
+            }
+        }
+        state.open = Some(open);
     });
     true
 }
 
-fn fire_custom(runtime: &crate::widgets::Runtime, source: WidgetId, index: usize) {
+/// Runs the callback of the open menu's row `index`, a command.
+fn fire_custom(runtime: &crate::widgets::Runtime, index: usize) {
+    let Some(source) = open_context_menu_nodes(runtime).map(|(source, _)| source) else {
+        return;
+    };
     let callback = runtime.context_menu.with(|state| {
         let mut state = state.borrow_mut();
         let item = state.menus.get_mut(source)?.items.get_mut(index)?;
         match &mut item.action {
             ItemAction::Custom(callback) => callback.take(),
-            ItemAction::BuiltIn(_) => None,
+            ItemAction::BuiltIn(_) | ItemAction::Slider(_) => None,
         }
     });
     if let Some(mut callback) = callback {
@@ -902,6 +1254,35 @@ fn fire_custom(runtime: &crate::widgets::Runtime, source: WidgetId, index: usize
         runtime.context_menu.with(|state| {
             let mut state = state.borrow_mut();
             if let Some(ItemAction::Custom(slot)) = state
+                .menus
+                .get_mut(source)
+                .and_then(|menu| menu.items.get_mut(index))
+                .map(|item| &mut item.action)
+            {
+                *slot = Some(callback);
+            }
+        });
+    }
+}
+
+/// Runs the callback of the open menu's row `index`, a slider, with its new value.
+fn fire_slider(runtime: &crate::widgets::Runtime, index: usize, value: f32) {
+    let Some(source) = open_context_menu_nodes(runtime).map(|(source, _)| source) else {
+        return;
+    };
+    let callback = runtime.context_menu.with(|state| {
+        let mut state = state.borrow_mut();
+        let item = state.menus.get_mut(source)?.items.get_mut(index)?;
+        match &mut item.action {
+            ItemAction::Slider(callback) => callback.take(),
+            ItemAction::BuiltIn(_) | ItemAction::Custom(_) => None,
+        }
+    });
+    if let Some(mut callback) = callback {
+        callback(value);
+        runtime.context_menu.with(|state| {
+            let mut state = state.borrow_mut();
+            if let Some(ItemAction::Slider(slot)) = state
                 .menus
                 .get_mut(source)
                 .and_then(|menu| menu.items.get_mut(index))
@@ -1004,7 +1385,8 @@ pub fn activate_context_menu_item(
         .a11y(id)
         .map(|semantics| StateFlags(semantics.state).contains(StateFlags::DISABLED))
         .unwrap_or(true);
-    if disabled {
+    // A slider is set by moving it, not picked: the menu stays open.
+    if disabled || item.slider {
         return None;
     }
     if item.action == ContextMenuAction::Custom {
@@ -1027,6 +1409,11 @@ pub fn dismiss_context_menu(runtime: &crate::widgets::Runtime, scene: &mut Scene
         return false;
     };
     let _ = crate::widgets::strip_hover_decoration(runtime, scene);
+    // A slider held by the pointer lets go with the menu.
+    let active = runtime.with(|rt| rt.borrow().active.as_ref().map(|state| state.target));
+    if active.is_some_and(|target| open.items.contains(&target)) {
+        let _ = crate::widgets::strip_active_decoration(runtime, scene);
+    }
     scene.mark_dirty(open.root, DirtyFlags::PAINT);
     for &item in &open.items {
         // A row that holds keyboard focus loses it with its ring before it
@@ -1042,7 +1429,9 @@ pub fn dismiss_context_menu(runtime: &crate::widgets::Runtime, scene: &mut Scene
             state.borrow_mut().actions.remove(item);
         });
         runtime.with(|state| {
-            state.borrow_mut().handlers.remove(item);
+            let mut state = state.borrow_mut();
+            state.handlers.remove(item);
+            state.sliders.remove(item);
         });
         forget_node_theme(runtime, item);
         let _ = scene.remove_subtree(item);
