@@ -5297,10 +5297,16 @@ mod context_menu_panel_under_items {
         assert!(app.open_context_menu(target, at, false));
         app.frame();
         app.frame();
-        assert_panel_under_items(&app);
+        assert_panel_under_items(&app, &["One", "Two", "Three"]);
+        // The window grows while the menu is open, so the root lays out again.
+        app.resize(660.0, 500.0);
+        app.frame();
+        app.frame();
+        assert_panel_under_items(&app, &["One", "Two", "Three"]);
     }
 
-    fn assert_panel_under_items(app: &App) {
+    /// The menu's panel sits at its box and holds each of `items`, which must all be in it.
+    fn assert_panel_under_items(app: &App, items: &[&str]) {
         let menu = app.find_widget(Role::Menu, None).expect("menu is open");
         let panel = painted_panel(app, menu);
         let layout = app.scene().layout(menu).unwrap().rect;
@@ -5308,11 +5314,10 @@ mod context_menu_panel_under_items {
             (panel.x - layout.x).abs() < 0.01 && (panel.y - layout.y).abs() < 0.01,
             "panel {panel:?} not at menu box {layout:?}"
         );
-        for name in ["One", "Two", "Three"] {
-            let Some(_) = app.find_widget(Role::MenuItem, Some(name)) else {
-                continue;
-            };
-            let item = app.find_widget(Role::MenuItem, Some(name)).unwrap();
+        for &name in items {
+            let item = app
+                .find_widget(Role::MenuItem, Some(name))
+                .unwrap_or_else(|| panic!("menu item {name} is missing"));
             let r = app.scene().layout(item).unwrap().rect;
             assert!(
                 contains(panel, r),
@@ -5356,7 +5361,7 @@ mod context_menu_panel_under_items {
             at.x > 100.0 && at.y > 100.0,
             "menu {at:?} not near its button"
         );
-        assert_panel_under_items(&app);
+        assert_panel_under_items(&app, &["One", "Two"]);
     }
 
     #[test]
@@ -5379,6 +5384,6 @@ mod context_menu_panel_under_items {
             at.x > 100.0 && at.y > 100.0,
             "menu {at:?} not near its button"
         );
-        assert_panel_under_items(&app);
+        assert_panel_under_items(&app, &["One", "Two"]);
     }
 }

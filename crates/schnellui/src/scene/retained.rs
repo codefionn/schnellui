@@ -1122,6 +1122,12 @@ impl Scene {
         self.placed_by_hand.insert(id, ());
     }
 
+    /// `true` if any node is flagged with [`Scene::set_placed_by_hand`], such as the root
+    /// of an open context menu.
+    pub fn any_placed_by_hand(&self) -> bool {
+        !self.placed_by_hand.is_empty()
+    }
+
     /// `true` if `id` was flagged with [`Scene::set_placed_by_hand`].
     pub fn is_placed_by_hand(&self, id: WidgetId) -> bool {
         self.placed_by_hand.contains_key(id)

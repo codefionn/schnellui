@@ -959,9 +959,12 @@ fn resolve_available(known: Option<f32>, space: taffy::AvailableSpace) -> f32 {
     })
 }
 
-/// Whether `id` is `root` or lies below it.
-/// `true` if `id` or an ancestor places itself ([`Scene::set_placed_by_hand`]).
+/// `true` if `id` or an ancestor places itself ([`Scene::set_placed_by_hand`]). With no
+/// such node in the scene, as when no menu is open, it answers without walking up.
 fn placed_by_hand(scene: &Scene, mut id: WidgetId) -> bool {
+    if !scene.any_placed_by_hand() {
+        return false;
+    }
     loop {
         if scene.is_placed_by_hand(id) {
             return true;
@@ -973,6 +976,7 @@ fn placed_by_hand(scene: &Scene, mut id: WidgetId) -> bool {
     }
 }
 
+/// Whether `id` is `root` or lies below it.
 fn is_within(scene: &Scene, id: WidgetId, root: WidgetId) -> bool {
     let mut cur = Some(id);
     while let Some(c) = cur {
