@@ -888,7 +888,30 @@ fn an_open_menu_casts_a_shadow_past_its_edges() {
 }
 
 #[test]
-fn a_selected_menu_item_wears_the_selection_fill_and_state() {
+fn an_open_menu_marks_the_control_it_hangs_from() {
+    use schnellui::scene::Primitive;
+    use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
+
+    let menu = ContextMenu::new().item(ContextMenuItem::new("1 shell"));
+    let mut app = App::mount_with_size(Button::new("Tabs").menu(menu), 400, 300);
+    app.frame();
+    let button = app.find_widget(Role::Button, Some("Tabs")).unwrap();
+    let at = app.scene().composited_rect(button);
+    assert!(app.dispatch_click(button));
+    let item = app.find_widget(Role::MenuItem, Some("1 shell")).unwrap();
+    let menu = app.scene().node(item).unwrap().parent.unwrap();
+    // A frame lies around the button while its menu is open, and no fill over it.
+    let primitives = &app.scene().paint(menu).unwrap().primitives;
+    assert!(primitives
+        .iter()
+        .any(|p| matches!(p, Primitive::StrokeRect { rect, .. } if *rect == at)));
+    assert!(!primitives
+        .iter()
+        .any(|p| matches!(p, Primitive::SolidRect { rect, .. } if *rect == at)));
+}
+
+#[test]
+fn a_selected_menu_item_wears_a_check_and_the_state() {
     use schnellui::a11y::StateFlags;
     use schnellui::scene::Primitive;
     use schnellui::widgets::{Button, ContextMenu, ContextMenuItem};
@@ -904,17 +927,25 @@ fn a_selected_menu_item_wears_the_selection_fill_and_state() {
         let item = app.find_widget(Role::MenuItem, Some(name)).unwrap();
         let selected =
             StateFlags(app.scene().a11y(item).unwrap().state).contains(StateFlags::SELECTED);
-        let color = match app.scene().paint(item).unwrap().primitives[0] {
+        let primitives = &app.scene().paint(item).unwrap().primitives;
+        let color = match primitives[0] {
             Primitive::SolidRect { color, .. } => color,
             _ => panic!("a menu row starts with its fill"),
         };
-        (selected, color)
+        let lines = primitives
+            .iter()
+            .filter(|p| matches!(p, Primitive::Line { .. }))
+            .count();
+        (selected, color, lines)
     };
-    let (plain, plain_fill) = fill("1 shell");
-    let (current, current_fill) = fill("2 shell");
+    let (plain, plain_fill, plain_lines) = fill("1 shell");
+    let (current, current_fill, current_lines) = fill("2 shell");
     assert!(!plain && current);
+    // Rows rest on the panel; the chosen one carries a check of two strokes.
     assert_eq!(plain_fill.a, 0);
-    assert!(current_fill.a > 0);
+    assert_eq!(current_fill.a, 0);
+    assert_eq!(plain_lines, 0);
+    assert_eq!(current_lines, 2);
 }
 
 #[test]

@@ -96,6 +96,7 @@ impl App {
         }
         let active_theme = schnellui::widgets::theme(&widgets);
         let mut app = App {
+            min_window: None,
             context,
             widgets,
             scene: Scene::new(),

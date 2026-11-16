@@ -576,3 +576,20 @@ fn panel_flush(width: f32) -> Column {
         .width(width)
         .child(Button::new("Flush").width(width))
 }
+
+#[test]
+fn arrows_walk_the_buttons_of_a_list() {
+    let mut list = List::new();
+    for i in 0..5 {
+        list = list.child(crate::widgets::Button::new(format!("Row {i}")));
+    }
+    let mut app = App::mount_with_size(Scroll::new().size(300.0, 200.0).child(list), 400, 300);
+    app.frame();
+    assert!(app.dispatch_key(UiKey::Tab { shift: false }));
+    let first = app.focused_widget().unwrap();
+    assert!(app.dispatch_key(UiKey::Down { shift: false }));
+    let second = app.focused_widget().unwrap();
+    assert_ne!(first, second, "Down moves to the next row");
+    assert!(app.dispatch_key(UiKey::Up { shift: false }));
+    assert_eq!(app.focused_widget(), Some(first), "Up goes back");
+}

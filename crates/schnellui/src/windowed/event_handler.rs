@@ -13,6 +13,12 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             // it visible first silently prevents reliable platform registration.
             .with_visible(false)
             .with_inner_size(self.init_phys);
+        let attrs = match self.app.min_window_size() {
+            Some((width, height)) => {
+                attrs.with_min_inner_size(winit::dpi::LogicalSize::new(width, height))
+            }
+            None => attrs,
+        };
         // The Wayland app id and X11 class, so the desktop matches the window to the
         // app's .desktop file and portal permissions.
         #[cfg(target_os = "linux")]

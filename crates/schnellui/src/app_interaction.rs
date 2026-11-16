@@ -540,6 +540,26 @@ impl App {
                     }
                 }
             }
+            // The buttons a `List` makes one Tab stop (a room list's rows, the names
+            // in a timeline) are walked with the arrows too: one stop the arrows
+            // could not leave held the keyboard on one row.
+            Some(WidgetKind::Button)
+                if focused.is_some_and(|id| roving_group(&self.scene, id).is_some()) =>
+            {
+                let step = match key {
+                    UiKey::Right { .. } | UiKey::Down { .. } => Some(RovingStep::By(1)),
+                    UiKey::Left { .. } | UiKey::Up { .. } => Some(RovingStep::By(-1)),
+                    UiKey::Home { .. } => Some(RovingStep::First),
+                    UiKey::End { .. } => Some(RovingStep::Last),
+                    _ => None,
+                };
+                if let Some(step) = step {
+                    let id = focused.expect("focused list button");
+                    if let Some(next) = roving_target(&self.scene, id, step) {
+                        return focus_visible | self.focus(Some(next));
+                    }
+                }
+            }
             // Arrows on a focused radio move focus *and* selection within the
             // group (the browser radio-group contract), or focus only for a
             // radio built with `arrows_select(false)`.
@@ -1582,8 +1602,9 @@ enum RovingStep {
 }
 
 /// How many levels up from a button its `List` may stand for the button to be one of the
-/// list's rows.
-const ROVING_LIST_DEPTH: usize = 12;
+/// list's rows. A file card's Save in a chat row sits about sixteen levels down: below
+/// that it fell out of the arrow walk and became a Tab stop of its own.
+const ROVING_LIST_DEPTH: usize = 20;
 
 /// The group a focusable member belongs to, for widgets that share one Tab
 /// stop: tabs in a tab list, radios in a row, items in a list, rows in a

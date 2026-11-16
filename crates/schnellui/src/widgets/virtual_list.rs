@@ -441,6 +441,8 @@ where
             return false;
         }
         let mut scratch = std::mem::take(&mut self.scratch);
+        let focused = schnellui::a11y::focused(scene);
+        let mut refocus: Option<(K, WidgetId, WidgetId)> = None;
         let (range, pin_end, sync_offset) = {
             let mut state = self.controller.inner.borrow_mut();
             // The scene owns the final clamped position. A row can measure far
@@ -470,6 +472,7 @@ where
             scratch.stale.clear();
             let refresh = &scratch.refresh;
             let stale = &mut scratch.stale;
+            let refocus = &mut refocus;
             self.mounted.retain(|key, root| {
                 let inside = state
                     .positions
@@ -478,6 +481,14 @@ where
                 let keep = inside && !refresh.contains(key);
                 if !keep {
                     stale.push(*root);
+                    // A row rebuilt in place that holds focus hands it to its new self.
+                    if inside {
+                        if let Some(id) = focused.filter(|id| {
+                            crate::widgets::is_in_subtree(scene, *id, *root)
+                        }) {
+                            *refocus = Some((key.clone(), *root, id));
+                        }
+                    }
                 }
                 keep
             });
@@ -491,6 +502,20 @@ where
             (range, pin_end, sync_offset)
         };
 
+        // The focused control's role and name, and how many before it in its row share
+        // both, to find it again in the rebuilt row.
+        let likeness = refocus.as_ref().and_then(|(key, root, id)| {
+            let a11y = scene.a11y(*id)?;
+            let (role, name) = (a11y.role, a11y.name.clone()?);
+            let nth = alike_nodes(scene, *root, role, &name)
+                .iter()
+                .take_while(|n| **n != *id)
+                .count();
+            let old = focusable_nodes(scene, *root);
+            let at = old.iter().take_while(|n| **n != *id).count();
+            let ring = crate::widgets::focus_ring_visible(runtime, *id);
+            Some((key.clone(), role, name, nth, at, old.len(), ring))
+        });
         for &root in &scratch.stale {
             let nodes = scene.subtree_nodes(root);
             purge_nodes(runtime, scene, &nodes);
@@ -512,6 +537,29 @@ where
                 },
                 Some(self.content),
             );
+            if let Some((_, role, name, nth, at, before, ring)) =
+                likeness.as_ref().filter(|(focus_key, ..)| *focus_key == key)
+            {
+                // The same control, else the one at its place in the row. A row that lost
+                // controls gives focus to the one before the gone one (a revealed spoiler's
+                // link hands it to the name before it), or its last when the controls after
+                // it went too (a closed bar hands it to its toggle).
+                let heir = alike_nodes(scene, id, *role, name)
+                    .get(*nth)
+                    .copied()
+                    .or_else(|| {
+                        let all = focusable_nodes(scene, id);
+                        let place = if all.len() < *before {
+                            at.saturating_sub(1)
+                        } else {
+                            *at
+                        };
+                        all.get(place.min(all.len().saturating_sub(1))).copied()
+                    });
+                if let Some(heir) = heir {
+                    runtime.with(|rt| rt.borrow_mut().row_refocus = Some((heir, *ring)));
+                }
+            }
             self.mounted.insert(key, id);
         }
 
@@ -653,6 +701,42 @@ fn set_spacer_height(layout: &mut LayoutEngine, id: WidgetId, height: f32) {
 
 fn register_virtual_list(runtime: &Runtime, host: Box<dyn MountedVirtualList>) {
     runtime.with(|rt| rt.borrow_mut().virtual_lists.push(host));
+}
+
+/// The focusable nodes of the branch at `root`, in the branch's order.
+fn focusable_nodes(scene: &Scene, root: WidgetId) -> Vec<WidgetId> {
+    scene
+        .subtree_nodes(root)
+        .into_iter()
+        .filter(|id| {
+            scene.a11y(*id).is_some_and(|a| {
+                schnellui::a11y::ActionFlags(a.actions)
+                    .contains(schnellui::a11y::ActionFlags::FOCUS)
+            })
+        })
+        .collect()
+}
+
+/// The focusable nodes of the branch at `root` with `role` and `name`, in the branch's order.
+fn alike_nodes(scene: &Scene, root: WidgetId, role: u16, name: &str) -> Vec<WidgetId> {
+    scene
+        .subtree_nodes(root)
+        .into_iter()
+        .filter(|id| {
+            scene.a11y(*id).is_some_and(|a| {
+                a.role == role
+                    && a.name.as_deref() == Some(name)
+                    && schnellui::a11y::ActionFlags(a.actions)
+                        .contains(schnellui::a11y::ActionFlags::FOCUS)
+            })
+        })
+        .collect()
+}
+
+/// The control a refreshed row rebuilt for the one that had focus, with whether that one
+/// wore the ring, once: the app hands focus to it after the reconcile pass.
+pub fn take_row_refocus(runtime: &Runtime) -> Option<(WidgetId, bool)> {
+    runtime.with(|rt| rt.borrow_mut().row_refocus.take())
 }
 
 fn take_virtual_lists(runtime: &Runtime) -> Vec<Box<dyn MountedVirtualList>> {

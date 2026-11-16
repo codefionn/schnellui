@@ -60,12 +60,15 @@ impl From<Theme> for RichPalette {
 }
 
 /// Heading size multiplier per level 1–6.
+/// A heading's size against the body. Rich text lives inside messages and panels, so an h1
+/// stays under the size of the page or panel title above it; the steps are small but each
+/// level is still bigger than the next.
 fn heading_scale(level: u8) -> f32 {
     match level {
-        1 => 1.9,
-        2 => 1.5,
-        3 => 1.25,
-        4 => 1.1,
+        1 => 1.3,
+        2 => 1.2,
+        3 => 1.1,
+        4 => 1.05,
         5 => 1.0,
         _ => 0.9,
     }
@@ -950,6 +953,8 @@ fn flow_inline(
     // whole view), so a glyph names the link it came from.
     let first_link = paint.as_ref().map_or(0, |sink| sink.next_link);
     let mut links_here = 0usize;
+    // Spans with a background carry `index + 1` of it in the tag's high half.
+    let mut fills: SmallVec<[Color; 2]> = SmallVec::new();
     for s in spans {
         let st = s.style;
         let ink = st.color.unwrap_or(if st.link {
@@ -963,14 +968,18 @@ fn flow_inline(
             len: s.text.len(),
             face: FontFace::from_axes(st.bold || force_bold, st.italic || force_italic, st.code),
             color: [ink.r, ink.g, ink.b, ink.a],
-            underline: st.underline || st.link,
+            // A link on a fill (a mention pill) is already marked by the fill: no line under it.
+            underline: st.underline || (st.link && st.background.is_none()),
             strikethrough: st.strike,
-            tag: if s.link_target().is_some() {
+            tag: (if s.link_target().is_some() {
                 links_here += 1;
                 (first_link + links_here) as u32
             } else {
                 0
-            },
+            }) | st.background.map_or(0, |fill| {
+                fills.push(fill);
+                (fills.len() as u32) << FILL_SHIFT
+            }),
         });
         text.push_str(&s.text);
     }
@@ -993,6 +1002,9 @@ fn flow_inline(
             x: sink.origin.x + x_off,
             y: sink.origin.y + y,
         };
+        if !fills.is_empty() {
+            push_span_fills(&mut sink.pd.primitives, &rich, &fills, inv, at);
+        }
         if links_here == 0 {
             push_rich_glyphs(sink.pd, shaper, sink.atlas, &rich, phys as u32, scale, at);
         } else {
@@ -1010,6 +1022,55 @@ fn flow_inline(
     Size {
         width: rich.width * inv,
         height: rich.height * inv,
+    }
+}
+
+/// Where a glyph tag keeps the 1-based index of its span's background.
+const FILL_SHIFT: u32 = 16;
+/// The low half of a glyph tag: the 1-based link index.
+const LINK_MASK: u32 = (1 << FILL_SHIFT) - 1;
+/// How far a span's fill reaches past its glyphs on the left and right.
+const FILL_PAD_X: f32 = 1.0;
+/// How far a span's fill stays inside its line at the top and the bottom, so
+/// fills on two lines never touch.
+const FILL_INSET_Y: f32 = 1.0;
+
+/// Pushes the rounded fill of each background span, one box per line it is
+/// on, under the glyphs that come after.
+fn push_span_fills(
+    prims: &mut Vec<Primitive>,
+    rich: &RichShapedText,
+    fills: &[Color],
+    inv: f32,
+    origin: Point,
+) {
+    for (index, color) in fills.iter().enumerate() {
+        let want = (index as u32 + 1) << FILL_SHIFT;
+        for line in &rich.lines {
+            let start = line.glyph_start as usize;
+            let glyphs = &rich.glyphs[start..start + line.glyph_count as usize];
+            let mut extent: Option<(f32, f32)> = None;
+            for g in glyphs.iter().filter(|g| g.tag & !LINK_MASK == want) {
+                let (l, r) = (g.x, g.x + g.advance);
+                extent = Some(match extent {
+                    Some((s, e)) => (s.min(l), e.max(r)),
+                    None => (l, r),
+                });
+            }
+            if let Some((l, r)) = extent {
+                let height = line.height * inv - 2.0 * FILL_INSET_Y;
+                prims.push(Primitive::SolidRect {
+                    rect: Rect::new(
+                        origin.x + l * inv - FILL_PAD_X,
+                        origin.y + line.top * inv + FILL_INSET_Y,
+                        (r - l) * inv + 2.0 * FILL_PAD_X,
+                        height,
+                    ),
+                    color: *color,
+                    corner_radius: (height * 0.25).min(6.0),
+                });
+            }
+        }
     }
 }
 
@@ -1034,7 +1095,7 @@ fn push_with_links(
     // The link a tag names, if its node exists.
     let count = links.len();
     let owner = |tag: u32| {
-        let index = (tag as usize).checked_sub(1)?;
+        let index = ((tag & LINK_MASK) as usize).checked_sub(1)?;
         (here.contains(&index) && index < count).then_some(index)
     };
     for g in &rich.glyphs {
@@ -1057,7 +1118,7 @@ fn push_with_links(
             let start = line.glyph_start as usize;
             let glyphs = &rich.glyphs[start..start + line.glyph_count as usize];
             let mut extent: Option<(f32, f32)> = None;
-            for g in glyphs.iter().filter(|g| g.tag as usize == index + 1) {
+            for g in glyphs.iter().filter(|g| (g.tag & LINK_MASK) as usize == index + 1) {
                 let (l, r) = (g.x, g.x + g.advance);
                 extent = Some(match extent {
                     Some((s, e)) => (s.min(l), e.max(r)),

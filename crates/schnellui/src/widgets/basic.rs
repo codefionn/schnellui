@@ -222,6 +222,15 @@ const SWITCH_OFF_KNOB_SHRINK: f32 = 0.15;
 /// plus a knob, slid to the right when `on` and the left when off (SOUL §8.1). Geometry
 /// derives from the laid-out rect — the density-scaled box keeps its proportions —
 /// and the pill radii square out under a low-roundness design ([`Shape::pill`]).
+/// The contrast an off switch needs against its surface.
+const CONTROL_CONTRAST: f32 = 3.0;
+/// The text contrast from which a scheme counts as high contrast.
+const HIGH_CONTRAST_TEXT: f32 = 18.0;
+/// The contrast an off switch needs in a high-contrast scheme.
+const HIGH_CONTRAST_SWITCH: f32 = 4.5;
+/// How far a disabled switch's colors move towards the surface.
+const SWITCH_DISABLED_FADE: f32 = 0.5;
+
 pub(crate) fn emit_switch_paint(
     runtime: &crate::widgets::Runtime,
     scene: &mut Scene,
@@ -232,7 +241,33 @@ pub(crate) fn emit_switch_paint(
     let t = theme_for(runtime, id);
     // The off track is the first grey that reads against the page, so an off
     // switch is still a visible control and not a pale smear.
-    let track_color = if on { t.accent } else { t.track_color() };
+    // It also reads against the card it usually sits on, which in a dark or
+    // high-contrast scheme is lighter than the page.
+    // A high-contrast scheme (white on black) asks more of it than the 3:1 of
+    // a control: its off switch is as strong as its large text.
+    let needed = if crate::widgets::theme::contrast_ratio(t.text, t.surface) >= HIGH_CONTRAST_TEXT {
+        HIGH_CONTRAST_SWITCH
+    } else {
+        CONTROL_CONTRAST
+    };
+    let track_color = if on {
+        t.accent
+    } else {
+        let base = t.track_color();
+        (0..=10)
+            .map(|step| crate::widgets::theme::mix_color(base, t.text, step as f32 / 10.0))
+            .find(|c| crate::widgets::theme::contrast_ratio(*c, t.surface) >= needed)
+            .unwrap_or(t.text_muted)
+    };
+    // A disabled switch is faded half way to the surface, so it does not look like a live one.
+    let disabled = scene
+        .a11y(id)
+        .is_some_and(|a| StateFlags(a.state).contains(StateFlags::DISABLED));
+    let track_color = if disabled {
+        crate::widgets::theme::mix_color(track_color, t.surface, SWITCH_DISABLED_FADE)
+    } else {
+        track_color
+    };
     let knob = (rect.height - 2.0 * SWITCH_INSET).max(0.0);
     let knob_x = if on {
         rect.x + rect.width - SWITCH_INSET - knob

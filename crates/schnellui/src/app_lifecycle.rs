@@ -24,6 +24,18 @@ impl App {
         self.scale
     }
 
+    /// Sets the smallest logical size the native window may be resized to. Takes effect
+    /// when the window is created.
+    pub fn set_min_window_size(&mut self, width: f32, height: f32) {
+        self.min_window = Some((width, height));
+    }
+
+    /// The smallest logical window size set with [`App::set_min_window_size`].
+    #[must_use]
+    pub fn min_window_size(&self) -> Option<(f32, f32)> {
+        self.min_window
+    }
+
     /// Sets the fixed background clear color (SOUL §7.3).
     pub fn set_clear_color(&mut self, color: Color) {
         self.clear = color;
@@ -229,8 +241,10 @@ impl App {
             let opener = entry.opener.filter(|&opener| {
                 opener != focused && app_inherit::takes_focus(&self.scene, opener)
             });
+            // Escape is a key: the keyboard lands on the opener with its ring, whatever
+            // opened the region, or the user cannot see where focus went.
             if let Some(opener) = opener {
-                return Some((opener, entry.ring_visible));
+                return Some((opener, true));
             }
             let fallback = self.scene.resolve_ref(entry.fallback?)?;
             let fallback = self.first_focusable_in(fallback)?;
@@ -729,6 +743,13 @@ impl App {
                 &mut self.atlas,
                 self.scale,
             );
+            // A row rebuilt in place keeps the keyboard where it was: on the same control
+            // of the new row.
+            if let Some((heir, ring)) = schnellui::widgets::take_row_refocus(&self.widgets) {
+                if self.scene.node(heir).is_some() {
+                    let _ = self.focus_after_replacement(heir, ring);
+                }
+            }
             let Some(root) = self.scene.root() else { break };
             let layout_requested = !self.scene.layout_dirty().is_empty()
                 && self.scene.layout_epoch() != self.layout_consumed_epoch;

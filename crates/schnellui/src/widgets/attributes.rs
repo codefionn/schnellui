@@ -23,6 +23,8 @@ pub enum Attribute {
     FontSize,
     /// The value a [`Slider`] shows. Moving it does not fire the slider's `on_change`.
     Value,
+    /// A field's value is refused: [`StateFlags::INVALID`] and the error outline.
+    Invalid,
 }
 
 /// Typed values crossing the macro's retained property boundary.
@@ -321,6 +323,15 @@ pub(crate) fn apply(
                 scene.mark_dirty(id, DirtyFlags::PAINT);
             }
         }
+        (Attribute::Invalid, AttributeValue::Bool(invalid)) => {
+            let state = scene.a11y(id).map(|a| a.state).unwrap_or_default();
+            let bit = StateFlags::INVALID.0;
+            scene.set_a11y_state(id, if invalid { state | bit } else { state & !bit });
+            if scene.node(id).map(|n| n.kind) == Some(WidgetKind::TextInput) {
+                let disabled = StateFlags(state).contains(StateFlags::DISABLED);
+                recolor_field(runtime, scene, id, disabled);
+            }
+        }
         (Attribute::Value, AttributeValue::Number(number)) => {
             show_slider_value(runtime, scene, id, number);
         }
@@ -420,10 +431,11 @@ pub(crate) fn parse_static_attribute(
         "padding" | "all" => Attribute::Padding,
         "disabled" => Attribute::Disabled,
         "checked" => Attribute::Checked,
+        "invalid" => Attribute::Invalid,
         _ => return Err(format!("property `{name}` requires a rebuild")),
     };
     let value = match attr {
-        Attribute::Disabled | Attribute::Checked => AttributeValue::Bool(
+        Attribute::Disabled | Attribute::Checked | Attribute::Invalid => AttributeValue::Bool(
             value
                 .trim()
                 .parse()

@@ -170,6 +170,7 @@ pub struct Switch {
     pub(crate) on: bool,
     pub(crate) name: Option<Cow<'static, str>>,
     pub(crate) on_toggle: Option<Box<dyn FnMut(bool) + 'static>>,
+    pub(crate) disabled: bool,
 }
 
 impl Switch {
@@ -179,7 +180,15 @@ impl Switch {
             on,
             name: None,
             on_toggle: None,
+            disabled: false,
         }
+    }
+    /// Draws the switch faded, half way to the surface, and marks it
+    /// `StateFlags::DISABLED`: a switch that cannot move does not look like a
+    /// live one.
+    pub fn disabled(mut self, disabled: bool) -> Switch {
+        self.disabled = disabled;
+        self
     }
     /// The switch's accessible name, usually the text of the label beside it.
     pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Switch {
@@ -215,6 +224,9 @@ impl View for Switch {
             let mut st = StateFlags::default();
             if this.on {
                 st.insert(StateFlags::CHECKED);
+            }
+            if this.disabled {
+                st.insert(StateFlags::DISABLED);
             }
             a.state = st.0;
         }

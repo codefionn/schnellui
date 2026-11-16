@@ -1654,6 +1654,9 @@ struct WidgetRuntime {
     /// reconciliation and post-layout height feedback; the runtime only owns
     /// their lifetime alongside every other mounted widget behaviour.
     virtual_lists: Vec<Box<dyn virtual_list::MountedVirtualList>>,
+    /// The control a refreshed virtual-list row rebuilt in place of the one that had
+    /// focus, and whether that one wore the ring. The app focuses it after the pass.
+    row_refocus: Option<(WidgetId, bool)>,
     /// Retained multi-line editing state per text area (SOUL §6.3) — owned by
     /// [`text_area`], populated at build, mutated by the edit dispatches.
     areas: SecondaryMap<WidgetId, text_area::AreaState>,

@@ -25,6 +25,39 @@ const DEFAULT_PAD_H: f32 = 12.0;
 const BAR_WIDTH: f32 = 3.0;
 const DOT_SIZE: f32 = 8.0;
 const DOT_GAP: f32 = 8.0;
+/// The status dot on a leading mark's rim, and the ring of ground round it.
+const MARK_DOT: f32 = 10.0;
+const MARK_DOT_RING: f32 = 2.0;
+/// The share of a dot's width a hollow dot keeps as its ring.
+const HOLLOW_RING: f32 = 0.3;
+/// The share of a dot's width the centre of a ringed dot covers.
+const RINGED_HOLE: f32 = 0.55;
+const RINGED_CORE: f32 = 0.25;
+
+/// The shape of a row's status dot, so its meaning does not rest on its color alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DotShape {
+    /// A full disc.
+    #[default]
+    Filled,
+    /// A ring with the row's ground inside.
+    Hollow,
+    /// A disc with a ring of ground round a small core.
+    Ringed,
+}
+
+/// The discs that draw a dot of `shape` and `size` in `color` on `ground`, largest first.
+fn dot_discs(shape: DotShape, size: f32, color: Color, ground: Color) -> Vec<(f32, Color)> {
+    match shape {
+        DotShape::Filled => vec![(size, color)],
+        DotShape::Hollow => vec![(size, color), (size * (1.0 - 2.0 * HOLLOW_RING), ground)],
+        DotShape::Ringed => vec![
+            (size, color),
+            (size * RINGED_HOLE, ground),
+            (size * RINGED_CORE, color),
+        ],
+    }
+}
 /// Space kept between the title and the trailing text.
 const TRAILING_GAP: f32 = 8.0;
 const SUBTITLE_DROP: f32 = 4.0;
@@ -54,6 +87,7 @@ pub struct ListRow {
     subtitle: Option<Cow<'static, str>>,
     accent: Option<Color>,
     dot: Option<Color>,
+    dot_shape: DotShape,
     mark: Option<LeadingMark>,
     selected: bool,
     selected_background: Option<Color>,
@@ -64,6 +98,8 @@ pub struct ListRow {
     end_room: f32,
     title_size: f32,
     title_bold: bool,
+    title_wrap: bool,
+    subtitle_wrap: bool,
     meta_size: f32,
     trailing_inline: bool,
     trailing_centered: bool,
@@ -86,6 +122,7 @@ impl ListRow {
             subtitle: None,
             accent: None,
             dot: None,
+            dot_shape: DotShape::Filled,
             mark: None,
             selected: false,
             selected_background: None,
@@ -96,6 +133,8 @@ impl ListRow {
             end_room: 0.0,
             title_size: 13.0,
             title_bold: false,
+            title_wrap: false,
+            subtitle_wrap: false,
             meta_size: 11.5,
             trailing_inline: false,
             trailing_centered: false,
@@ -142,6 +181,21 @@ impl ListRow {
     }
 
     /// Font size of the trailing text and the subtitle.
+    /// Lets a title too long for its line go on to a second one, at a word break, before
+    /// it is cut with an ellipsis. The row grows by that line; a title that fits keeps the
+    /// row's height.
+    pub fn title_wrap(mut self, wrap: bool) -> ListRow {
+        self.title_wrap = wrap;
+        self
+    }
+
+    /// Lets a subtitle too long for its line go on to a second one, at a word break, as
+    /// [`Self::title_wrap`] does for the title.
+    pub fn subtitle_wrap(mut self, wrap: bool) -> ListRow {
+        self.subtitle_wrap = wrap;
+        self
+    }
+
     /// Draws the title in the bold face, for a row that has something new.
     pub fn title_bold(mut self, bold: bool) -> ListRow {
         self.title_bold = bold;
@@ -229,6 +283,12 @@ impl ListRow {
     /// A filled circle of this color before the title.
     pub fn dot(mut self, color: Color) -> ListRow {
         self.dot = Some(color);
+        self
+    }
+
+    /// The shape of the dot: filled, hollow or ringed.
+    pub fn dot_shape(mut self, shape: DotShape) -> ListRow {
+        self.dot_shape = shape;
         self
     }
 
@@ -375,6 +435,35 @@ fn shape_fit_face(
     shaped
 }
 
+/// Splits `text` at the last word break whose first part fits in `max_width`, for a title
+/// on two lines. A text that fits, or has no break that helps, stays whole on the first.
+fn split_title(
+    shaper: &mut schnellui::text::TextShaper,
+    text: &str,
+    phys: f32,
+    max_width: f32,
+    scale: f32,
+    face: FontFace,
+) -> (String, Option<String>) {
+    let inv = 1.0 / norm_scale(scale);
+    let opts = ShapeOptions {
+        face,
+        ..ShapeOptions::new(phys)
+    };
+    if shaper.shape_with(text, &opts).width * inv <= max_width {
+        return (text.to_owned(), None);
+    }
+    let breaks: Vec<usize> = text.match_indices(' ').map(|(at, _)| at).collect();
+    for &at in breaks.iter().rev() {
+        let head = text[..at].trim_end();
+        if !head.is_empty() && shaper.shape_with(head, &opts).width * inv <= max_width {
+            let tail = text[at..].trim_start();
+            return (head.to_owned(), (!tail.is_empty()).then(|| tail.to_owned()));
+        }
+    }
+    (text.to_owned(), None)
+}
+
 impl View for ListRow {
     fn build(self: Box<Self>, ctx: &mut BuildCtx, parent: Option<WidgetId>) -> WidgetId {
         let this = *self;
@@ -411,8 +500,10 @@ impl View for ListRow {
         let title_phys = phys_size_px(this.title_size, ctx.scale);
         let meta_phys = phys_size_px(this.meta_size, ctx.scale);
 
+        // With a leading mark the dot sits on the mark's rim, as a status dot
+        // on an avatar does, and takes no room of its own.
         let lead = this.pad_h
-            + if this.dot.is_some() {
+            + if this.dot.is_some() && this.mark.is_none() {
                 DOT_SIZE + DOT_GAP
             } else {
                 0.0
@@ -458,36 +549,69 @@ impl View for ListRow {
             } else {
                 0.0
             };
+        let title_face = if this.title_bold {
+            FontFace::SansBold
+        } else {
+            FontFace::Sans
+        };
+        let (first, rest) = if this.title_wrap {
+            split_title(ctx.text, &this.title, title_phys, title_room.max(8.0), ctx.scale, title_face)
+        } else {
+            (this.title.to_string(), None)
+        };
         let title = shape_fit_face(
             ctx.text,
-            &this.title,
+            &first,
             title_phys,
             title_room.max(8.0),
             ctx.scale,
-            if this.title_bold {
-                FontFace::SansBold
-            } else {
-                FontFace::Sans
-            },
+            title_face,
         );
-        let subtitle = this.subtitle.as_ref().map(|text| {
+        // The second line has the row's width: no time or meta stands at its end.
+        let title_rest = rest.map(|rest| {
+            shape_fit_face(
+                ctx.text,
+                &rest,
+                title_phys,
+                (this.width - lead - this.pad_h - this.end_room).max(8.0),
+                ctx.scale,
+                title_face,
+            )
+        });
+        // What the second title line adds: every line under the first moves down by it.
+        let extra = title_rest.as_ref().map_or(0.0, |rest| rest.height * inv);
+        let subtitle_room = (this.width
+            - lead
+            - this.pad_h
+            - this.end_room
+            - if trailing_below { trailing_room } else { 0.0 })
+        .max(8.0);
+        let (subtitle_first, subtitle_rest) = match this.subtitle.as_ref() {
+            Some(text) if this.subtitle_wrap => {
+                let (first, rest) =
+                    split_title(ctx.text, text, meta_phys, subtitle_room, ctx.scale, FontFace::Sans);
+                (Some(first), rest)
+            }
+            Some(text) => (Some(text.to_string()), None),
+            None => (None, None),
+        };
+        let subtitle = subtitle_first
+            .as_ref()
+            .map(|text| shape_fit(ctx.text, text, meta_phys, subtitle_room, ctx.scale));
+        let subtitle_rest = subtitle_rest.map(|text| {
             shape_fit(
                 ctx.text,
-                text,
+                &text,
                 meta_phys,
-                (this.width
-                    - lead
-                    - this.pad_h
-                    - this.end_room
-                    - if trailing_below { trailing_room } else { 0.0 })
-                .max(8.0),
+                (this.width - lead - this.pad_h - this.end_room).max(8.0),
                 ctx.scale,
             )
         });
         let subtitle_height = subtitle.as_ref().map_or(0.0, |s| s.height * inv);
+        let subtitle_extra = subtitle_rest.as_ref().map_or(0.0, |s| s.height * inv);
         let size = Size {
             width: this.width,
-            height: this.total_height(subtitle_height),
+            height: this.total_height(subtitle_height) + extra + subtitle_extra,
         };
 
         let rect = node_rect(ctx.scene, id, size);
@@ -516,17 +640,23 @@ impl View for ListRow {
                 corner_radius: 0.0,
             });
         }
-        if let Some(color) = this.dot {
-            pd.primitives.push(Primitive::SolidRect {
-                rect: Rect::new(
-                    rect.x + this.pad_h,
-                    rect.y + (this.height - DOT_SIZE) * 0.5,
-                    DOT_SIZE,
-                    DOT_SIZE,
-                ),
-                color,
-                corner_radius: DOT_SIZE * 0.5,
-            });
+        if let Some(color) = this.dot.filter(|_| this.mark.is_none()) {
+            let ground = if background.a > 0 {
+                background
+            } else {
+                theme.surface
+            };
+            let centre = Point {
+                x: rect.x + this.pad_h + DOT_SIZE * 0.5,
+                y: rect.y + this.height * 0.5,
+            };
+            for (size, fill) in dot_discs(this.dot_shape, DOT_SIZE, color, ground) {
+                pd.primitives.push(Primitive::SolidRect {
+                    rect: Rect::new(centre.x - size * 0.5, centre.y - size * 0.5, size, size),
+                    color: fill,
+                    corner_radius: size * 0.5,
+                });
+            }
         }
         if let Some(mark) = &this.mark {
             let disc = Rect::new(
@@ -564,6 +694,27 @@ impl View for ListRow {
                     y: disc.y + (disc.height - letters.height * inv) * 0.5,
                 },
             );
+            if let Some(color) = this.dot.filter(|c| c.a > 0) {
+                // A ring of the row's ground parts the dot from the disc.
+                let ground = if background.a > 0 {
+                    background
+                } else {
+                    theme.surface
+                };
+                let centre = Point {
+                    x: disc.x + disc.width - MARK_DOT * 0.5,
+                    y: disc.y + disc.height - MARK_DOT * 0.5,
+                };
+                let discs = std::iter::once((MARK_DOT + 2.0 * MARK_DOT_RING, ground))
+                    .chain(dot_discs(this.dot_shape, MARK_DOT, color, ground));
+                for (size, fill) in discs {
+                    pd.primitives.push(Primitive::SolidRect {
+                        rect: Rect::new(centre.x - size * 0.5, centre.y - size * 0.5, size, size),
+                        color: fill,
+                        corner_radius: size * 0.5,
+                    });
+                }
+            }
         }
         let title_y = rect.y + (this.height - title.height * inv) * 0.5;
         rasterize_and_push(
@@ -579,6 +730,21 @@ impl View for ListRow {
                 y: title_y,
             },
         );
+        if let Some(rest) = &title_rest {
+            rasterize_and_push(
+                pd,
+                ctx.text,
+                ctx.atlas,
+                rest,
+                title_phys as u32,
+                theme.text,
+                ctx.scale,
+                Point {
+                    x: rect.x + lead,
+                    y: title_y + title.height * inv,
+                },
+            );
+        }
         if let Some(trailing) = &trailing {
             let x = if this.trailing_inline {
                 rect.x + lead + title.width * inv + TRAILING_GAP
@@ -593,7 +759,8 @@ impl View for ListRow {
             };
             let y = if trailing_below {
                 // Centered on the subtitle's line.
-                rect.y + this.height - SUBTITLE_DROP - 2.0 + (subtitle_height - text_height) * 0.5
+                rect.y + this.height + extra - SUBTITLE_DROP - 2.0
+                    + (subtitle_height - text_height) * 0.5
             } else {
                 rect.y + (line - text_height) * 0.5
             };
@@ -652,9 +819,25 @@ impl View for ListRow {
                 ctx.scale,
                 Point {
                     x: rect.x + lead,
-                    y: rect.y + this.height - SUBTITLE_DROP - 2.0,
+                    y: rect.y + this.height + extra - SUBTITLE_DROP - 2.0,
                 },
             );
+            if let Some(rest) = &subtitle_rest {
+                rasterize_and_push(
+                    pd,
+                    ctx.text,
+                    ctx.atlas,
+                    rest,
+                    meta_phys as u32,
+                    this.subtitle_color.unwrap_or(meta),
+                    ctx.scale,
+                    Point {
+                        x: rect.x + lead,
+                        y: rect.y + this.height + extra - SUBTITLE_DROP - 2.0
+                            + subtitle.height * inv,
+                    },
+                );
+            }
         }
         ctx.layout.set_measure(id, Box::new(move |_available| size));
         if let Some(tooltip) = &this.tooltip {

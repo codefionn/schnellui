@@ -580,6 +580,9 @@ const SCROLL_TO_END: f32 = f32::MAX / 2.0;
 /// registry. Constructed empty via [`App::new`] or with a mounted root via
 /// [`App::mount`].
 pub struct App {
+    /// The smallest logical size the native window may be resized to, when the app sets
+    /// one: below it the app's layout no longer fits.
+    min_window: Option<(f32, f32)>,
     context: Context,
     /// Non-`Send` retained widget behavior owned and dispatched by this app.
     widgets: schnellui::widgets::Runtime,

@@ -34,6 +34,9 @@ pub struct SpanStyle {
     /// An explicit color override (e.g. a syntax token). `None` defers to the
     /// viewer theme.
     pub color: Option<Color>,
+    /// A rounded fill behind the span's glyphs, line by line (a mention
+    /// pill). It flows and wraps with the text around it.
+    pub background: Option<Color>,
 }
 
 impl SpanStyle {
@@ -45,6 +48,7 @@ impl SpanStyle {
         underline: false,
         link: false,
         color: None,
+        background: None,
     };
 
     pub fn bold() -> SpanStyle {
