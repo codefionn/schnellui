@@ -5256,3 +5256,129 @@ fn a_press_slid_off_a_tab_close_button_closes_nothing() {
     assert!(app.begin_drag(on));
     assert_eq!(app.end_drag(on), DragRelease::Click(button));
 }
+
+mod context_menu_panel_under_items {
+    use super::*;
+    use schnellui::scene::{Point, Primitive, Rect};
+    use schnellui::widgets::{Button, Column, ContextMenu, ContextMenuItem, Pad, TextInput};
+
+    /// The menu's surface: the largest opaque-ish solid rect in its root's paint.
+    fn painted_panel(app: &App, menu: WidgetId) -> Rect {
+        let pd = app.scene().paint(menu).expect("menu root has paint");
+        pd.primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::SolidRect { rect, color, .. } if color.a > 128 => Some(*rect),
+                _ => None,
+            })
+            .max_by(|a, b| (a.width * a.height).total_cmp(&(b.width * b.height)))
+            .expect("menu root paints a surface")
+    }
+
+    fn contains(outer: Rect, inner: Rect) -> bool {
+        inner.x >= outer.x - 0.01
+            && inner.y >= outer.y - 0.01
+            && inner.right() <= outer.right() + 0.01
+            && inner.bottom() <= outer.bottom() + 0.01
+    }
+
+    fn check(at: Point) {
+        let view = Column::new().fill().child(
+            TextInput::new("t").label("Target").context_menu(
+                ContextMenu::new()
+                    .item(ContextMenuItem::new("One"))
+                    .item(ContextMenuItem::new("Two"))
+                    .item(ContextMenuItem::new("Three")),
+            ),
+        );
+        let mut app = App::mount_with_size(view, 640, 480);
+        app.frame();
+        let target = app.find_widget(Role::TextInput, Some("Target")).unwrap();
+        assert!(app.open_context_menu(target, at, false));
+        app.frame();
+        app.frame();
+        assert_panel_under_items(&app);
+    }
+
+    fn assert_panel_under_items(app: &App) {
+        let menu = app.find_widget(Role::Menu, None).expect("menu is open");
+        let panel = painted_panel(app, menu);
+        let layout = app.scene().layout(menu).unwrap().rect;
+        assert!(
+            (panel.x - layout.x).abs() < 0.01 && (panel.y - layout.y).abs() < 0.01,
+            "panel {panel:?} not at menu box {layout:?}"
+        );
+        for name in ["One", "Two", "Three"] {
+            let Some(_) = app.find_widget(Role::MenuItem, Some(name)) else {
+                continue;
+            };
+            let item = app.find_widget(Role::MenuItem, Some(name)).unwrap();
+            let r = app.scene().layout(item).unwrap().rect;
+            assert!(
+                contains(panel, r),
+                "panel {panel:?} misses item {name} {r:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_panel_sits_under_its_items_away_from_the_corner() {
+        check(Point { x: 220.0, y: 140.0 });
+    }
+
+    #[test]
+    fn the_panel_sits_under_its_items_near_the_corner() {
+        check(Point { x: 30.0, y: 20.0 });
+    }
+
+    #[test]
+    fn the_panel_stays_under_its_items_when_the_window_root_relays_out() {
+        use schnellui::scene::DirtyFlags;
+        let menu = ContextMenu::new()
+            .item(ContextMenuItem::new("One"))
+            .item(ContextMenuItem::new("Two"));
+        let view = Column::new()
+            .fill()
+            .child(Pad::all(200.0).child(Button::new("More").menu(menu)));
+        let mut app = App::mount_with_size(view, 640, 480);
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("More")).unwrap();
+        assert!(app.dispatch_click(button));
+        app.frame();
+        // Something else in the window changes and the root lays out again.
+        let root = app.scene().root().unwrap();
+        app.scene_mut().mark_dirty(root, DirtyFlags::LAYOUT);
+        app.frame();
+        app.frame();
+        let menu = app.find_widget(Role::Menu, None).expect("menu is open");
+        let at = app.scene().composited_rect(menu);
+        assert!(
+            at.x > 100.0 && at.y > 100.0,
+            "menu {at:?} not near its button"
+        );
+        assert_panel_under_items(&app);
+    }
+
+    #[test]
+    fn a_menu_button_s_panel_sits_under_its_items() {
+        let menu = ContextMenu::new()
+            .item(ContextMenuItem::new("One"))
+            .item(ContextMenuItem::new("Two"));
+        let view = Column::new()
+            .fill()
+            .child(Pad::all(200.0).child(Button::new("More").menu(menu)));
+        let mut app = App::mount_with_size(view, 640, 480);
+        app.frame();
+        let button = app.find_widget(Role::Button, Some("More")).unwrap();
+        assert!(app.dispatch_click(button));
+        app.frame();
+        app.frame();
+        let menu = app.find_widget(Role::Menu, None).expect("menu is open");
+        let at = app.scene().composited_rect(menu);
+        assert!(
+            at.x > 100.0 && at.y > 100.0,
+            "menu {at:?} not near its button"
+        );
+        assert_panel_under_items(&app);
+    }
+}

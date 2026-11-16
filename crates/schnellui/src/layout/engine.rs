@@ -297,6 +297,9 @@ impl LayoutEngine {
         let mut children = std::mem::take(&mut self.kids);
         children.clear();
         for child in &parent_node.children {
+            if scene.is_placed_by_hand(*child) {
+                continue;
+            }
             let Some(child_taffy) = self.map.get(*child).copied() else {
                 self.kids = children;
                 let _ = self.sync_node(scene, parent);
@@ -323,6 +326,9 @@ impl LayoutEngine {
             let Some(scene_node) = scene.node(id) else {
                 continue;
             };
+            if placed_by_hand(scene, id) {
+                continue;
+            }
             let Some(taffy_node) = self.map.get(id).copied() else {
                 let _ = self.sync_node(scene, id);
                 continue;
@@ -334,6 +340,9 @@ impl LayoutEngine {
                 let mut children = std::mem::take(&mut self.kids);
                 children.clear();
                 for &child in &scene_node.children {
+                    if scene.is_placed_by_hand(child) {
+                        continue;
+                    }
                     let child = match self.map.get(child).copied() {
                         // A Stack's children read its alignment into their own
                         // insets, so a restyled Stack restyles them too.
@@ -391,14 +400,26 @@ impl LayoutEngine {
             // A rich text view is a measured leaf. Its scene children are the
             // link nodes its own paint pass places, so the layout never sees them.
             if kind != WidgetKind::RichText {
-                stack.extend(node.children.iter().rev().copied());
+                stack.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .filter(|c| !scene.is_placed_by_hand(*c)),
+                );
             }
         }
         for &id in &order {
             let node = scene.node(id).expect("sync_node: id must be live");
             kids.clear();
             if node.kind != WidgetKind::RichText {
-                kids.extend(node.children.iter().map(|c| self.map[*c]));
+                // A node placed by hand never got a Taffy node.
+                kids.extend(
+                    node.children
+                        .iter()
+                        .filter(|c| !scene.is_placed_by_hand(**c))
+                        .map(|c| self.map[*c]),
+                );
             }
             let _ = self.taffy.set_children(self.map[id], &kids);
             self.touched.push(id);
@@ -939,6 +960,19 @@ fn resolve_available(known: Option<f32>, space: taffy::AvailableSpace) -> f32 {
 }
 
 /// Whether `id` is `root` or lies below it.
+/// `true` if `id` or an ancestor places itself ([`Scene::set_placed_by_hand`]).
+fn placed_by_hand(scene: &Scene, mut id: WidgetId) -> bool {
+    loop {
+        if scene.is_placed_by_hand(id) {
+            return true;
+        }
+        match scene.node(id).and_then(|n| n.parent) {
+            Some(parent) => id = parent,
+            None => return false,
+        }
+    }
+}
+
 fn is_within(scene: &Scene, id: WidgetId, root: WidgetId) -> bool {
     let mut cur = Some(id);
     while let Some(c) = cur {

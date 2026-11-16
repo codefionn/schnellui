@@ -124,6 +124,10 @@ pub struct Scene {
     /// Mutable order within an overlay level. Focusing/pressing a modeless window
     /// raises its overlay root without changing its shared plane.
     overlay_order: SecondaryMap<WidgetId, u64>,
+    /// Nodes whose subtree places itself, such as an open context menu. The
+    /// layout engine leaves them out, so a relayout of their parent never
+    /// overwrites the boxes their owner wrote.
+    placed_by_hand: SecondaryMap<WidgetId, ()>,
     /// Overlay roots that are controls with a floating tail (a hover tooltip
     /// painted with the control). They escape a window's frame clip only while
     /// the control itself lies inside it. See [`Scene::set_overlay_tail`].
@@ -271,6 +275,7 @@ impl Scene {
             properties: SecondaryMap::new(),
             overlay: SecondaryMap::new(),
             overlay_order: SecondaryMap::new(),
+            placed_by_hand: SecondaryMap::new(),
             overlay_tail: SecondaryMap::new(),
             overlay_roots: Vec::new(),
             overlay_pos: SecondaryMap::new(),
@@ -386,6 +391,7 @@ impl Scene {
             }
         }
         self.overlay_order.remove(id);
+        self.placed_by_hand.remove(id);
         self.overlay_tail.remove(id);
         self.hidden.remove(id);
         if let Some(reference) = self.component_refs_by_node.remove(id) {
@@ -1108,6 +1114,17 @@ impl Scene {
     /// cost is the number of overlays, independent of scene size or slot history.
     pub fn overlays(&self) -> impl Iterator<Item = WidgetId> + '_ {
         self.overlay_roots.iter().copied()
+    }
+
+    /// Keeps `id` and its subtree out of the layout engine: its owner writes
+    /// their boxes with [`Scene::set_layout`] and no flex pass moves them.
+    pub fn set_placed_by_hand(&mut self, id: WidgetId) {
+        self.placed_by_hand.insert(id, ());
+    }
+
+    /// `true` if `id` was flagged with [`Scene::set_placed_by_hand`].
+    pub fn is_placed_by_hand(&self, id: WidgetId) -> bool {
+        self.placed_by_hand.contains_key(id)
     }
 
     /// `true` if `id` roots an overlay subtree (SOUL §3.2).

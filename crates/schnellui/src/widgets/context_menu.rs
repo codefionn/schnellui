@@ -474,6 +474,10 @@ pub fn open_context_menu(
     let root = scene.insert(WidgetKind::Column, Some(parent));
     remember_node_theme(runtime, root, theme);
     scene.set_overlay_level(root, crate::widgets::POPUP_OVERLAY_LEVEL);
+    // The menu writes its own boxes below. Without this flag a later relayout
+    // of `parent` would pull the menu into its flex flow, at the parent's
+    // top-left, and slide the panel paint there while the items stay put.
+    scene.set_placed_by_hand(root);
     // `menu_rect` is in window coordinates, but layout boxes are in the
     // parent's content space: a scroll view as the parent moves its children,
     // and the menu with them. Place the menu so it is drawn at `menu_rect`.
