@@ -77,6 +77,8 @@ struct LeadingMark {
     size: f32,
     /// Size of the letters, in the bold face. `None`: the meta size, regular.
     text_size: Option<f32>,
+    /// RGBA pixels drawn over the disc instead of the letters: width, height, pixels.
+    picture: Option<(u32, u32, Vec<u8>)>,
 }
 
 /// A left-aligned clickable row. See the module docs.
@@ -317,6 +319,7 @@ impl ListRow {
             ink,
             size: if size.is_finite() { size.max(0.0) } else { 0.0 },
             text_size: None,
+            picture: None,
         });
         self
     }
@@ -327,6 +330,30 @@ impl ListRow {
     pub fn leading_mark_text(mut self, size: f32) -> ListRow {
         if let Some(mark) = &mut self.mark {
             mark.text_size = (size.is_finite() && size > 0.0).then_some(size);
+        }
+        self
+    }
+
+    /// Draws `width` x `height` RGBA `pixels` in the leading mark, scaled to
+    /// its size, instead of the letters: a person's or a room's picture. The
+    /// disc still paints under it, so transparent corners show the fill.
+    /// Without a leading mark, or with pixels that do not match the size, it
+    /// does nothing.
+    pub fn leading_mark_picture(
+        mut self,
+        width: u32,
+        height: u32,
+        pixels: impl Into<Vec<u8>>,
+    ) -> ListRow {
+        let pixels = pixels.into();
+        let fits = width > 0
+            && height > 0
+            && (width as usize)
+                .checked_mul(height as usize)
+                .and_then(|n| n.checked_mul(4))
+                == Some(pixels.len());
+        if let Some(mark) = self.mark.as_mut().filter(|_| fits) {
+            mark.picture = Some((width, height, pixels));
         }
         self
     }
@@ -638,6 +665,20 @@ impl View for ListRow {
         } else {
             theme.text_muted
         };
+        // The mark's picture goes to the image atlas; the runtime frees its region when the
+        // row is removed. Pixels the atlas cannot fit fall back to the letters.
+        let mark_texels = this
+            .mark
+            .as_ref()
+            .and_then(|mark| mark.picture.as_ref())
+            .and_then(|(width, height, pixels)| {
+                ctx.scene.images_mut().insert(*width, *height, pixels)
+            });
+        if let Some(tex) = mark_texels {
+            ctx.runtime.with(|runtime| {
+                runtime.borrow_mut().image_regions.insert(id, tex);
+            });
+        }
         let pd = ctx.scene.paint_mut(id);
         pd.primitives.clear();
         // [0] background, always present so the row has stable bounds.
@@ -683,30 +724,43 @@ impl View for ListRow {
                 color: mark.fill,
                 corner_radius: mark.size * 0.5,
             });
-            let (mark_phys, face) = match mark.text_size {
-                Some(size) => (phys_size_px(size, ctx.scale), FontFace::SansBold),
-                None => (meta_phys, FontFace::Sans),
-            };
-            let letters = ctx.text.shape_with(
-                &mark.text,
-                &ShapeOptions {
-                    face,
-                    ..ShapeOptions::new(mark_phys)
-                },
-            );
-            rasterize_and_push(
-                pd,
-                ctx.text,
-                ctx.atlas,
-                &letters,
-                mark_phys as u32,
-                mark.ink,
-                ctx.scale,
-                Point {
-                    x: disc.x + (disc.width - letters.width * inv) * 0.5,
-                    y: disc.y + (disc.height - letters.height * inv) * 0.5,
-                },
-            );
+            if let Some(tex) = mark_texels {
+                pd.primitives.push(Primitive::ImageQuad {
+                    rect: disc,
+                    atlas_uv: Rect::new(
+                        tex.x as f32,
+                        tex.y as f32,
+                        tex.width as f32,
+                        tex.height as f32,
+                    ),
+                    tint: Color::WHITE,
+                });
+            } else {
+                let (mark_phys, face) = match mark.text_size {
+                    Some(size) => (phys_size_px(size, ctx.scale), FontFace::SansBold),
+                    None => (meta_phys, FontFace::Sans),
+                };
+                let letters = ctx.text.shape_with(
+                    &mark.text,
+                    &ShapeOptions {
+                        face,
+                        ..ShapeOptions::new(mark_phys)
+                    },
+                );
+                rasterize_and_push(
+                    pd,
+                    ctx.text,
+                    ctx.atlas,
+                    &letters,
+                    mark_phys as u32,
+                    mark.ink,
+                    ctx.scale,
+                    Point {
+                        x: disc.x + (disc.width - letters.width * inv) * 0.5,
+                        y: disc.y + (disc.height - letters.height * inv) * 0.5,
+                    },
+                );
+            }
             if let Some(color) = this.dot.filter(|c| c.a > 0) {
                 // A ring of the row's ground parts the dot from the disc.
                 let ground = if background.a > 0 {
@@ -919,6 +973,33 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_leading_mark_picture_draws_one_image_over_the_disc() {
+        let image_quads = |view: ListRow| {
+            let (scene, id) = build(view);
+            scene
+                .paint(id)
+                .unwrap()
+                .primitives
+                .iter()
+                .filter_map(|p| match *p {
+                    Primitive::ImageQuad { rect, .. } => Some(rect),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mark =
+            || ListRow::new("room").leading_mark("RO", Color::rgb(1, 2, 3), Color::WHITE, 24.0);
+        let quads = image_quads(mark().leading_mark_picture(2, 2, vec![0xff; 16]));
+        assert_eq!(quads.len(), 1);
+        assert_eq!((quads[0].width, quads[0].height), (24.0, 24.0));
+        // Pixels that do not match the size, or no mark at all, draw no picture.
+        assert!(image_quads(mark().leading_mark_picture(2, 2, vec![0xff; 15])).is_empty());
+        assert!(
+            image_quads(ListRow::new("room").leading_mark_picture(2, 2, vec![0xff; 16])).is_empty()
+        );
     }
 
     #[test]
