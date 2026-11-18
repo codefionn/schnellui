@@ -12,8 +12,13 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import time
+
+# Windows has no Unix-domain debug transport; the app serves loopback TCP there.
+WINDOWS = sys.platform == "win32"
+EXE = ".exe" if WINDOWS else ""
 
 
 class Session:
@@ -22,7 +27,7 @@ class Session:
         self.directory = directory
         self.info = directory / f"{name}.json"
         self.socket = directory / f"{name}.sock"
-        self.debug = binaries / "schnellui-debug"
+        self.debug = binaries / f"schnellui-debug{EXE}"
         self.log_path = directory / f"{name}.log"
         self.log = self.log_path.open("wb")
         env = os.environ.copy()
@@ -30,12 +35,12 @@ class Session:
             DISPLAY=":65535",
             WAYLAND_DISPLAY="schnellui-no-display",
             SCHNELLUI_DEBUG_SERVER="on",
-            SCHNELLUI_DEBUG_TRANSPORT="unix",
+            SCHNELLUI_DEBUG_TRANSPORT="tcp" if WINDOWS else "unix",
             SCHNELLUI_DEBUG_INFO=str(self.info),
             SCHNELLUI_DEBUG_SOCKET=str(self.socket),
             SCHNELLUI_AUTOCLOSE_MS=str(autoclose_ms),
         )
-        args = [str(binaries / app), "--scenario", scenario, "--scale", str(scale)]
+        args = [str(binaries / f"{app}{EXE}"), "--scenario", scenario, "--scale", str(scale)]
         if env_mode:
             env["SCHNELLUI_HEADLESS_WINDOWED"] = "1"
             args.append("--windowed")
@@ -167,7 +172,7 @@ def run(binaries, directory):
         disabled_env.update(SCHNELLUI_DEBUG_SERVER="off", DISPLAY=":65535",
                             WAYLAND_DISPLAY="schnellui-no-display")
         disabled = subprocess.run(
-            [str(binaries / "counter"), "--scenario", "counter_zero", "--headless-windowed"],
+            [str(binaries / f"counter{EXE}"), "--scenario", "counter_zero", "--headless-windowed"],
             env=disabled_env, capture_output=True, text=True, timeout=15,
         )
         assert disabled.returncode != 0, "headless host started without instrumentation"
@@ -186,8 +191,8 @@ def main():
     args = parser.parse_args()
     binaries = args.bin_dir.resolve()
     for name in ("counter", "todo", "schnellui-debug"):
-        if not (binaries / name).is_file():
-            parser.error(f"missing {binaries / name}; build the three packages first")
+        if not (binaries / f"{name}{EXE}").is_file():
+            parser.error(f"missing {binaries / name}{EXE}; build the three packages first")
     scratch_root = Path.home() / ".cache/agent-tmp"
     scratch_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="schnellui-live-", dir=scratch_root) as scratch:

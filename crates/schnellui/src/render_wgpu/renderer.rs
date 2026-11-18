@@ -37,6 +37,13 @@ fn wants_fallback(backend: Backend) -> bool {
     matches!(backend, Backend::Software)
 }
 
+/// The default wgpu instance, with wgpu's own environment overrides applied:
+/// `WGPU_BACKEND=dx12|vulkan|metal|gl` restricts the backends, and `WGPU_DEBUG` /
+/// `WGPU_VALIDATION` set the instance flags.
+fn new_instance() -> wgpu::Instance {
+    wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
+}
+
 /// sRGB → linear for one 8-bit channel (used for the clear color; the shaders do the
 /// same for instance colors so a straight-sRGB [`Color`] round-trips through the
 /// `Rgba8UnormSrgb` target — SOUL §7.2).
@@ -142,7 +149,7 @@ impl Renderer {
     /// [`RendererError::NoAdapter`] so the headless harness can **skip gracefully**
     /// when there is no GPU (SOUL §7.2). Mount may allocate (§4).
     pub fn try_new(width: u32, height: u32, backend: Backend) -> Result<Renderer, RendererError> {
-        let instance = wgpu::Instance::default();
+        let instance = new_instance();
         let (_adapter, device, queue) = request_adapter_device(&instance, backend, None)?;
 
         let (padded_bpr, readback) = create_target(&device, width, height);
@@ -333,7 +340,7 @@ impl SurfaceRenderer {
     ) -> Result<SurfaceRenderer, RendererError> {
         let width = width.max(1);
         let height = height.max(1);
-        let instance = wgpu::Instance::default();
+        let instance = new_instance();
         let surface = instance
             .create_surface(target)
             .map_err(|e| RendererError::NoSurface(e.to_string()))?;

@@ -6,6 +6,14 @@ export SCHNELLUI_DEBUG_SERVER=off
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
 export CARGO_INCREMENTAL=0
 
+# On Windows, Vulkan on an Intel Arc B580 (driver 101.9150) intermittently leaves
+# stale texels in the tile cache's picture, failing
+# tile_cache_matches_a_full_repaint_on_random_edits about one run in eight. DX12 on
+# the same GPU and WARP do not, so the gate pins DX12 unless the caller chose.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) export WGPU_BACKEND="${WGPU_BACKEND:-dx12}" ;;
+esac
+
 # Native core tests run serially because the signal graph is process-global.
 cargo fmt --all -- --check
 cargo test --locked \
@@ -15,7 +23,12 @@ cargo test --locked \
 # Run live apps with unusable display addresses, drive them through private debug
 # sockets, and verify offscreen pixels, remounts, session isolation, and cleanup.
 cargo build --locked -p counter -p todo -p schnellui-debug
-python3 scripts/test-headless-windowed.py
+# Windows' `python3` is often the Microsoft Store stub, which exits non-zero.
+PYTHON=python3
+if ! "$PYTHON" --version >/dev/null 2>&1; then
+    PYTHON=python
+fi
+"$PYTHON" scripts/test-headless-windowed.py
 
 cargo test --locked -p schnellui --features count-allocations \
     --test alloc_budget --test view_reactive_attrs --test text_area_edit_allocations \

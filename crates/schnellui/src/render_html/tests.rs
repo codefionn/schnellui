@@ -338,6 +338,8 @@ fn kitchen_sink_matches_the_golden_snapshot() {
         return;
     }
     let expected = std::fs::read_to_string(path).expect("golden snapshot is committed");
+    // A Windows checkout with `core.autocrlf` turns the committed LF into CRLF.
+    let expected = expected.replace("\r\n", "\n");
     assert!(
         actual.as_str() == expected,
         "kitchen_sink output changed; review the diff and regenerate with \

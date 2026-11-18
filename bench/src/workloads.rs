@@ -1094,8 +1094,13 @@ pub(crate) fn grouped_doc_text(n: usize) -> App {
         count: schnellui::signal::Signal<i64>,
     ) -> Column {
         let mut column = panel(depth);
+        // Taffy's flex pass allocates per child of every container it re-lays out,
+        // so each panel holds exactly FAN_OUT children at every n: small docs pad
+        // with empty columns instead of leaving panels narrower than large ones.
+        let mut children = 0;
         if depth == 0 {
             for i in items {
+                children += 1;
                 column = if i == n / 2 {
                     column.child(
                         Text::dynamic_into(move |b| {
@@ -1107,14 +1112,18 @@ pub(crate) fn grouped_doc_text(n: usize) -> App {
                     column.child(Text::new(paragraph(i)))
                 };
             }
-            return column;
+        } else {
+            let chunk = items.len().div_ceil(FAN_OUT).max(1);
+            let mut start = items.start;
+            while start < items.end {
+                let end = (start + chunk).min(items.end);
+                column = column.child(build(start..end, depth - 1, n, count));
+                children += 1;
+                start = end;
+            }
         }
-        let chunk = items.len().div_ceil(FAN_OUT).max(1);
-        let mut start = items.start;
-        while start < items.end {
-            let end = (start + chunk).min(items.end);
-            column = column.child(build(start..end, depth - 1, n, count));
-            start = end;
+        for _ in children..FAN_OUT {
+            column = column.child(Column::new());
         }
         column
     }

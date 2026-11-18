@@ -1385,7 +1385,7 @@ fn color_glyph_quad_draws_the_color_plane_untinted() {
 }
 
 /// Emoji shape to one glyph per cluster and draw in colour: a plain one, one with
-/// variation selector 16, a ZWJ family and a flag. Needs a colour emoji font on the
+/// variation selector 16, a ZWJ sequence and, where the font has one, a flag. Needs a colour emoji font on the
 /// machine (Noto Color Emoji, Segoe UI Emoji, Apple Color Emoji).
 #[test]
 fn emoji_shape_as_one_cluster_each_and_draw_in_color() {
@@ -1404,19 +1404,30 @@ fn emoji_shape_as_one_cluster_each_and_draw_in_color() {
 
     // Grinning face, red heart with VS16, rainbow flag (white flag, VS16, ZWJ, rainbow),
     // German flag (two regional indicators). Noto draws the family sequences as grey
-    // silhouettes, so they cannot stand in for the ZWJ case here.
-    let text = "\u{1F600}\u{2764}\u{FE0F}\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}\u{1F1E9}\u{1F1EA}";
-    let shaped = shaper.shape(text, size, None);
+    // silhouettes, so they cannot stand in for the ZWJ case here. Segoe UI Emoji has
+    // no country flags and draws the pair as two letters, so the flag is checked only
+    // where the font joins it into one glyph.
+    let flag = "\u{1F1E9}\u{1F1EA}";
+    let has_flags = shaper.shape(flag, size, None).glyphs.len() == 1;
+    if !has_flags {
+        eprintln!("emoji test: this machine's emoji font has no country flags");
+    }
+    let mut text = String::from("\u{1F600}\u{2764}\u{FE0F}\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}");
+    if has_flags {
+        text.push_str(flag);
+    }
+    let cells = if has_flags { 4 } else { 3 };
+    let shaped = shaper.shape(&text, size, None);
     assert_eq!(
         shaped.glyphs.len(),
-        4,
+        cells,
         "one glyph per emoji: {:?}",
         shaped.glyphs
     );
     let one = probe.width;
     assert!(
-        (shaped.width - 4.0 * one).abs() <= 4.0,
-        "four cells of {one}, got {}",
+        (shaped.width - cells as f32 * one).abs() <= 4.0,
+        "{cells} cells of {one}, got {}",
         shaped.width
     );
     for g in &shaped.glyphs {
@@ -1446,7 +1457,7 @@ fn emoji_shape_as_one_cluster_each_and_draw_in_color() {
     let frame = r.render_rgba8(&scene, &atlas);
     // Each emoji's cell holds ink, and the ink is not grey: a mask drawn in the white
     // text colour would have equal channels everywhere.
-    for cell in 0..4u32 {
+    for cell in 0..cells as u32 {
         let x0 = 8 + (cell as f32 * one) as u32;
         let x1 = (x0 + one as u32).min(w);
         let (mut inked, mut tinted) = (0, 0);
