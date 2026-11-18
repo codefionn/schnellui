@@ -929,9 +929,7 @@ pub fn dispatch_click(runtime: &Runtime, scene: &mut Scene, id: WidgetId) -> boo
             let cb = runtime.with(|rt| {
                 let mut rt = rt.borrow_mut();
                 let handlers = rt.handlers.get_mut(id)?;
-                if handlers.drag_start.is_none() {
-                    return None;
-                }
+                handlers.drag_start.as_ref()?;
                 handlers.click.take()
             });
             let Some(mut cb) = cb else {
