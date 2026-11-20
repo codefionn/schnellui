@@ -75,7 +75,7 @@ use schnellui::text::{GlyphAtlas, TextShaper};
 use schnellui::widgets::{BuildCtx, Theme, View};
 
 pub use schnellui::widgets::Context;
-pub use windowed::RedrawSignal;
+pub use windowed::{RedrawSignal, WindowRequest};
 
 /// One wheel notch of vertical scroll, in logical pixels (SOUL §3.2 scroll). Both an
 /// inbound AccessKit `ScrollUp`/`ScrollDown` action ([`App::dispatch_action`]) and a
@@ -740,6 +740,12 @@ pub struct App {
     /// Optional native window-title source for dynamic application metadata
     /// such as an OSC 0/2 terminal title.
     window_title_provider: Option<Box<dyn FnMut() -> String + 'static>>,
+    /// Whether the native window wears the system's title bar and border,
+    /// polled on redraw. `None` keeps them.
+    window_decorations: Option<Box<dyn FnMut() -> bool + 'static>>,
+    /// Where a primary press on a window without the system frame moves the
+    /// window, in logical px. `None` has no such place.
+    window_move_area: Option<Box<dyn FnMut(scene::Point) -> bool + 'static>>,
     /// Explicit native interaction tracing configuration. The window host also
     /// accepts `SCHNELLUI_INTERACTION_TRACE` when this is absent.
     interaction_trace: Option<InteractionTrace>,

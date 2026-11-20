@@ -6408,6 +6408,7 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "wasm-bindgen",
+ "wayland-client",
  "wgpu",
  "windows-sys 0.61.2",
  "winit",

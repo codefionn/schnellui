@@ -49,6 +49,7 @@ arboard.workspace = true
 ashpd.workspace = true
 async-io.workspace = true
 futures-util.workspace = true
+wayland-client.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

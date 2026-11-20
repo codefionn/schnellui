@@ -134,6 +134,8 @@ impl HeadlessHost {
                 clipboard: HostClipboard::Memory(None),
                 headless: true,
                 title: "headless".into(),
+                decorated: true,
+                frame: Default::default(),
                 window: None,
                 renderer: None,
                 accessibility: None,

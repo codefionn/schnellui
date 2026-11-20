@@ -14,12 +14,16 @@
 //! the app's window is unfocused: the XDG portal on Linux, `RegisterHotKey` on
 //! Windows, Carbon hot keys on macOS. Call [`set_app_id`] first on Linux.
 //!
+//! [`windows_always_undecorated`] says whether the window system leaves windows
+//! without a title bar, as GNOME on Wayland does.
+//!
 //! [`GlobalMenu`] asks the system to show a menu bar outside the window, where
 //! the system has one (macOS). [`GlobalMenu::supported`] says whether it does;
 //! schnellui never draws a menu bar in the window.
 
 mod app_id;
 mod clipboard;
+mod decorations;
 mod folder_picker;
 mod global_menu;
 mod global_shortcuts;
@@ -28,6 +32,7 @@ mod preferences;
 
 pub use app_id::{app_id, is_valid_app_id, portal_app_id, set_app_id, AppIdError};
 pub use clipboard::{ClipboardError, ClipboardImage, SystemClipboard};
+pub use decorations::windows_always_undecorated;
 pub use folder_picker::pick_folder;
 pub use global_menu::{
     key_equivalent, GlobalMenu, GlobalMenuError, GlobalMenuEvent, KeyEquivalent, Menu, MenuAction,

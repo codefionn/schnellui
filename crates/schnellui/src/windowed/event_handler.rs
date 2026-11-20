@@ -8,8 +8,10 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
         if self.window.is_some() {
             return;
         }
+        self.decorated = self.app.window_decorated();
         let attrs = Window::default_attributes()
             .with_title(self.title.clone())
+            .with_decorations(self.decorated)
             // AccessKit must attach before the native window is shown. Creating
             // it visible first silently prevents reliable platform registration.
             .with_visible(false)
@@ -90,6 +92,7 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
         window.set_visible(true);
         self.accessibility = Some(accessibility);
         self.window = Some(window);
+        self.note_window_maximized();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -258,6 +261,7 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
                     }
                 }
             }
+            PlatformEvent::Window(request) => self.apply_window_request(event_loop, request),
             PlatformEvent::Debug(request) => {
                 self.remount_trigger = "debug_instrumentation";
                 let reply = self.handle_debug_command(Some(event_loop), request.command);
@@ -772,6 +776,15 @@ impl WindowedApp {
         // A button let go after the pointer left the window happens nowhere:
         // it must not hover or reveal a tooltip at the last inside position.
         let p = self.resting_pointer();
+        // Without the system frame, the window's edges and the app's title
+        // bar move and resize it; the window system owns the press from here.
+        if button == MouseButton::Left
+            && state == ElementState::Pressed
+            && self.raw_pointer_capture.is_empty()
+            && self.begin_frame_drag(p)
+        {
+            return EventTail::Skip;
+        }
         let scrollbar_released = if button == MouseButton::Left {
             self.left_pointer_down = state == ElementState::Pressed;
             if state == ElementState::Released {
@@ -1229,6 +1242,9 @@ impl WindowedApp {
 
     pub(super) fn on_resized(&mut self, size: PhysicalSize<u32>) -> EventTail {
         let _ = self.app.dismiss_context_menu();
+        // Before the remount hook sees the new size, so the view it builds
+        // knows whether the window is maximized.
+        self.note_window_maximized();
         let (pw, ph) = (size.width.max(1), size.height.max(1));
         if let Some(r) = &mut self.renderer {
             r.resize(pw, ph);
@@ -1249,6 +1265,7 @@ impl WindowedApp {
         // frame behind the controller.
         self.poll_remount();
         self.sync_window_title();
+        self.sync_window_decorations();
         if self.app.advance_theme_transition() {
             self.sync_renderer_after_theme_rebuild();
         }

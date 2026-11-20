@@ -508,6 +508,17 @@ impl WindowedApp {
         self.accessibility_full_update_pending = true;
     }
 
+    pub(super) fn sync_window_decorations(&mut self) {
+        let next = self.app.window_decorated();
+        if next == self.decorated {
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_decorations(next);
+        }
+        self.decorated = next;
+    }
+
     /// Sends the current complete semantic tree when a platform first activates
     /// accessibility. The app has already completed an initial layout before the
     /// adapter is made visible, so bounds are valid even before the first redraw.
@@ -921,7 +932,18 @@ impl WindowedApp {
         self.cursor_synced_key = Some(self.cursor_sync_state());
         // A pointer outside the window hits nothing: only a capture (dialog
         // move/resize, a held drag) still decides the icon.
-        let next = self.app.cursor_at(self.resting_pointer());
+        let resting = self.resting_pointer();
+        // The resize band of a window without the system frame shows the
+        // edge it grabs, unless a held press belongs to something else.
+        let edge = if self.raw_pointer_capture.is_empty() && !self.left_pointer_down {
+            self.resize_edge_at(resting)
+        } else {
+            None
+        };
+        let next = match edge {
+            Some(direction) => frame::resize_cursor(direction),
+            None => self.app.cursor_at(resting),
+        };
         if next == self.cursor_icon {
             return;
         }
@@ -1002,6 +1024,8 @@ impl WindowedApp {
             "schema": "schnellui-debug-v1",
             "mode": if self.headless { "headless_windowed" } else { "windowed" },
             "title": self.title,
+            "decorated": self.decorated,
+            "maximized": self.frame.maximized,
             "viewport": { "width": viewport.width, "height": viewport.height },
             "scale": self.app.scale(),
             "cursor": point_json(point),
@@ -1996,6 +2020,8 @@ pub fn run(
         clipboard: HostClipboard::Native(SystemClipboard::new()),
         headless: false,
         title: title.to_string(),
+        decorated: true,
+        frame: Default::default(),
         window: None,
         renderer: None,
         accessibility: None,
@@ -2080,6 +2106,8 @@ pub(crate) fn run_headless(
         clipboard: HostClipboard::Memory(None),
         headless: true,
         title: title.to_string(),
+        decorated: true,
+        frame: Default::default(),
         window: None,
         renderer: None,
         accessibility: None,
@@ -2212,6 +2240,9 @@ pub(crate) fn run_headless(
             Some(PlatformEvent::AccessKit(_)) => {}
             // A headless host has no window to raise.
             Some(PlatformEvent::FocusRequested) => {}
+            // Nor one to minimize or maximize; closing ends the run.
+            Some(PlatformEvent::Window(WindowRequest::Close)) => break,
+            Some(PlatformEvent::Window(_)) => {}
             None => {}
         }
     }

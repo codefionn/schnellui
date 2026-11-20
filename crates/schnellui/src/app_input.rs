@@ -229,6 +229,48 @@ impl App {
         self.window_title_provider = Some(Box::new(provider));
     }
 
+    /// Opens the native window with the system's title bar and border, or
+    /// without them when `decorated` is `false`. An undecorated window has no
+    /// frame to drag or close, so the app draws its own controls. Set before
+    /// [`App::run_windowed`] to open the window that way; a remount that sets
+    /// it applies the new value to the open window. Windows are decorated by
+    /// default. [`crate::platform::windows_always_undecorated`] says whether the
+    /// system would draw a frame at all.
+    pub fn set_window_decorations(&mut self, decorated: bool) {
+        self.window_decorations = Some(Box::new(move || decorated));
+    }
+
+    /// Like [`App::set_window_decorations`], with a source polled during
+    /// redraw, such as a signal read. The platform window changes only when
+    /// the value does.
+    pub fn set_window_decorations_provider(&mut self, provider: impl FnMut() -> bool + 'static) {
+        self.window_decorations = Some(Box::new(provider));
+    }
+
+    /// Says where a press of the primary button moves a window opened without
+    /// the system frame ([`App::set_window_decorations`]), such as the empty
+    /// part of the app's own title bar. `area` gets the logical point. A press
+    /// there that lands on a control (a button, a tab, a field) or in an overlay
+    /// still goes to it; one on empty space, text or an icon hands the move to
+    /// the window system, and a second press soon after maximizes the window
+    /// or gives it its former size back. Without the system frame the host also
+    /// resizes the window from a thin band along its edges.
+    pub fn set_window_move_area(&mut self, area: impl FnMut(scene::Point) -> bool + 'static) {
+        self.window_move_area = Some(Box::new(area));
+    }
+
+    /// Whether `p` lies where [`App::set_window_move_area`] moves the window.
+    pub(crate) fn in_window_move_area(&mut self, p: scene::Point) -> bool {
+        self.window_move_area.as_mut().is_some_and(|area| area(p))
+    }
+
+    /// Whether the native window should wear the system's frame now.
+    pub(crate) fn window_decorated(&mut self) -> bool {
+        self.window_decorations
+            .as_mut()
+            .is_none_or(|decorated| decorated())
+    }
+
     /// Dispatches one resolved application shortcut. Returns `true` when a
     /// handler was registered for the chord and took it.
     pub fn dispatch_shortcut(&mut self, shortcut: Shortcut) -> bool {

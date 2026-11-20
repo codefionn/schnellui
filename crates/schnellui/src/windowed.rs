@@ -46,6 +46,8 @@ enum PlatformEvent {
     RedrawRequested,
     /// The host asked to bring the window to the front, e.g. after a click on a notification.
     FocusRequested,
+    /// The app's own title bar asked the window to minimize, maximize or close.
+    Window(WindowRequest),
     Debug(DebugRequest),
 }
 
@@ -57,6 +59,20 @@ struct RedrawSignalInner {
     pending: AtomicBool,
     /// How many times `request_focus` was called; tests read it back.
     focus_requests: std::sync::atomic::AtomicUsize,
+    /// Whether the window is maximized, as the host last saw it.
+    maximized: AtomicBool,
+}
+
+/// What an app that draws its own title bar asks of the native window, through
+/// [`RedrawSignal::request_window`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowRequest {
+    /// Hides the window to the taskbar or dock.
+    Minimize,
+    /// Maximizes the window, or gives a maximized one its former size back.
+    ToggleMaximize,
+    /// Closes the window, as the system's close button would.
+    Close,
 }
 
 #[derive(Clone)]
@@ -117,6 +133,29 @@ impl RedrawSignal {
                 wake.send(PlatformEvent::FocusRequested);
             }
         }
+    }
+
+    /// Asks the window host to minimize, maximize or close the window. An app
+    /// that opens its window without the system frame
+    /// ([`App::set_window_decorations`]) calls this from its own buttons.
+    /// Callable from any thread; a headless host only follows `Close`.
+    pub fn request_window(&self, request: WindowRequest) {
+        if let Ok(installed) = self.0.wake.lock() {
+            if let Some(wake) = installed.as_ref() {
+                wake.send(PlatformEvent::Window(request));
+            }
+        }
+    }
+
+    /// Whether the window is maximized, as the host last saw it. The host
+    /// updates it before the remount hook sees the resize that maximizing
+    /// brings, so a view built for the new size can show the restore button.
+    pub fn window_maximized(&self) -> bool {
+        self.0.maximized.load(Ordering::Acquire)
+    }
+
+    fn note_maximized(&self, maximized: bool) {
+        self.0.maximized.store(maximized, Ordering::Release);
     }
 
     /// How many times [`RedrawSignal::request_focus`] was called on this signal or its clones.
@@ -496,6 +535,10 @@ struct WindowedApp {
     clipboard: HostClipboard,
     headless: bool,
     title: String,
+    /// Whether the native window wears the system frame, as last applied.
+    decorated: bool,
+    /// Moving and resizing a window that has no system frame.
+    frame: frame::FrameState,
     window: Option<Arc<Window>>,
     renderer: Option<window_renderer::WindowRenderer>,
     /// Native accessibility bridge. It is constructed while the window is
@@ -576,6 +619,7 @@ struct WindowedApp {
 }
 
 mod event_handler;
+mod frame;
 // Also built for the crate's own tests, which drive the real pointer and key paths.
 #[cfg(any(test, feature = "fuzzing"))]
 #[cfg_attr(not(feature = "fuzzing"), allow(dead_code))]

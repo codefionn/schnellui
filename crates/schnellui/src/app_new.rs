@@ -156,6 +156,8 @@ impl App {
             redraw_signal: RedrawSignal::default(),
             pending_clipboard: None,
             window_title_provider: None,
+            window_decorations: None,
+            window_move_area: None,
             interaction_trace: None,
         };
         // A hook-built replacement inside `with_remount_engine` takes over the

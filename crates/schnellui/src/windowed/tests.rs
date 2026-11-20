@@ -411,6 +411,8 @@ fn windowed_host(
         clipboard: HostClipboard::Memory(None),
         headless: true,
         title: "test".into(),
+        decorated: true,
+        frame: Default::default(),
         window: None,
         renderer: None,
         accessibility: None,
@@ -3501,5 +3503,51 @@ mod remount_host_settings {
         );
         host.app.note_input();
         assert_eq!(touched.get(), 1);
+    }
+
+    #[test]
+    fn window_decorations_survive_a_hook_that_does_not_set_them() {
+        let mut first = plain();
+        first.set_window_decorations(false);
+        let mut host = remounted(first, plain());
+        host.sync_window_decorations();
+        assert!(!host.decorated);
+        assert_eq!(host.debug_status()["decorated"], false);
+    }
+
+    #[test]
+    fn a_hook_can_put_the_window_frame_back() {
+        let mut first = plain();
+        first.set_window_decorations(false);
+        let mut next = plain();
+        next.set_window_decorations(true);
+        let mut host = remounted(first, next);
+        host.decorated = false;
+        host.sync_window_decorations();
+        assert!(host.decorated);
+    }
+
+    #[test]
+    fn the_window_move_area_survives_a_hook_that_does_not_set_it() {
+        let mut first = plain();
+        first.set_window_move_area(|p| p.y < 30.0);
+        let mut host = remounted(first, plain());
+        let at = |y| schnellui::scene::Point { x: 5.0, y };
+        assert!(host.app.in_window_move_area(at(5.0)));
+        assert!(!host.app.in_window_move_area(at(50.0)));
+    }
+
+    #[test]
+    fn a_decorations_provider_is_followed_on_redraw() {
+        let decorated = Rc::new(Cell::new(true));
+        let mut first = plain();
+        let d = decorated.clone();
+        first.set_window_decorations_provider(move || d.get());
+        let mut host = windowed_host(first, None);
+        host.sync_window_decorations();
+        assert!(host.decorated);
+        decorated.set(false);
+        let _ = host.on_redraw_requested();
+        assert!(!host.decorated);
     }
 }

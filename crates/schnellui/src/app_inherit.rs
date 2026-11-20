@@ -492,13 +492,16 @@ impl App {
         self.hot_reload = previous.hot_reload.take();
         self.redraw_signal = previous.redraw_signal.clone();
         self.window_title_provider = previous.window_title_provider.take();
+        self.window_decorations = previous.window_decorations.take();
+        self.window_move_area = previous.window_move_area.take();
         self.interaction_trace = previous.interaction_trace.take();
     }
 
     /// Fills in the host-level settings a remount hook did not set on the app
     /// it built, from the running app. A hook rebuilds the view, not the host
     /// configuration, so a setting made once at startup (Escape exits, the clear
-    /// color, shortcuts, the global menu, redraw pacing, the title provider)
+    /// color, shortcuts, the global menu, redraw pacing, the title provider,
+    /// window decorations and the area that moves the window)
     /// must not vanish with the first remount. Whatever the hook set itself
     /// wins; shortcuts merge per chord.
     ///
@@ -524,6 +527,12 @@ impl App {
         }
         if self.window_title_provider.is_none() {
             self.window_title_provider = previous.window_title_provider.take();
+        }
+        if self.window_decorations.is_none() {
+            self.window_decorations = previous.window_decorations.take();
+        }
+        if self.window_move_area.is_none() {
+            self.window_move_area = previous.window_move_area.take();
         }
         if self.navigation_handler.is_none() {
             self.navigation_handler = previous.navigation_handler.take();

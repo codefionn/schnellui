@@ -124,3 +124,8 @@ fn user_locale() -> Option<Locale> {
 pub(crate) fn register_app_id(_id: &str) -> Result<bool, String> {
     Ok(false)
 }
+
+/// The window manager or the system draws every window's frame here.
+pub(crate) fn windows_always_undecorated() -> bool {
+    false
+}
