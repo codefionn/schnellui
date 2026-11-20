@@ -60,13 +60,13 @@ objc2-foundation.workspace = true
 windows-sys.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-chromiumoxide.workspace = true
-futures.workspace = true
-tokio.workspace = true
+chromiumoxide = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen.workspace = true
-js-sys.workspace = true
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Closure-scoped allocation counter for the zero-alloc budget tests (§4.1).
@@ -83,8 +83,17 @@ debug-instrumentation = []
 # tests measure `allocs + bytes` and assert literal zero on the re-render path.
 # Also links the counting allocator for `tests/alloc_budget.rs`.
 count-allocations = ["dep:allocation-counter"]
+# Native DOM/CSS HTML renderer (`schnellui::render_html`) and its headless
+# Chromium screenshot/scenario support on non-wasm32 targets.
+render-html = [
+    "dep:chromiumoxide",
+    "dep:futures",
+    "dep:tokio",
+    "dep:wasm-bindgen",
+    "dep:js-sys",
+]
 # Server-side rendering entry points of the HTML renderer.
-ssr = []
+ssr = ["render-html"]
 # Headless host and retained-state checks for property-based fuzzing
 # (`schnellui::testing::fuzz`, used by the `schnellui-fuzz` crate).
 fuzzing = []

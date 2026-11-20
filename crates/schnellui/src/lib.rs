@@ -37,6 +37,7 @@ pub mod layout;
 pub mod localization;
 pub mod motion;
 pub mod platform;
+#[cfg(feature = "render-html")]
 pub mod render_html;
 pub mod render_soft;
 pub mod render_wgpu;

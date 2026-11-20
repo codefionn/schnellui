@@ -19,6 +19,7 @@ cargo fmt --all -- --check
 cargo test --locked \
     -p schnellui-view-parser -p schnellui-macro -p schnellui \
     -p schnellui-icons-md -p schnellui-bench -- --test-threads=1
+cargo test --locked -p schnellui --features render-html,ssr --lib render_html -- --test-threads=1
 
 # Run live apps with unusable display addresses, drive them through private debug
 # sockets, and verify offscreen pixels, remounts, session isolation, and cleanup.
