@@ -18,7 +18,6 @@ use winit::window::{CursorIcon as WinitCursorIcon, Theme as WinitTheme, Window, 
 use serde_json::{json, Value};
 
 use crate::platform::{watch_preferences, PreferenceChange, SystemClipboard};
-use schnellui::render_wgpu::{Backend, SurfaceRenderer};
 use schnellui::scene::{Point, Size, WidgetId as SceneWidgetId, WidgetKind};
 use schnellui::widgets::TextPointerAction;
 use schnellui::widgets::{CursorIcon as UiCursorIcon, DragRelease as UiDragRelease};
@@ -498,7 +497,7 @@ struct WindowedApp {
     headless: bool,
     title: String,
     window: Option<Arc<Window>>,
-    renderer: Option<SurfaceRenderer>,
+    renderer: Option<window_renderer::WindowRenderer>,
     /// Native accessibility bridge. It is constructed while the window is
     /// still hidden, receives every winit event before the application, and
     /// publishes the retained AccessKit tree to AT-SPI/UIA/NSAccessibility.
@@ -582,6 +581,7 @@ mod event_handler;
 #[cfg_attr(not(feature = "fuzzing"), allow(dead_code))]
 pub(crate) mod headless;
 mod host;
+mod window_renderer;
 pub(crate) use host::{run, run_headless};
 #[cfg(test)]
 mod tests;

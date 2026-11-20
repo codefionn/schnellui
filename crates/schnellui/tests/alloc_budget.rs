@@ -36,6 +36,7 @@
 
 use schnellui::a11y::Role;
 use schnellui::layout::{Align, Container, ContainerStyle};
+use schnellui::render_soft::SoftRenderer;
 use schnellui::scene::{Color, Primitive, Rect, WidgetKind};
 use schnellui::signal::create_signal;
 use schnellui::widgets::{
@@ -121,6 +122,34 @@ fn repeated_rerenders_stay_zero() {
         });
         assert_eq!(info.count_total, 0, "alloc on rerender to {v}");
         assert_eq!(info.bytes_total, 0, "bytes on rerender to {v}");
+    }
+}
+
+/// The covenant holds through the CPU renderer too: it draws the frame's damaged
+/// tiles into its own picture, so the whole `set_signal + frame + render` loop runs
+/// without touching the heap.
+#[test]
+fn rerender_drawn_on_the_cpu_allocates_nothing() {
+    let mut app = paint_scenario(320, 240);
+    let mut renderer = SoftRenderer::new(640, 480);
+    renderer.set_scale(2.0);
+    for v in [1i64, 2] {
+        app.set_signal("count", v);
+        app.frame();
+        renderer.render(app.scene(), app.glyph_atlas());
+    }
+    for v in [3i64, 4, 5] {
+        let info = allocation_counter::measure(|| {
+            app.set_signal("count", std::hint::black_box(v));
+            app.frame();
+            std::hint::black_box(renderer.render(app.scene(), app.glyph_atlas()));
+        });
+        assert_eq!(info.count_total, 0, "alloc on CPU rerender to {v}");
+        assert_eq!(info.bytes_total, 0, "bytes on CPU rerender to {v}");
+        assert!(
+            renderer.last_tile_cache_stats().rasterized > 0,
+            "the edit repaints"
+        );
     }
 }
 

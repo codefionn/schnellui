@@ -1,7 +1,6 @@
 //! Tests for the per-node retained instance ranges: byte-proportionality over a
 //! large document and an incremental-vs-fresh equivalence property test.
 
-use crate::render_wgpu::gpu_core::GpuCore;
 use crate::render_wgpu::types::Buf;
 use crate::render_wgpu::*;
 use schnellui::scene::{Color, LayoutBox, Point, Primitive, Rect, Scene, WidgetId, WidgetKind};
@@ -89,7 +88,7 @@ fn document(scrolled: bool, count: usize) -> (Scene, WidgetId, Vec<WidgetId>) {
     (scene, scroll, rows)
 }
 
-fn doc_atlas() -> GlyphAtlas {
+pub(crate) fn doc_atlas() -> GlyphAtlas {
     let mut atlas = GlyphAtlas::new(32, 32);
     atlas.write_coverage(
         schnellui::text::AtlasRect {
@@ -123,7 +122,7 @@ fn measure(scrolled: bool, rows: usize) -> Option<Measured> {
     scene.set_color(row_ids[3], Color::rgb(200, 30, 30));
     let _ = r.render_rgba8(&scene, &atlas);
     let hover = uploaded(&r);
-    assert_eq!(r.core.last_upload_work.full_gathers, 0);
+    assert_eq!(r.core.inst.last_upload_work.full_gathers, 0);
     scene.clear_dirty();
 
     // One scroll step of one row.
@@ -132,7 +131,7 @@ fn measure(scrolled: bool, rows: usize) -> Option<Measured> {
         scene.set_scroll_offset(scroll, Point { x: 0.0, y: ROW_H });
         let _ = r.render_rgba8(&scene, &atlas);
         scroll_step = uploaded(&r);
-        assert_eq!(r.core.last_upload_work.full_gathers, 0);
+        assert_eq!(r.core.inst.last_upload_work.full_gathers, 0);
         scene.clear_dirty();
     }
 
@@ -172,7 +171,7 @@ fn measure(scrolled: bool, rows: usize) -> Option<Measured> {
     scene.replace_primitives(moved, shifted);
     let _ = r.render_rgba8(&scene, &atlas);
     let moved_node = uploaded(&r);
-    assert_eq!(r.core.last_upload_work.full_gathers, 0);
+    assert_eq!(r.core.inst.last_upload_work.full_gathers, 0);
 
     eprintln!(
         "UPLOAD BYTES scrolled={scrolled} rows={rows} first={first} hover={hover} \
@@ -273,7 +272,7 @@ fn terminal_row_echo_reencodes_and_uploads_one_row() {
     // Whole-node path: the node is re-encoded, `patch_slot` finds the changed span.
     scene.paint_mut(term).primitives[row.clone()].copy_from_slice(&term_row(30, 1));
     let _ = r.render_rgba8(&scene, &atlas);
-    let whole = r.core.last_upload_work;
+    let whole = r.core.inst.last_upload_work;
     scene.clear_dirty();
 
     // Ranged path, twice: the first ranged frame builds the primitive map.
@@ -283,7 +282,7 @@ fn terminal_row_echo_reencodes_and_uploads_one_row() {
             .paint_range_mut(term, row.clone())
             .copy_from_slice(&term_row(30, phase));
         let _ = r.render_rgba8(&scene, &atlas);
-        ranged = r.core.last_upload_work;
+        ranged = r.core.inst.last_upload_work;
         scene.clear_dirty();
     }
     eprintln!(
@@ -314,7 +313,7 @@ fn terminal_row_echo_reencodes_and_uploads_one_row() {
         color: Color::rgb(255, 255, 0),
     };
     let _ = r.render_rgba8(&scene, &atlas);
-    let typed_work = r.core.last_upload_work;
+    let typed_work = r.core.inst.last_upload_work;
     eprintln!(
         "TERMINAL TYPE one glyph: {}B / {} prims encoded",
         typed_work.bytes.instance_bytes, typed_work.primitives_encoded
@@ -345,7 +344,7 @@ fn terminal_row_echo_reencodes_and_uploads_one_row() {
         },
     );
     let _ = r.render_rgba8(&scene, &atlas);
-    let inserted = r.core.last_upload_work;
+    let inserted = r.core.inst.last_upload_work;
     eprintln!(
         "TERMINAL INSERT (unpadded) one glyph: {}B / {} prims encoded",
         inserted.bytes.instance_bytes, inserted.primitives_encoded
@@ -382,8 +381,8 @@ fn paint_dirty_hidden_scroll_does_not_force_a_full_gather() {
     scene.replace_primitives(inner, row_prims(0, Color::rgb(90, 90, 90)));
     scene.set_visible(hidden, false);
     let _ = r.render_rgba8(&scene, &atlas);
-    assert_eq!(r.core.last_upload_work.full_gathers, 1);
-    assert!(!r.core.fragments.by_node.contains_key(&hidden));
+    assert_eq!(r.core.inst.last_upload_work.full_gathers, 1);
+    assert!(!r.core.inst.fragments.by_node.contains_key(&hidden));
     scene.clear_dirty();
 
     // The hidden scroll repaints alongside a visible row.
@@ -391,7 +390,7 @@ fn paint_dirty_hidden_scroll_does_not_force_a_full_gather() {
     scene.replace_primitives(rows[3], row_prims(3, Color::rgb(200, 0, 0)));
     assert!(scene.paint_dirty().contains(&hidden));
     let got = r.render_rgba8(&scene, &atlas);
-    let work = r.core.last_upload_work;
+    let work = r.core.inst.last_upload_work;
     assert_eq!(work.full_gathers, 0, "hidden scroll forced a full gather");
     assert_eq!(work.nodes_patched, 1);
     assert_eq!(work.scroll_regions, 0);
@@ -431,10 +430,10 @@ fn scroll_step_uploads_visible_content_not_the_document() {
 
 // --- incremental vs fresh equivalence ---------------------------------------------
 
-struct Rng(u64);
+pub(crate) struct Rng(pub(crate) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         // xorshift64*
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
@@ -442,15 +441,15 @@ impl Rng {
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    fn below(&mut self, n: usize) -> usize {
+    pub(crate) fn below(&mut self, n: usize) -> usize {
         (self.next() >> 33) as usize % n
     }
 
-    fn unit(&mut self) -> f32 {
+    pub(crate) fn unit(&mut self) -> f32 {
         (self.next() >> 40) as f32 / (1u64 << 24) as f32
     }
 
-    fn color(&mut self) -> Color {
+    pub(crate) fn color(&mut self) -> Color {
         Color::rgba(
             self.below(256) as u8,
             self.below(256) as u8,
@@ -460,12 +459,12 @@ impl Rng {
     }
 }
 
-struct World {
-    scene: Scene,
-    nodes: Vec<WidgetId>,
-    scrolls: Vec<WidgetId>,
-    overlays: Vec<WidgetId>,
-    image: (f32, f32),
+pub(crate) struct World {
+    pub(crate) scene: Scene,
+    pub(crate) nodes: Vec<WidgetId>,
+    pub(crate) scrolls: Vec<WidgetId>,
+    pub(crate) overlays: Vec<WidgetId>,
+    pub(crate) image: (f32, f32),
 }
 
 fn random_rect(rng: &mut Rng, max: f32) -> Rect {
@@ -529,7 +528,7 @@ fn leaf_kind(rng: &mut Rng) -> WidgetKind {
 
 /// About 300 nodes: plain containers, two scrolls (one with a nested scroll) and two
 /// overlays, every leaf with random paint and a random layout box.
-fn build_world(rng: &mut Rng) -> World {
+pub(crate) fn build_world(rng: &mut Rng) -> World {
     let mut scene = Scene::new();
     let image = scene
         .images_mut()
@@ -622,7 +621,7 @@ fn build_world(rng: &mut Rng) -> World {
     }
 }
 
-fn mutate(world: &mut World, rng: &mut Rng) -> &'static str {
+pub(crate) fn mutate(world: &mut World, rng: &mut Rng) -> &'static str {
     world.nodes.retain(|&id| world.scene.node(id).is_some());
     let pick = |rng: &mut Rng, nodes: &[WidgetId]| nodes[rng.below(nodes.len())];
     let op = rng.below(100);
@@ -816,8 +815,8 @@ fn ranged_edits_match_a_full_gather() {
             }
         };
         let got = inc.render_rgba8(&world.scene, &atlas);
-        ranged += inc.core.last_upload_work.ranges_patched;
-        gathers += inc.core.last_upload_work.full_gathers;
+        ranged += inc.core.inst.last_upload_work.ranges_patched;
+        gathers += inc.core.inst.last_upload_work.full_gathers;
         full.core.invalidate_retained();
         let want = full.render_rgba8(&world.scene, &atlas);
         assert_same_instances(&inc, &full, &format!("step {step} ({op})"));
@@ -835,24 +834,26 @@ fn ranged_edits_match_a_full_gather() {
 /// slot's position carries no data: a scroll re-walk leaves those of the nodes it
 /// skips (outside a child index window) where they were.
 fn assert_same_instances(inc: &Renderer, full: &Renderer, what: &str) {
-    let (a, b) = (&inc.core, &full.core);
+    let (a, b) = (&inc.core.inst, &full.core.inst);
     for (&id, &fb) in &b.fragments.by_node {
         let Some(fa) = a.fragments.get(&id) else {
             panic!("{what}: node missing from the incremental table");
         };
         let fb = &b.fragments.frags[fb as usize];
         assert_eq!(fa.live, fb.live, "{what}: live counts of {id:?}");
-        let slice =
-            |c: &GpuCore, f: &crate::render_wgpu::types::GpuFragment, buf: Buf| -> Vec<u8> {
-                let r = f.range(buf);
-                let live = f.live[buf as usize] as usize;
-                let s = r.start as usize;
-                match buf {
-                    Buf::Quad => bytemuck::cast_slice(&c.quad_scratch[s..s + live]).to_vec(),
-                    Buf::Glyph => bytemuck::cast_slice(&c.glyph_scratch[s..s + live]).to_vec(),
-                    Buf::Image => bytemuck::cast_slice(&c.image_scratch[s..s + live]).to_vec(),
-                }
-            };
+        let slice = |c: &crate::render_wgpu::instances::Instances,
+                     f: &crate::render_wgpu::types::GpuFragment,
+                     buf: Buf|
+         -> Vec<u8> {
+            let r = f.range(buf);
+            let live = f.live[buf as usize] as usize;
+            let s = r.start as usize;
+            match buf {
+                Buf::Quad => bytemuck::cast_slice(&c.quad_scratch[s..s + live]).to_vec(),
+                Buf::Glyph => bytemuck::cast_slice(&c.glyph_scratch[s..s + live]).to_vec(),
+                Buf::Image => bytemuck::cast_slice(&c.image_scratch[s..s + live]).to_vec(),
+            }
+        };
         for buf in crate::render_wgpu::types::BUFS {
             assert!(
                 slice(a, fa, buf) == slice(b, fb, buf),
@@ -919,11 +920,11 @@ fn run_equivalence(seed: u64, steps: usize) {
     for step in 0..steps {
         let op = mutate(&mut world, &mut rng);
         let got = inc.render_rgba8(&world.scene, &atlas);
-        gathers += inc.core.last_upload_work.full_gathers;
-        regions += inc.core.last_upload_work.scroll_regions;
-        grown += inc.core.last_upload_work.grown_slots;
-        ranged += inc.core.last_upload_work.ranges_patched;
-        incremental_frames += 1 - inc.core.last_upload_work.full_gathers;
+        gathers += inc.core.inst.last_upload_work.full_gathers;
+        regions += inc.core.inst.last_upload_work.scroll_regions;
+        grown += inc.core.inst.last_upload_work.grown_slots;
+        ranged += inc.core.inst.last_upload_work.ranges_patched;
+        incremental_frames += 1 - inc.core.inst.last_upload_work.full_gathers;
         full.core.invalidate_retained();
         let want = full.render_rgba8(&world.scene, &atlas);
         assert_same_instances(&inc, &full, &format!("step {step} ({op})"));
@@ -1229,7 +1230,7 @@ fn repaint_of_adjacent_nodes_is_one_instance_write() {
         scene.replace_primitives(*leaf, prims(i, Color::rgb(200, 30, 30)));
     }
     let incremental = renderer.render_rgba8(&scene, &atlas);
-    let work = renderer.core.last_upload_work;
+    let work = renderer.core.inst.last_upload_work;
     assert_eq!(work.full_gathers, 0);
     assert_eq!(work.nodes_patched, 2000);
     assert_eq!(work.instance_writes, 1);
@@ -1245,7 +1246,7 @@ fn repaint_of_adjacent_nodes_is_one_instance_write() {
         scene.replace_primitives(leaves[i], prims(i, Color::WHITE));
     }
     renderer.render_rgba8(&scene, &atlas);
-    let work = renderer.core.last_upload_work;
+    let work = renderer.core.inst.last_upload_work;
     assert_eq!((work.instance_writes, work.instances_written), (2, 2));
     assert_eq!(renderer.last_tile_cache_stats().rasterized, 2);
 }
@@ -1296,18 +1297,23 @@ fn one_changed_node_hashes_its_instances_not_the_scene() {
     let (mut scene, leaves) = grid_scene();
     renderer.render_rgba8(&scene, &atlas);
     let core = &renderer.core;
-    let total = core.quad_scratch.len() + core.glyph_scratch.len() + core.image_scratch.len();
+    let total = core.inst.quad_scratch.len()
+        + core.inst.glyph_scratch.len()
+        + core.inst.image_scratch.len();
     assert!(total >= 14_000, "{total} instances");
-    assert_eq!(renderer.tiles.instances_hashed, total);
+    assert_eq!(renderer.tiles.damage.instances_hashed, total);
     scene.clear_dirty();
 
     renderer.render_rgba8(&scene, &atlas);
-    assert_eq!(renderer.tiles.instances_hashed, 0, "nothing painted");
+    assert_eq!(renderer.tiles.damage.instances_hashed, 0, "nothing painted");
 
     scene.replace_primitives(leaves[1000], grid_prims(1000, Color::rgb(200, 30, 30)));
     let recoloured = renderer.render_rgba8(&scene, &atlas);
-    assert_eq!(renderer.core.last_upload_work.full_gathers, 0);
-    assert_eq!(renderer.tiles.instances_hashed, 1, "the node's one quad");
+    assert_eq!(renderer.core.inst.last_upload_work.full_gathers, 0);
+    assert_eq!(
+        renderer.tiles.damage.instances_hashed, 1,
+        "the node's one quad"
+    );
     assert_eq!(renderer.last_tile_cache_stats().rasterized, 1);
     let mut fresh = try_renderer(1920, 1080).expect("a second renderer");
     assert!(recoloured == fresh.render_rgba8(&scene, &atlas));
@@ -1331,9 +1337,9 @@ fn one_changed_node_hashes_its_instances_not_the_scene() {
     );
     scene.replace_primitives(leaves[last], grown);
     let grown = renderer.render_rgba8(&scene, &atlas);
-    let work = renderer.core.last_upload_work;
+    let work = renderer.core.inst.last_upload_work;
     assert_eq!((work.full_gathers, work.grown_slots), (0, 1));
-    let hashed = renderer.tiles.instances_hashed;
+    let hashed = renderer.tiles.damage.instances_hashed;
     assert!((12..=32).contains(&hashed), "hashed {hashed}");
     let mut fresh = try_renderer(1920, 1080).expect("a second renderer");
     assert!(grown == fresh.render_rgba8(&scene, &atlas));
@@ -1376,15 +1382,15 @@ fn tile_cache_clears_instances_cut_from_the_end_of_a_buffer() {
     );
     let before = renderer.render_rgba8(&scene, &atlas);
     assert!(before != fresh.render_rgba8(&Scene::new(), &atlas));
-    let quads = renderer.core.quad_scratch.len();
+    let quads = renderer.core.inst.quad_scratch.len();
     scene.clear_dirty();
 
     scene.set_scroll_offset(outer, Point { x: 0.0, y: 100.0 });
     let after = renderer.render_rgba8(&scene, &atlas);
-    let work = renderer.core.last_upload_work;
+    let work = renderer.core.inst.last_upload_work;
     assert_eq!((work.full_gathers, work.scroll_regions), (0, 1));
     assert!(
-        renderer.core.quad_scratch.len() < quads,
+        renderer.core.inst.quad_scratch.len() < quads,
         "the mirror shrank"
     );
     assert_eq!(renderer.last_tile_cache_stats().rasterized, 1);
@@ -1393,7 +1399,7 @@ fn tile_cache_clears_instances_cut_from_the_end_of_a_buffer() {
 
 /// Appends 13 to 36 random primitives to `id`, so its slots usually overflow and
 /// splice the mirrors, moving every slot and layer boundary behind it.
-fn grow_node(world: &mut World, rng: &mut Rng, id: WidgetId) {
+pub(crate) fn grow_node(world: &mut World, rng: &mut Rng, id: WidgetId) {
     let mut prims = world
         .scene
         .paint(id)
@@ -1408,7 +1414,7 @@ fn grow_node(world: &mut World, rng: &mut Rng, id: WidgetId) {
 }
 
 /// A live child of `parent`, or any live node.
-fn child_of(world: &World, rng: &mut Rng, parent: WidgetId) -> WidgetId {
+pub(crate) fn child_of(world: &World, rng: &mut Rng, parent: WidgetId) -> WidgetId {
     match world.scene.node(parent).map(|n| n.children.clone()) {
         Some(children) if !children.is_empty() => children[rng.below(children.len())],
         _ => world.nodes[rng.below(world.nodes.len())],
@@ -1517,15 +1523,17 @@ fn tile_equivalence(seed: u64, steps: usize) {
                 "resize"
             }
         };
-        let layers_before = inc.core.overlay_layers.clone();
+        let layers_before = inc.core.inst.overlay_layers.clone();
         let got = inc.render_rgba8(&world.scene, &atlas);
-        let work = inc.core.last_upload_work;
+        let work = inc.core.inst.last_upload_work;
         let core = &inc.core;
-        let total = core.quad_scratch.len() + core.glyph_scratch.len() + core.image_scratch.len();
-        if work.full_gathers == 0 && inc.tiles.instances_hashed < total {
+        let total = core.inst.quad_scratch.len()
+            + core.inst.glyph_scratch.len()
+            + core.inst.image_scratch.len();
+        if work.full_gathers == 0 && inc.tiles.damage.instances_hashed < total {
             partial += 1;
             grown += usize::from(work.grown_slots > 0);
-            shifted += usize::from(core.overlay_layers != layers_before);
+            shifted += usize::from(core.inst.overlay_layers != layers_before);
         }
         full.core.invalidate_retained();
         full.tiles.invalidate();
@@ -1648,7 +1656,7 @@ fn scroll_step_walks_the_visible_rows_not_the_list() {
                 },
             );
             let _ = r.core.upload_scene(&scene, &atlas, LIST_W, LIST_H, 1.0);
-            let work = r.core.last_upload_work;
+            let work = r.core.inst.last_upload_work;
             assert_eq!((work.full_gathers, work.scroll_regions), (0, 1));
             most = most.max(work.walked_nodes);
             scene.clear_dirty();
@@ -1668,7 +1676,7 @@ fn scroll_step_walks_the_visible_rows_not_the_list() {
         for y in [rows as f32 * ROW_H / 2.0, rows as f32 * ROW_H * 2.0] {
             scene.set_scroll_offset(scroll, Point { x: 0.0, y });
             let got = r.render_rgba8(&scene, &atlas);
-            let work = r.core.last_upload_work;
+            let work = r.core.inst.last_upload_work;
             assert_eq!(work.full_gathers, 0);
             assert!(
                 work.walked_nodes <= 4 * (window + 2) + 8,
@@ -2062,7 +2070,7 @@ fn list_equivalence(seed: u64, steps: usize) {
     for step in 0..steps {
         let op = list_step(&mut world, &mut rng);
         let got = inc.render_rgba8(&world.scene, &atlas);
-        let work = inc.core.last_upload_work;
+        let work = inc.core.inst.last_upload_work;
         gathers += work.full_gathers;
         if work.scroll_regions > 0 && work.walked_nodes < nodes / 4 {
             windowed += 1;

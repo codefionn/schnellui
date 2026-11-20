@@ -35,6 +35,8 @@ image.workspace = true
 # glue for `App::run_windowed` (SOUL §8). The headless one-shot screenshotter (§7)
 # never touches winit — it is only linked into the App API surface, not the hot path.
 winit.workspace = true
+# Window presentation for the CPU renderer when no GPU adapter is usable.
+softbuffer.workspace = true
 
 # Optional: pulls in the counting #[global_allocator] for the alloc-budget test
 # (SOUL §4.1); gated so normal builds are untouched.

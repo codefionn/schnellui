@@ -109,6 +109,9 @@ fn request_adapter_device(
     backend: Backend,
     compatible_surface: Option<&wgpu::Surface<'static>>,
 ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), RendererError> {
+    if backend == Backend::Cpu {
+        return Err(RendererError::NoAdapter);
+    }
     let fallback = wants_fallback(backend);
     let power_preference = if fallback {
         wgpu::PowerPreference::LowPower
@@ -178,11 +181,11 @@ impl Renderer {
     /// instance data, uniforms and atlas texels. Always on; a steady frame with
     /// nothing painted reports zero.
     pub fn last_tile_cache_stats(&self) -> TileCacheStats {
-        self.tiles.stats
+        self.tiles.damage.stats
     }
 
     pub fn last_upload_bytes(&self) -> UploadBytes {
-        self.core.last_upload_work.bytes
+        self.core.inst.last_upload_work.bytes
     }
 
     /// Sets the deterministic clear color (SOUL §7.3 fixed clear color).
@@ -325,25 +328,52 @@ pub struct SurfaceRenderer {
     tiles: TileCache,
 }
 
-impl SurfaceRenderer {
-    /// Creates a surface renderer for `target` (a window handle — e.g. an
-    /// `Arc<winit::window::Window>`) at an initial `width × height` **physical**
-    /// pixel size. Picks the window's preferred sRGB surface format and configures it
-    /// with `PresentMode::AutoVsync`. Returns a [`RendererError`] rather than
-    /// panicking so the caller can exit cleanly if the compositor connection or an
-    /// adapter is unavailable (e.g. under a sandbox).
+/// The first step of a [`SurfaceRenderer`]: the wgpu instance and the window's
+/// surface. [`SurfaceBoot::prepare`] then does the slow part (adapter, device and
+/// pipelines), which may run on a worker thread while the window shows something
+/// else, and [`SurfaceDevice::attach`] finishes on the window's thread.
+pub struct SurfaceBoot {
+    instance: wgpu::Instance,
+    surface: wgpu::Surface<'static>,
+    backend: Backend,
+}
+
+/// A device and pipelines ready to present to their window: what
+/// [`SurfaceBoot::prepare`] returns.
+pub struct SurfaceDevice {
+    surface: wgpu::Surface<'static>,
+    core: GpuCore,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+    alpha_mode: wgpu::CompositeAlphaMode,
+}
+
+impl SurfaceBoot {
+    /// Creates the wgpu instance and a surface for `target`. On macOS this must run
+    /// on the main thread.
     pub fn new(
         target: impl Into<wgpu::SurfaceTarget<'static>>,
-        width: u32,
-        height: u32,
         backend: Backend,
-    ) -> Result<SurfaceRenderer, RendererError> {
-        let width = width.max(1);
-        let height = height.max(1);
+    ) -> Result<SurfaceBoot, RendererError> {
         let instance = new_instance();
         let surface = instance
             .create_surface(target)
             .map_err(|e| RendererError::NoSurface(e.to_string()))?;
+        Ok(SurfaceBoot {
+            instance,
+            surface,
+            backend,
+        })
+    }
+
+    /// Requests an adapter that can present to the surface, opens the device and
+    /// builds the pipelines. Safe to call from any thread.
+    pub fn prepare(self) -> Result<SurfaceDevice, RendererError> {
+        let SurfaceBoot {
+            instance,
+            surface,
+            backend,
+        } = self;
         let (adapter, device, queue) = request_adapter_device(&instance, backend, Some(&surface))?;
 
         let caps = surface.get_capabilities(&adapter);
@@ -361,10 +391,38 @@ impl SurfaceRenderer {
             .first()
             .copied()
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        let usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | (caps.usages & wgpu::TextureUsages::COPY_DST);
 
+        let mut core = GpuCore::new(device, queue, format);
+        // Only the native host swaps whole Apps while retaining a renderer.
+        // Headless one-shot renderers keep their previous memory profile.
+        core.atlas_shadow = Some(Vec::new());
+        Ok(SurfaceDevice {
+            surface,
+            core,
+            format,
+            usage,
+            alpha_mode,
+        })
+    }
+}
+
+impl SurfaceDevice {
+    /// Configures the surface at `width × height` **physical** pixels and returns
+    /// the renderer. Call it on the window's thread.
+    pub fn attach(self, width: u32, height: u32) -> SurfaceRenderer {
+        let width = width.max(1);
+        let height = height.max(1);
+        let SurfaceDevice {
+            surface,
+            core,
+            format,
+            usage,
+            alpha_mode,
+        } = self;
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | (caps.usages & wgpu::TextureUsages::COPY_DST),
+            usage,
             format,
             // Historical/default behavior: sRGB formats present as sRGB (§7.2).
             color_space: wgpu::SurfaceColorSpace::Auto,
@@ -378,15 +436,9 @@ impl SurfaceRenderer {
             alpha_mode,
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
-
-        let mut core = GpuCore::new(device, queue, format);
-        // Only the native host swaps whole Apps while retaining a renderer.
-        // Headless one-shot renderers keep their previous memory profile.
-        core.atlas_shadow = Some(Vec::new());
-
+        surface.configure(&core.device, &config);
         let tiles = TileCache::new(&core.device, width, height, format);
-        Ok(SurfaceRenderer {
+        SurfaceRenderer {
             core,
             surface,
             config,
@@ -395,7 +447,29 @@ impl SurfaceRenderer {
             height,
             scale: 1.0,
             clear: Color::default(),
-        })
+        }
+    }
+}
+
+impl SurfaceRenderer {
+    /// Creates a surface renderer for `target` (a window handle — e.g. an
+    /// `Arc<winit::window::Window>`) at an initial `width × height` **physical**
+    /// pixel size. Picks the window's preferred sRGB surface format and configures it
+    /// with `PresentMode::AutoVsync`. Returns a [`RendererError`] rather than
+    /// panicking so the caller can exit cleanly if the compositor connection or an
+    /// adapter is unavailable (e.g. under a sandbox).
+    ///
+    /// This blocks for the whole GPU start-up. [`SurfaceBoot`] splits it so the slow
+    /// part can run on another thread.
+    pub fn new(
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+        backend: Backend,
+    ) -> Result<SurfaceRenderer, RendererError> {
+        Ok(SurfaceBoot::new(target, backend)?
+            .prepare()?
+            .attach(width, height))
     }
 
     /// The current physical surface dimensions.
@@ -405,11 +479,11 @@ impl SurfaceRenderer {
 
     /// Bytes the most recent render handed to `write_buffer` / `write_texture`.
     pub fn last_tile_cache_stats(&self) -> TileCacheStats {
-        self.tiles.stats
+        self.tiles.damage.stats
     }
 
     pub fn last_upload_bytes(&self) -> UploadBytes {
-        self.core.last_upload_work.bytes
+        self.core.inst.last_upload_work.bytes
     }
 
     /// Sets the background clear color.
@@ -544,7 +618,7 @@ impl SurfaceRenderer {
                 self.clear,
                 (quad_count, glyph_count, image_count),
             );
-            self.tiles.stats = TileCacheStats::default();
+            self.tiles.damage.stats = TileCacheStats::default();
         }
 
         self.core.queue.submit(Some(encoder.finish()));

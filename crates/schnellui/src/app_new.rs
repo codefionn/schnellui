@@ -104,6 +104,7 @@ impl App {
             text,
             atlas,
             renderer: None,
+            backend: Backend::Auto,
             hot_reload: None,
             test_registry: HashMap::new(),
             shortcut_registry: HashMap::new(),

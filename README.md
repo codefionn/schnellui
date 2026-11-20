@@ -4,7 +4,8 @@ schnellui is rust native, gpu accelerated ui framework.
 
 It natively supports accessibility, native rendering via gpu, html output in
 browser and has great instrumentation for debugging and automatically
-controlling the ui.
+controlling the ui. Without a usable gpu it draws on the cpu with SIMD;
+`SCHNELLUI_BACKEND=cpu` picks that renderer on purpose.
 
 <img src="docs/images/playground.png" alt="The playground gallery in the Light theme: buttons, checkbox, switch, radios, slider, progress bar, text inputs, tabs, a list, a table and a dropdown" width="640">
 

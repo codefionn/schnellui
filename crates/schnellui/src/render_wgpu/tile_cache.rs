@@ -1,4 +1,5 @@
 use crate::render_wgpu::gpu_core::GpuCore;
+use crate::render_wgpu::instances::Instances;
 use rustc_hash::FxHasher;
 use schnellui::scene::{Color, Rect, Scene, SceneRenderKey};
 use schnellui::text::GlyphAtlas;
@@ -20,7 +21,7 @@ type Span = [u16; 4];
 const NO_TILES: u16 = u16::MAX;
 const NO_SPAN: Span = [NO_TILES; 4];
 
-/// The `GpuCore` state the cached instance entries were brought up to.
+/// The `Instances` state the cached instance entries were brought up to.
 #[derive(Clone, Copy, PartialEq)]
 struct Synced {
     upload: u64,
@@ -45,6 +46,15 @@ pub(crate) struct TileCache {
     pub texture: wgpu::Texture,
     scratch: wgpu::Texture,
     scratch_view: wgpu::TextureView,
+    /// Which tiles of the picture are stale.
+    pub(crate) damage: TileDamage,
+}
+
+/// The device-free half of the tile cache: one fingerprint per physical tile of
+/// a retained picture, folded from per-instance hashes, so a frame can name the
+/// tiles whose pixels must be repainted. The GPU [`TileCache`] and the CPU
+/// rasterizer ([`crate::render_soft`]) both repaint only what this reports.
+pub(crate) struct TileDamage {
     width: u32,
     height: u32,
     fingerprints: Vec<u64>,
@@ -59,7 +69,7 @@ pub(crate) struct TileCache {
     /// Per instance of the quad, glyph and image mirrors, index for index: the
     /// hash of its bytes and layer tag (plus the family for glyphs and images;
     /// the atlas resource key is mixed in at fold time) and its tile span. A
-    /// changed frame re-hashes only the instances `GpuCore` reports as changed.
+    /// changed frame re-hashes only the instances `Instances` reports as changed.
     hashes: [Vec<u64>; 3],
     spans: [Vec<Span>; 3],
     /// Each family's layer boundaries (the values `layer()` reads) when the
@@ -74,7 +84,8 @@ pub(crate) struct TileCache {
     refold_all: bool,
     /// Seed and per-family resource mix of the last fold.
     folded: Option<(u64, [u64; 3])>,
-    /// Instances hashed by the last `encode`: the work counter tests read.
+    /// Instances hashed by the last [`TileDamage::plan`]: the work counter tests
+    /// read.
     pub(crate) instances_hashed: usize,
 }
 
@@ -110,24 +121,7 @@ impl TileCache {
             texture,
             scratch,
             scratch_view,
-            width,
-            height,
-            fingerprints: vec![0; (width.div_ceil(TILE) * height.div_ceil(TILE)) as usize],
-            next: Vec::new(),
-            dirty: Vec::new(),
-            regions: Vec::new(),
-            valid: false,
-            key: None,
-            stats: TileCacheStats::default(),
-            hashes: Default::default(),
-            spans: Default::default(),
-            bounds: Default::default(),
-            bounds_now: Vec::new(),
-            synced: None,
-            refold: vec![false; (width.div_ceil(TILE) * height.div_ceil(TILE)) as usize],
-            refold_all: true,
-            folded: None,
-            instances_hashed: 0,
+            damage: TileDamage::new(width, height),
         }
     }
 
@@ -143,39 +137,10 @@ impl TileCache {
         clear: Color,
         counts: (u32, u32, u32),
     ) {
-        let key = FrameKey {
-            scene: scene.render_key(),
-            paint: scene.paint_epoch(),
-            glyph: (atlas.id(), atlas.generation()),
-            image: (scene.images().id(), scene.images().revision()),
-            scale,
-            clear,
-        };
-        self.stats = TileCacheStats::default();
-        // Always, even on an unchanged frame: the entries must follow every
-        // upload, or the next frame would see a gap and re-hash everything.
-        self.sync_instances(core, scale);
-        if self.key == Some(key) && self.valid {
-            self.stats.hits = self.fingerprints.len();
+        let regions = self.damage.plan(&core.inst, scene, atlas, scale, clear);
+        if regions.is_empty() {
             return;
         }
-        self.fingerprint_tiles(&key);
-        self.dirty.clear();
-        for (old, new) in self.fingerprints.iter().zip(&self.next) {
-            let dirty = !self.valid || old != new;
-            self.dirty.push(dirty);
-            if dirty {
-                self.stats.rasterized += 1;
-            } else {
-                self.stats.hits += 1;
-            }
-        }
-        std::mem::swap(&mut self.fingerprints, &mut self.next);
-        if self.stats.rasterized == 0 {
-            self.key = Some(key);
-            return;
-        }
-        merge_dirty_tiles(&self.dirty, self.width, self.height, &mut self.regions);
         // A single scratch clear is enough. Only dirty regions are copied.
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("schnellui.cached_tiles"),
@@ -198,12 +163,12 @@ impl TileCache {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        for &[x, y, w, h] in &self.regions {
+        for &[x, y, w, h] in regions {
             pass.set_scissor_rect(x, y, w, h);
             core.record_pass(&mut pass, counts.0, counts.1, counts.2);
         }
         drop(pass);
-        for &[x, y, w, h] in &self.regions {
+        for &[x, y, w, h] in regions {
             let origin = wgpu::Origin3d { x, y, z: 0 };
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -225,8 +190,91 @@ impl TileCache {
                 },
             );
         }
-        self.valid = true;
+    }
+
+    /// Forgets the picture and every cached instance hash.
+    #[cfg(test)]
+    pub(crate) fn invalidate(&mut self) {
+        self.damage.invalidate();
+    }
+}
+
+impl TileDamage {
+    /// The dirty rectangles of the last [`TileDamage::plan`].
+    pub(crate) fn regions(&self) -> &[[u32; 4]] {
+        &self.regions
+    }
+
+    pub(crate) fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            fingerprints: vec![0; (width.div_ceil(TILE) * height.div_ceil(TILE)) as usize],
+            next: Vec::new(),
+            dirty: Vec::new(),
+            regions: Vec::new(),
+            valid: false,
+            key: None,
+            stats: TileCacheStats::default(),
+            hashes: Default::default(),
+            spans: Default::default(),
+            bounds: Default::default(),
+            bounds_now: Vec::new(),
+            synced: None,
+            refold: vec![false; (width.div_ceil(TILE) * height.div_ceil(TILE)) as usize],
+            refold_all: true,
+            folded: None,
+            instances_hashed: 0,
+        }
+    }
+
+    /// Folds this frame's tile fingerprints and returns the dirty tiles merged into
+    /// `[x, y, width, height]` physical rectangles, empty when every tile is a hit.
+    /// The caller repaints exactly those rectangles: afterwards the picture counts
+    /// as current for this frame.
+    pub(crate) fn plan(
+        &mut self,
+        inst: &Instances,
+        scene: &Scene,
+        atlas: &GlyphAtlas,
+        scale: f32,
+        clear: Color,
+    ) -> &[[u32; 4]] {
+        let key = FrameKey {
+            scene: scene.render_key(),
+            paint: scene.paint_epoch(),
+            glyph: (atlas.id(), atlas.generation()),
+            image: (scene.images().id(), scene.images().revision()),
+            scale,
+            clear,
+        };
+        self.stats = TileCacheStats::default();
+        self.regions.clear();
+        // Always, even on an unchanged frame: the entries must follow every
+        // upload, or the next frame would see a gap and re-hash everything.
+        self.sync_instances(inst, scale);
+        if self.key == Some(key) && self.valid {
+            self.stats.hits = self.fingerprints.len();
+            return &self.regions;
+        }
+        self.fingerprint_tiles(&key);
+        self.dirty.clear();
+        for (old, new) in self.fingerprints.iter().zip(&self.next) {
+            let dirty = !self.valid || old != new;
+            self.dirty.push(dirty);
+            if dirty {
+                self.stats.rasterized += 1;
+            } else {
+                self.stats.hits += 1;
+            }
+        }
+        std::mem::swap(&mut self.fingerprints, &mut self.next);
         self.key = Some(key);
+        if self.stats.rasterized > 0 {
+            merge_dirty_tiles(&self.dirty, self.width, self.height, &mut self.regions);
+            self.valid = true;
+        }
+        &self.regions
     }
 
     /// Forgets the picture and every cached instance hash, so the next frame
@@ -263,7 +311,7 @@ impl TileCache {
     /// missed upload, a new scale) re-hashes every instance and refolds every
     /// tile. Tiles under the old or new span of a re-hashed or dropped entry are
     /// marked in `refold`; marks persist until a fold consumes them.
-    fn sync_instances(&mut self, core: &GpuCore, scale: f32) {
+    fn sync_instances(&mut self, core: &Instances, scale: f32) {
         self.instances_hashed = 0;
         let now = Synced {
             upload: core.upload_serial,
@@ -447,7 +495,7 @@ fn mark_span(refold: &mut [bool], columns: usize, span: Span) {
 
 /// Hashes instance `index` of `family` (0 quads, 1 glyphs, 2 images) with its
 /// layer tag and finds the tiles its clipped bounds touch.
-fn hash_instance(core: &GpuCore, grid: &TileGrid, family: u8, index: usize) -> (u64, Span) {
+fn hash_instance(core: &Instances, grid: &TileGrid, family: u8, index: usize) -> (u64, Span) {
     let (bounds, clip, bytes) = match family {
         0 => {
             let q = &core.quad_scratch[index];
@@ -485,7 +533,7 @@ fn hash_instance(core: &GpuCore, grid: &TileGrid, family: u8, index: usize) -> (
 }
 
 /// The layer boundaries [`layer`] compares instance indices of `family` with.
-fn layer_bounds(core: &GpuCore, family: u8, out: &mut Vec<u32>) {
+fn layer_bounds(core: &Instances, family: u8, out: &mut Vec<u32>) {
     out.clear();
     match family {
         0 => {
@@ -606,7 +654,7 @@ fn rect(a: [f32; 4]) -> Rect {
     Rect::new(a[0], a[1], a[2], a[3])
 }
 
-fn layer(core: &GpuCore, family: u8, index: u32) -> (usize, bool) {
+fn layer(core: &Instances, family: u8, index: u32) -> (usize, bool) {
     let base_end = match family {
         0 => core.base_quads,
         1 => core.base_glyphs,

@@ -1,4 +1,5 @@
 use super::host::EscapeKey;
+use super::window_renderer::WindowRenderer;
 use super::*;
 
 impl ApplicationHandler<PlatformEvent> for WindowedApp {
@@ -45,7 +46,16 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
         }
         let size = window.inner_size();
         let (pw, ph) = (size.width.max(1), size.height.max(1));
-        match SurfaceRenderer::new(window.clone(), pw, ph, Backend::Auto) {
+        let proxy = self
+            .event_loop_proxy
+            .clone()
+            .expect("native event loop proxy");
+        // The GPU starts on a worker thread behind the CPU renderer; its wake
+        // redraws, which switches the window over.
+        let wake = move || {
+            let _ = proxy.send_event(PlatformEvent::RedrawRequested);
+        };
+        match WindowRenderer::new(window.clone(), pw, ph, self.app.backend(), wake) {
             Ok(mut r) => {
                 r.set_scale(self.app.scale());
                 r.set_clear_color(self.app.clear_color());

@@ -270,15 +270,19 @@ Details worth knowing:
 points in [`renderer.rs`](../crates/schnellui/src/render_wgpu/renderer.rs): the
 offscreen `Renderer` (PNG and RGBA readback) and the windowed `SurfaceRenderer`. Both
 wrap one `GpuCore` ([`gpu_core.rs`](../crates/schnellui/src/render_wgpu/gpu_core.rs)).
+`GpuCore` owns the device, buffers and atlas textures. The CPU mirrors of the
+instance buffers live in `Instances`
+([`instances.rs`](../crates/schnellui/src/render_wgpu/instances.rs)), which the CPU
+renderer shares (see [The CPU path](#the-cpu-path)).
 `App::render_to_png`, `render_rgba8` and `render_to_surface`
 ([`app_render.rs`](../crates/schnellui/src/app_render.rs)) hand it the scene and the
 glyph atlas.
 
-Each renderer keeps its own view of the scene. `GpuCore` stores
+Each renderer keeps its own view of the scene. `Instances` stores
 `retained_scene_key` (a `SceneRenderKey`) and `retained_paint_epoch`, so the headless
 renderer and a windowed one can share one scene and each stay current.
 
-`GpuCore::upload_scene` calls `try_incremental` first:
+`GpuCore::upload_scene` calls `Instances::prepare`, which tries `try_incremental` first:
 
 - Per-node retained instance slots. The last full `gather` records, for each node, the
   range it occupies in the quad, glyph and image instance buffers (`FragmentTable`). A
@@ -290,7 +294,7 @@ renderer and a windowed one can share one scene and each stay current.
   ([`scene.rs`](../crates/schnellui/src/scene/scene.rs)) records the changed
   primitive ranges, and `Scene::paint_dirty_ranges` returns them until the next
   `clear_dirty`. Any other paint write this frame (`paint_mut`, `mark_dirty`,
-  `set_color`) makes the node whole-node dirty again. `GpuCore::update_node_ranges`
+  `set_color`) makes the node whole-node dirty again. `Instances::update_node_ranges`
   re-encodes only the primitives in those ranges and writes them over the instances
   they produced last time, found through a per-node `PrimPrefix` (instance offsets per
   primitive, built by `rebuild_prefix` the first time a node reports ranges and after
@@ -344,7 +348,7 @@ This works because of three invariants:
   above its live count, which is zero for those fragments. A re-walk gives every
   fragment it visits an exact slot, and a child only leaves the window during a walk
   that visits it.
-- A fragment outside a window (`GpuCore::dormant`, a walk up the index chain) may keep
+- A fragment outside a window (`Instances::dormant`, a walk up the index chain) may keep
   a stale offset, clip and slot position. Nothing reads them. Repaints of dormant
   nodes are skipped, a dormant `Scroll` skips its re-walk, and a walk that brings the
   node back into a window refreshes it. The run planners (`plan_content`,
@@ -379,10 +383,11 @@ regions, grown slots) to prove a paint change did not fall back to a full gather
 ([`retained_tests.rs`](../crates/schnellui/src/render_wgpu/retained_tests.rs)).
 
 An incremental update only notes the instance spans it changed in the CPU mirrors.
-`GpuCore::flush_uploads` writes them once the frame's edits are done and joins spans
-that touch or sit within `UPLOAD_MERGE_GAP` (8) instances of each other. Each
-`write_buffer` costs a staging allocation and a copy command, so 2000 adjacent nodes
-that change colour go out as one write. Two nodes far apart stay two small writes.
+Once the frame's edits are done, `Instances::merge_spans` joins spans that touch or
+sit within `UPLOAD_MERGE_GAP` (8) instances of each other into `changed_spans`, and
+`GpuCore::upload_scene` writes each one. Each `write_buffer` costs a staging
+allocation and a copy command, so 2000 adjacent nodes that change colour go out as
+one write. Two nodes far apart stay two small writes.
 
 Overlays (dropdown lists, dialogs, context menus) are deferred out of the base walk
 and drawn after it, in `(level, order)` order, as separate layers.
@@ -407,8 +412,8 @@ copy of the cached picture; surfaces without `COPY_DST` support use full raster.
 Fingerprinting follows what the upload changed. The tile cache keeps one entry per
 instance of each CPU mirror, index for index: the instance's hash and the tiles its
 clipped bounds touch. The atlas key is left out of the stored hash and mixed in when
-the hash is folded. `GpuCore::flush_uploads` records the merged spans it wrote in
-`changed_spans`. On every `encode`, `TileCache::sync_instances` re-hashes only the
+the hash is folded. `Instances::merge_spans` records the merged spans of the frame in
+`changed_spans`. On every frame, `TileDamage::sync_instances` re-hashes only the
 instances in those spans. A slot that grows, or a scroll run that changes size,
 reports everything from the splice to the end of the buffer, so instances that only
 moved are re-hashed too. The cache also compares the layer boundaries (`base_quads`,
@@ -422,11 +427,11 @@ entries that touch them; the other tiles keep last frame's fingerprint.
 The cache re-hashes every instance and refolds every tile when it cannot trust its
 entries. That happens on its first frame, which includes the first frame after a
 surface resize because resize builds a new `TileCache`. It also happens after a full
-gather (`GpuCore::gather_serial` moved), after a scale change, and when the cache
-missed an upload: `GpuCore::upload_serial` is not one past the upload it last
+gather (`Instances::gather_serial` moved), after a scale change, and when the cache
+missed an upload: `Instances::upload_serial` is not one past the upload it last
 applied, as when `SurfaceRenderer::render` uploads and then cannot acquire the
 surface. A new clear colour, glyph atlas key or image atlas key refolds every tile
-from the stored hashes without re-hashing. `TileCache::instances_hashed` counts the
+from the stored hashes without re-hashing. `TileDamage::instances_hashed` counts the
 instances the last frame hashed, and the tests in
 [`retained_tests.rs`](../crates/schnellui/src/render_wgpu/retained_tests.rs) assert
 that one recoloured node out of 14,000 instances hashes one instance, and that the
@@ -444,6 +449,52 @@ coordinates. These costs remain candidates for further performance work.
 The window surface asks for a `desired_maximum_frame_latency` of 1. With 2, a drag or
 a scroll that redraws every refresh keeps one finished frame queued, which adds a
 refresh interval between input and pixels.
+
+## The CPU path
+
+[`schnellui::render_soft`](../crates/schnellui/src/render_soft/mod.rs) draws the
+same picture without a GPU. `SoftRenderer` owns an `Instances` and a `TileDamage`,
+the CPU halves of the GPU path, so it walks the scene, patches node slots and
+picks dirty tiles exactly as `Renderer` does. For each dirty rectangle it clears
+the pixels and runs the instance kernels in GPU draw order: per layer, quads, then
+images, then glyphs, then scroll chrome.
+
+The kernels in [`raster.rs`](../crates/schnellui/src/render_soft/raster.rs) transcribe
+the WGSL: pixel-centre coverage, the rounded-rect distance field and its smoothstep,
+the clip test with its slack, the glyph texel nudge, nearest image sampling and
+`SrcAlpha, OneMinusSrcAlpha` into an 8-bit sRGB picture quantized after every draw.
+Vertex edges snap to a 1/256 grid, as GPU rasterizers do, so pixel centres on an
+edge fall the same way. They run on eight lanes through the `Lanes` trait in
+[`simd.rs`](../crates/schnellui/src/render_soft/simd.rs): AVX intrinsics when the CPU
+has AVX, plain arrays the compiler vectorizes otherwise (`SCHNELLUI_SIMD=portable`
+forces them). The math avoids FMA and approximations, so both produce the same bytes.
+Interiors skip the distance field: an opaque one is a `fill`, a large translucent one
+a per-instance byte table. Rotated quads compute each row's covered interval.
+
+`App` picks the renderer from `Backend`. `Backend::Cpu` or `SCHNELLUI_BACKEND=cpu`
+chooses the CPU renderer; `Backend::Auto` falls back to it when wgpu finds no
+adapter. Windows present its picture through softbuffer
+([`surface.rs`](../crates/schnellui/src/render_soft/surface.rs)), copying only the
+rectangles the buffer's age says it lacks.
+
+A window with a GPU backend also opens on the CPU renderer. `WindowRenderer`
+([`window_renderer.rs`](../crates/schnellui/src/windowed/window_renderer.rs)) starts
+the GPU on a worker thread through `SurfaceBoot::prepare` (instance, surface,
+adapter, device and pipelines; macOS creates the surface on the main thread) and
+wakes the event loop when it is done. The next redraw configures the surface with
+`SurfaceDevice::attach`, draws on the GPU, and only then drops the softbuffer
+presenter. If the start fails the window stays on the CPU. On this machine's
+Wayland session a debug build of the playground showed its first CPU frame after
+42 ms and switched to the GPU at 204 ms.
+
+The tests in [`tests.rs`](../crates/schnellui/src/render_soft/tests.rs) compare it
+with the GPU on random worlds and on widgets and text, compare a retained picture
+with a fresh repaint after random edits, and check that the AVX and portable lanes
+draw the same bytes. Most pixels match within one code; a few edge ties differ more.
+`rerender_drawn_on_the_cpu_allocates_nothing` in
+[`alloc_budget.rs`](../crates/schnellui/tests/alloc_budget.rs) holds
+`set_signal + frame + render` at zero allocations. A 1920x1080 frame of a
+40-row app draws in about 1.6 ms (release, AVX); an unchanged frame draws nothing.
 
 ## Text
 
@@ -946,5 +997,5 @@ with the evidence.
   copied value is the whole grid text, so its bytes grow with the grid size.
 - A terminal row that outgrows its padded capacity, or whose edit turns a padding
   glyph into a quad-buffer primitive (an underline or strike `Line`), still takes a
-  whole-node re-encode in `GpuCore::update_node`. Capacity grows by half each time,
+  whole-node re-encode in `Instances::update_node`. Capacity grows by half each time,
   so this happens O(log n) times per row.

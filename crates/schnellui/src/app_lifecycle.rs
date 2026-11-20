@@ -24,6 +24,29 @@ impl App {
         self.scale
     }
 
+    /// Chooses the renderer for headless frames ([`App::render_rgba8`],
+    /// [`App::render_to_png`]) and the native window. [`Backend::Auto`] (the
+    /// default) draws on the GPU and falls back to the CPU renderer when no wgpu
+    /// adapter is usable; [`Backend::Cpu`] never asks for one. The
+    /// `SCHNELLUI_BACKEND=cpu|software` environment variable overrides this.
+    /// Takes effect for a headless renderer not created yet and for a window not
+    /// opened yet.
+    pub fn set_backend(&mut self, backend: Backend) {
+        self.backend = backend;
+    }
+
+    /// The renderer choice set with [`App::set_backend`], before the environment
+    /// override.
+    pub fn backend(&self) -> Backend {
+        self.backend
+    }
+
+    /// The glyph atlas the scene's glyph quads sample, for driving a renderer
+    /// such as [`SoftRenderer`] directly.
+    pub fn glyph_atlas(&self) -> &GlyphAtlas {
+        &self.atlas
+    }
+
     /// Sets the smallest logical size the native window may be resized to. Takes effect
     /// when the window is created.
     pub fn set_min_window_size(&mut self, width: f32, height: f32) {

@@ -782,7 +782,7 @@ fn scroll_clip_masks_content_outside_viewport() {
         "below viewport clipped"
     );
     assert_eq!(
-        r.core.quad_scratch.len(),
+        r.core.inst.quad_scratch.len(),
         1,
         "fully occluded primitives never enter the GPU instance buffer"
     );
@@ -987,10 +987,16 @@ fn scroll_culls_offscreen_rich_text_before_gathering_its_glyphs() {
             .push(glyph((i % 16) as f32 * 4.0, 96.0 + (i / 16) as f32 * 8.0));
     }
 
-    renderer.core.gather(&scene);
-    assert_eq!(renderer.core.glyph_scratch.len(), 2);
-    assert_eq!(renderer.core.glyph_scratch[0].rect, [0.0, 4.0, 4.0, 8.0]);
-    assert_eq!(renderer.core.glyph_scratch[1].rect, [5.0, 4.0, 4.0, 8.0]);
+    renderer.core.inst.gather(&scene);
+    assert_eq!(renderer.core.inst.glyph_scratch.len(), 2);
+    assert_eq!(
+        renderer.core.inst.glyph_scratch[0].rect,
+        [0.0, 4.0, 4.0, 8.0]
+    );
+    assert_eq!(
+        renderer.core.inst.glyph_scratch[1].rect,
+        [5.0, 4.0, 4.0, 8.0]
+    );
 }
 
 /// A scroll offset shifts a `Scroll` node's descendants by `−offset` at composite
@@ -1077,11 +1083,17 @@ fn scroll_chrome_is_partitioned_after_layer_content() {
             corner_radius: 0.0,
         });
 
-    renderer.core.gather(&scene);
-    assert_eq!(renderer.core.base_chrome_start, 1);
-    assert_eq!(renderer.core.base_quads, 2);
-    assert_eq!(renderer.core.quad_scratch[0].color, [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(renderer.core.quad_scratch[1].color, [0.0, 0.0, 1.0, 1.0]);
+    renderer.core.inst.gather(&scene);
+    assert_eq!(renderer.core.inst.base_chrome_start, 1);
+    assert_eq!(renderer.core.inst.base_quads, 2);
+    assert_eq!(
+        renderer.core.inst.quad_scratch[0].color,
+        [1.0, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        renderer.core.inst.quad_scratch[1].color,
+        [0.0, 0.0, 1.0, 1.0]
+    );
 }
 
 #[test]
@@ -1116,10 +1128,10 @@ fn terminal_append_splices_gpu_glyph_range_without_a_full_gather() {
     scene.mark_dirty(terminal, DirtyFlags::PAINT);
     let _ = renderer.render_rgba8(&scene, &atlas);
 
-    assert_eq!(renderer.core.last_upload_work.full_gathers, 0);
-    assert_eq!(renderer.core.last_upload_work.nodes_patched, 1);
-    assert_eq!(renderer.core.glyph_scratch.len(), 3);
-    assert_eq!(renderer.core.base_glyphs, 3);
+    assert_eq!(renderer.core.inst.last_upload_work.full_gathers, 0);
+    assert_eq!(renderer.core.inst.last_upload_work.nodes_patched, 1);
+    assert_eq!(renderer.core.inst.glyph_scratch.len(), 3);
+    assert_eq!(renderer.core.inst.base_glyphs, 3);
 }
 
 #[test]
@@ -1173,15 +1185,21 @@ fn fresh_scene_invalidates_fragments_even_when_revisions_collide() {
     let _ = renderer.render_rgba8(&first, &atlas);
     let _ = renderer.render_rgba8(&second, &atlas);
 
-    assert_eq!(renderer.core.last_upload_work.full_gathers, 1);
-    assert_eq!(renderer.core.last_upload_work.nodes_patched, 0);
-    assert_eq!(renderer.core.glyph_scratch.len(), 2);
-    let fragment = renderer.core.fragments.get(&second_terminal).unwrap();
+    assert_eq!(renderer.core.inst.last_upload_work.full_gathers, 1);
+    assert_eq!(renderer.core.inst.last_upload_work.nodes_patched, 0);
+    assert_eq!(renderer.core.inst.glyph_scratch.len(), 2);
+    let fragment = renderer.core.inst.fragments.get(&second_terminal).unwrap();
     assert_eq!(fragment.glyphs, 0..2);
     assert_eq!(fragment.offset, Point { x: -3.0, y: -2.0 });
     assert_eq!(fragment.clip, Rect::new(10.0, 4.0, 40.0, 20.0));
-    assert_eq!(renderer.core.glyph_scratch[0].rect, [13.0, 8.0, 4.0, 8.0]);
-    assert_eq!(renderer.core.glyph_scratch[1].rect, [21.0, 8.0, 4.0, 8.0]);
+    assert_eq!(
+        renderer.core.inst.glyph_scratch[0].rect,
+        [13.0, 8.0, 4.0, 8.0]
+    );
+    assert_eq!(
+        renderer.core.inst.glyph_scratch[1].rect,
+        [21.0, 8.0, 4.0, 8.0]
+    );
 }
 
 #[test]
@@ -1214,15 +1232,18 @@ fn empty_terminal_append_shifts_only_later_terminal_ranges() {
     let _ = renderer.render_rgba8(&scene, &atlas);
     scene.clear_dirty();
 
-    let second_fragment = renderer.core.fragments.get(&second).unwrap();
+    let second_fragment = renderer.core.inst.fragments.get(&second).unwrap();
     assert_eq!(second_fragment.glyphs, 1..1);
 
     scene.paint_mut(second).primitives.push(glyph);
     scene.mark_dirty(second, DirtyFlags::PAINT);
     let _ = renderer.render_rgba8(&scene, &atlas);
-    assert_eq!(renderer.core.last_upload_work.full_gathers, 0);
-    assert_eq!(renderer.core.glyph_scratch.len(), 2);
-    assert_eq!(renderer.core.fragments.get(&second).unwrap().glyphs, 1..2);
+    assert_eq!(renderer.core.inst.last_upload_work.full_gathers, 0);
+    assert_eq!(renderer.core.inst.glyph_scratch.len(), 2);
+    assert_eq!(
+        renderer.core.inst.fragments.get(&second).unwrap().glyphs,
+        1..2
+    );
 }
 
 #[test]
@@ -1281,9 +1302,9 @@ fn an_overlay_below_a_sparing_frame_clip_is_not_clipped_by_it() {
     scene.mark_dirty(own, DirtyFlags::PAINT);
     scene.mark_dirty(popup, DirtyFlags::PAINT);
 
-    r.core.gather(&scene);
+    r.core.inst.gather(&scene);
     let clip_of = |node| {
-        let f = r.core.fragments.get(&node).unwrap();
+        let f = r.core.inst.fragments.get(&node).unwrap();
         f.clip
     };
     assert_eq!(clip_of(own), Rect::new(10.0, 10.0, 20.0, 20.0));
@@ -1324,18 +1345,19 @@ fn a_raised_nested_overlay_draws_after_its_later_peers() {
     }
     let position = |r: &Renderer, id| {
         r.core
+            .inst
             .overlay_roots
             .iter()
             .position(|(root, _, _)| *root == id)
             .unwrap()
     };
-    r.core.gather(&scene);
+    r.core.inst.gather(&scene);
     assert!(
         position(&r, first) < position(&r, second),
         "tree order first"
     );
     scene.bring_overlay_to_front(first);
-    r.core.gather(&scene);
+    r.core.inst.gather(&scene);
     assert!(
         position(&r, first) > position(&r, second),
         "the raised overlay draws last"

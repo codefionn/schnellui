@@ -38,6 +38,7 @@ pub mod localization;
 pub mod motion;
 pub mod platform;
 pub mod render_html;
+pub mod render_soft;
 pub mod render_wgpu;
 /// WebGPU presentation, named after the backend it drives. Also exported as
 /// [`render`] (the historical name for this pillar).
@@ -66,6 +67,7 @@ pub mod raw_keyboard {
 }
 
 use schnellui::layout::LayoutEngine;
+use schnellui::render_soft::SoftRenderer;
 use schnellui::render_wgpu::{Backend, Renderer, RendererError, SurfaceRenderer};
 use schnellui::scene::{Color, Point, Scene, Size, WidgetId, WidgetKind};
 use schnellui::template::{DriveAction, Template};
@@ -590,7 +592,9 @@ pub struct App {
     layout: LayoutEngine,
     text: TextShaper,
     atlas: GlyphAtlas,
-    renderer: Option<Renderer>,
+    renderer: Option<app_render::HeadlessRenderer>,
+    /// The renderer [`App::render_rgba8`] and the native window draw with.
+    backend: Backend,
     hot_reload: Option<app_hot_reload::HotReloadState>,
     /// name → setter, populated by widgets/scenarios so an agent can drive state
     /// by name (SOUL §7, `--assert`/`--scenario`).

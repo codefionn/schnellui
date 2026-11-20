@@ -1,8 +1,9 @@
 mod gpu_core;
+pub(crate) mod instances;
 mod output;
 mod renderer;
 mod shader;
-mod tile_cache;
+pub(crate) mod tile_cache;
 mod types;
 pub use tile_cache::TileCacheStats;
 
@@ -13,4 +14,4 @@ pub use types::*;
 #[cfg(test)]
 mod output_tests;
 #[cfg(test)]
-mod retained_tests;
+pub(crate) mod retained_tests;

@@ -20,7 +20,7 @@ A retained, GPU-resident UI where **you write UI as macros**, **state flows thro
 These are ranked. When two directives conflict, the lower number wins.
 
 1. **Zero allocations on re-render.** When a signal changes and the frame is re-rendered, the steady-state hot path performs **0 heap allocations, 0 reallocations, 0 frees** (`allocs + reallocs + frees == 0`). This is *tested*, in CI, as a hard gate — not an aspiration. First-mount and grow-events may allocate; steady-state re-render may not.
-2. **GPU does the drawing.** All 2D content (paths, text, gradients, images, clips, blends) is rasterized on the GPU. The CPU's job is to decide *what changed* and upload *only that*, in bytes, not buffers.
+2. **GPU does the drawing.** All 2D content (paths, text, gradients, images, clips, blends) is rasterized on the GPU. The CPU's job is to decide *what changed* and upload *only that*, in bytes, not buffers. The one exception is the SIMD CPU renderer of §5: it draws the same instances into the same damaged tiles when there is no GPU, and the GPU stays the renderer of record.
 3. **A signal change costs work proportional to what changed** — not to the size of the tree, the screen, or the scene. One text node changing must not walk the whole widget tree, re-tessellate the window, or re-upload the scene.
 4. **Macros generate static structure; only dynamic sites get reactive wiring.** The view macro splits UI into an invariant skeleton (hoisted to constants) and a handful of dynamic slots. Work is proportional to the number of dynamic sites, never the total node count.
 5. **The framework is legible to an AI agent.** Every example can launch into a named state, render one frame, write a PNG *and* dump its semantic (accessibility) tree, and exit. An agent can enumerate states, screenshot them, query what they *are*, edit, and re-shoot — a closed self-improvement loop with no human in the frame.
@@ -204,6 +204,7 @@ Two rendering families, one scene, selected at runtime by capability.
 
 - **WebGPU (native + browser) — the GPU-first target.** Native maps through wgpu to Vulkan / Metal / DX12; browser is a thin shim forwarding to `navigator.gpu` (compute shaders available in-browser since the all-major-browser WebGPU rollout of late 2025). Full compute-rasterization path.
 - **WebGL2 fallback — the reach target.** For browsers/devices without WebGPU, use `vello_hybrid`'s `webgl` feature (fragment-shader-only sparse strips, **no compute required**) or wgpu's own `webgl` feature (Naga translates WGSL→GLSL ES at runtime). Sparse strips are the bridge: CPU does everything up to and including coarse raster; the GPU fine-rasters each strip as two triangles.
+- **CPU fallback.** `render_soft` rasterizes the GPU's instance buffers with 8-lane SIMD (AVX when the CPU has it) and repaints only the tiles the GPU path would. A window gets it through softbuffer when no adapter exists and while the GPU starts on a worker thread, and `Backend::Cpu` or `SCHNELLUI_BACKEND=cpu` selects it on purpose. Its pixels track the shaders to within a code or two; a test holds that line, and another holds the steady re-render at zero allocations.
 - **Browser backend.** WASM + wgpu + winit: attach a `<canvas>` via `WindowAttributesExtWebSys::with_canvas`, surface via `SurfaceTarget::Canvas` (or `OffscreenCanvas` to render on a Web Worker off the main thread). `request_adapter` / `request_device` are async.
 
 **Canvas means we own accessibility — so we make it first-class, not a fallback.** Rendering to a GPU canvas means the platform gives us no a11y, text selection, IME, hit-testing, or scrolling for free. We treat that not as a tax to minimize but as a mandate: schnellui ships a full **AccessKit** tree, keyboard navigation, focus, and IME from commit one — see **§6**. An optional DOM backend remains available for content where native browser semantics are non-negotiable.
@@ -358,6 +359,7 @@ schnellui               # the umbrella crate; the pillars are modules of it:
   signal      # the reactive arena: NodeId, Signal, Memo, Effect, push-pull coloring
   scene       # retained scene: interned primitives, tiles, property trees, GPU cache
   render_wgpu # WebGPU/WebGL2 backend: incremental upload, damage, compute/strip raster
+  render_soft # SIMD CPU rasterizer over render_wgpu's instances and tile damage
   text        # Parley + Fontique + shaping; glyph atlas (write_texture sub-rects);
               #   embedded multi-face family (sans ×4 + mono ×2) + per-span rich shaping
   a11y        # AccessKit: semantic tree from the retained tree, incremental TreeUpdate,

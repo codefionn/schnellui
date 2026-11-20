@@ -204,7 +204,7 @@ pub(crate) const NO_ORD: u32 = u32::MAX;
 /// Every visited node owns one range per buffer, captured by a full scene walk. A
 /// range is the slot's capacity: the first `live[b]` instances are the node's, the
 /// rest is zero-area padding the GPU draws as nothing. A paint-dirty node re-encodes
-/// only its own instances and rewrites only its own slot (`GpuCore::try_incremental`).
+/// only its own instances and rewrites only its own slot (`Instances::try_incremental`).
 ///
 /// A `Scroll` node is special only in where its slots sit: its fixed chrome quads
 /// land in the layer's chrome section (so `quads` is that range), and its glyphs and
@@ -529,15 +529,34 @@ pub(crate) struct Uniforms {
     pub(crate) params: [f32; 4],
 }
 
-/// Which wgpu adapter to request (SOUL §7.3 — software for cross-machine-stable
+/// Which renderer to draw with (SOUL §7.3 — software for cross-machine-stable
 /// goldens).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
-    /// the fastest available hardware adapter.
+    /// the fastest available hardware adapter. An [`App`](crate::App) with no
+    /// usable adapter falls back to the CPU renderer.
     #[default]
     Auto,
-    /// force a software rasterizer (lavapipe / SwiftShader / WARP).
+    /// force a wgpu software rasterizer (lavapipe / SwiftShader / WARP).
     Software,
+    /// no wgpu adapter at all: the SIMD CPU renderer of [`crate::render_soft`].
+    /// The wgpu [`Renderer`](crate::render_wgpu::Renderer) and
+    /// [`SurfaceRenderer`](crate::render_wgpu::SurfaceRenderer) refuse it with
+    /// [`RendererError::NoAdapter`].
+    Cpu,
+}
+
+impl Backend {
+    /// `self` after the `SCHNELLUI_BACKEND` environment override: `cpu` selects
+    /// [`Backend::Cpu`] and `software` [`Backend::Software`]; anything else, or
+    /// no variable, keeps `self`.
+    pub fn with_env_override(self) -> Backend {
+        match std::env::var("SCHNELLUI_BACKEND") {
+            Ok(v) if v.eq_ignore_ascii_case("cpu") => Backend::Cpu,
+            Ok(v) if v.eq_ignore_ascii_case("software") => Backend::Software,
+            _ => self,
+        }
+    }
 }
 
 /// Why a [`Renderer`] / [`SurfaceRenderer`] could not be constructed (SOUL §7.2).

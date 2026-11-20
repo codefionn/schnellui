@@ -561,7 +561,7 @@ impl WindowedApp {
             self.accessibility_published = AccessibilityPublished::of(self.app.scene());
         }
         if let Some(renderer) = &mut self.renderer {
-            self.app.render_to_surface(renderer);
+            renderer.render(&self.app.scene, &mut self.app.atlas);
         }
         self.app.scene.clear_dirty();
         self.accessibility_full_update_pending = false;

@@ -12,7 +12,7 @@ impl App {
 
     /// Runs `render` against the cached headless renderer, creating it on first use,
     /// sized to the current physical viewport (`size × scale`, SOUL §7.1 `--scale`).
-    /// The renderer's construction error when no GPU adapter is available.
+    /// The renderer's construction error when the chosen backend is unavailable.
     ///
     /// The one-shot determinism contract (SOUL §7.3): block until every async SVG
     /// rasterization has landed, so the single frame contains the images. A cached
@@ -21,32 +21,33 @@ impl App {
     /// first created at (SOUL §8 resize path). The resize is a no-op when unchanged.
     fn with_headless_renderer<R>(
         &mut self,
-        render: impl FnOnce(&mut Renderer, &Scene, &GlyphAtlas) -> R,
+        render: impl FnOnce(&mut HeadlessRenderer, &Scene, &GlyphAtlas) -> R,
     ) -> Result<R, RendererError> {
         schnellui::widgets::settle_svg_rasters(&self.widgets, &mut self.scene);
         let pw = (self.size.width * self.scale).round().max(1.0) as u32;
         let ph = (self.size.height * self.scale).round().max(1.0) as u32;
-        let renderer = if let Some(renderer) = self.renderer.as_mut() {
-            renderer
-        } else {
-            let mut r = Renderer::try_new(pw, ph, Backend::Auto)?;
-            r.set_scale(self.scale);
-            r.set_clear_color(self.clear);
-            self.renderer.insert(r)
+        let renderer = match self.renderer.as_mut() {
+            Some(renderer) => renderer,
+            None => self
+                .renderer
+                .insert(HeadlessRenderer::new(pw, ph, self.backend)?),
         };
         renderer.resize(pw, ph);
+        renderer.set_scale(self.scale);
+        renderer.set_clear_color(self.clear);
         Ok(render(renderer, &self.scene, &self.atlas))
     }
 
     /// Renders the current frame as encoded PNG bytes for the debug HTTP bridge.
-    /// Fails with the renderer's error when no GPU adapter is available.
+    /// Fails with the renderer's error when the chosen backend is unavailable.
     pub(crate) fn render_png_bytes(&mut self) -> Result<Vec<u8>, RendererError> {
         self.with_headless_renderer(|r, scene, atlas| r.render_to_png(scene, atlas))
     }
 
     /// Renders one frame to tightly-packed RGBA8 bytes at the current **physical**
-    /// size (`size × scale`), or `None` when no GPU adapter is available so callers
-    /// (tests) skip gracefully (SOUL §7.2). Lazily creates the renderer and keeps it
+    /// size (`size × scale`), or `None` when the chosen [`Backend`] is unavailable
+    /// (only an explicit [`Backend::Software`] can be: [`Backend::Auto`] falls back
+    /// to the CPU renderer) so callers (tests) skip gracefully (SOUL §7.2). Lazily creates the renderer and keeps it
     /// sized to the viewport across [`App::resize`] (a grow event, §4). This is the
     /// byte-level oracle behind the retained==reconstructed equivalence check
     /// (SOUL §3.2): after any event sequence the retained app's pixels must equal a
@@ -413,5 +414,67 @@ impl App {
             target_node: schnellui::a11y::to_access_id(widget),
             data,
         })
+    }
+}
+
+/// The renderer behind [`App::render_rgba8`]: the wgpu one, or the CPU one when
+/// [`Backend::Cpu`] is chosen or no adapter is usable.
+pub(crate) enum HeadlessRenderer {
+    Gpu(Box<Renderer>),
+    Cpu(Box<SoftRenderer>),
+}
+
+impl HeadlessRenderer {
+    /// Picks the renderer for `backend` after the `SCHNELLUI_BACKEND` override.
+    /// [`Backend::Auto`] without a usable adapter becomes the CPU renderer; an
+    /// explicitly requested `Software` adapter that is missing stays an error.
+    fn new(width: u32, height: u32, backend: Backend) -> Result<HeadlessRenderer, RendererError> {
+        match backend.with_env_override() {
+            Backend::Cpu => Ok(HeadlessRenderer::cpu(width, height)),
+            backend => match Renderer::try_new(width, height, backend) {
+                Ok(r) => Ok(HeadlessRenderer::Gpu(Box::new(r))),
+                Err(_) if backend == Backend::Auto => Ok(HeadlessRenderer::cpu(width, height)),
+                Err(e) => Err(e),
+            },
+        }
+    }
+
+    fn cpu(width: u32, height: u32) -> HeadlessRenderer {
+        HeadlessRenderer::Cpu(Box::new(SoftRenderer::new(width, height)))
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        match self {
+            HeadlessRenderer::Gpu(r) => r.resize(width, height),
+            HeadlessRenderer::Cpu(r) => r.resize(width, height),
+        }
+    }
+
+    fn set_scale(&mut self, scale: f32) {
+        match self {
+            HeadlessRenderer::Gpu(r) => r.set_scale(scale),
+            HeadlessRenderer::Cpu(r) => r.set_scale(scale),
+        }
+    }
+
+    fn set_clear_color(&mut self, color: Color) {
+        match self {
+            HeadlessRenderer::Gpu(r) => r.set_clear_color(color),
+            HeadlessRenderer::Cpu(r) => r.set_clear_color(color),
+        }
+    }
+
+    fn render_rgba8(&mut self, scene: &Scene, atlas: &GlyphAtlas) -> Vec<u8> {
+        match self {
+            HeadlessRenderer::Gpu(r) => r.render_rgba8(scene, atlas),
+            HeadlessRenderer::Cpu(r) => r.render_rgba8(scene, atlas),
+        }
+    }
+
+    fn render_to_png(&mut self, scene: &Scene, atlas: &GlyphAtlas) -> Vec<u8> {
+        match self {
+            HeadlessRenderer::Gpu(r) => r.render_to_png(scene, atlas),
+            HeadlessRenderer::Cpu(r) => r.render_to_png(scene, atlas),
+        }
     }
 }
