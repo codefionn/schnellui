@@ -204,6 +204,85 @@ fn set_bumps_global_version() {
 }
 
 #[test]
+fn change_listener_runs_outside_the_lock_and_stops_after_removal() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let s = create_signal(0u32);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(AtomicUsize::new(0));
+    let id = {
+        let (calls, seen) = (calls.clone(), seen.clone());
+        add_change_listener(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            // Reading a signal and the version would deadlock under the lock.
+            seen.store(s.get() as usize, Ordering::SeqCst);
+            let _ = Runtime::global_version();
+        })
+    };
+    s.set(4);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(seen.load(Ordering::SeqCst), 4);
+    s.update(|v| *v += 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(seen.load(Ordering::SeqCst), 5);
+    remove_change_listener(id);
+    s.set(9);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // Removing twice is harmless.
+    remove_change_listener(id);
+}
+
+#[test]
+fn change_listeners_stack_and_may_unregister_themselves() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
+    let s = create_signal(0u32);
+    let a = Arc::new(AtomicUsize::new(0));
+    let b = Arc::new(AtomicUsize::new(0));
+    let ida = {
+        let a = a.clone();
+        add_change_listener(move || {
+            a.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    let own: Arc<StdMutex<Option<ChangeListenerId>>> = Arc::new(StdMutex::new(None));
+    let idb = {
+        let (b, own) = (b.clone(), own.clone());
+        add_change_listener(move || {
+            b.fetch_add(1, Ordering::SeqCst);
+            if let Some(id) = own.lock().unwrap().take() {
+                remove_change_listener(id);
+            }
+        })
+    };
+    *own.lock().unwrap() = Some(idb);
+    s.set(1);
+    s.set(2);
+    assert_eq!(a.load(Ordering::SeqCst), 2);
+    assert_eq!(b.load(Ordering::SeqCst), 1);
+    remove_change_listener(ida);
+}
+
+#[test]
+fn a_changed_memo_calls_the_listener_and_an_equal_one_does_not() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let s = create_signal(1u32);
+    let parity = create_memo(move || s.get() % 2);
+    assert_eq!(parity.get(), 1);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let id = {
+        let calls = calls.clone();
+        add_change_listener(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+    s.set(2); // one call for the set
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(parity.get(), 0); // the memo recomputed to a new value
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    remove_change_listener(id);
+}
+
+#[test]
 fn dispose_makes_try_get_none() {
     let scope = create_scope();
     // manually park a node under the scope to prove disposal semantics

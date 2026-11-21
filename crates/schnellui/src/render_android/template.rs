@@ -1,7 +1,9 @@
 //! The [`TemplateRenderer`] that builds an [`AndroidNode`] tree.
 
 use std::borrow::Cow;
+#[cfg(feature = "render-android-svg")]
 use std::cell::RefCell;
+#[cfg(feature = "render-android-svg")]
 use std::rc::Rc;
 
 use schnellui::scene::Size;
@@ -14,21 +16,28 @@ use schnellui::template::{
 
 use super::ops::{kind, prop, THEME_DARK, THEME_LIGHT};
 use super::renderer::Viewport;
+#[cfg(feature = "render-android-svg")]
 use super::svg::SvgCache;
 use super::tree::{AndroidNode, OptionMarker, QueryTarget};
 
 /// Renders templates into an [`AndroidNode`] tree.
 pub struct AndroidTemplate {
     viewport: Viewport,
+    #[cfg(feature = "render-android-svg")]
     svg: Rc<RefCell<SvgCache>>,
 }
 
 impl AndroidTemplate {
     pub fn new(viewport: Viewport) -> Self {
-        Self::with_cache(viewport, Rc::default())
+        Self {
+            viewport,
+            #[cfg(feature = "render-android-svg")]
+            svg: Rc::default(),
+        }
     }
 
     /// Shares an SVG cache between renders, so a source is rasterised once.
+    #[cfg(feature = "render-android-svg")]
     pub(crate) fn with_cache(viewport: Viewport, svg: Rc<RefCell<SvgCache>>) -> Self {
         Self { viewport, svg }
     }
@@ -575,7 +584,7 @@ impl TemplateRenderer for AndroidTemplate {
                     let title = self.text(TextProps {
                         content: TextContent::Static(props.label.clone()),
                         size: 20.0,
-                        role: Role::ColumnHeader,
+                        role: Role::Heading,
                         wrap: WrapMode::NoWrap,
                         align: TextAlign::Start,
                         ellipsis: false,
@@ -618,6 +627,16 @@ impl TemplateRenderer for AndroidTemplate {
                 node.handlers.click = props.on_click;
                 node
             }
+            // Without the SVG feature the parser and rasteriser are not linked.
+            // The image becomes an empty Stack of the given size that still
+            // carries the label.
+            #[cfg(not(feature = "render-android-svg"))]
+            ComponentKind::Svg => {
+                let mut node = AndroidNode::new(kind::STACK);
+                labelled(&mut node, &props.label);
+                node
+            }
+            #[cfg(feature = "render-android-svg")]
             ComponentKind::Svg => {
                 let source = props
                     .markup

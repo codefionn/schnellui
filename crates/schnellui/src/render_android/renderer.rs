@@ -1,17 +1,18 @@
 //! The renderer that owns the tree and speaks ops.
 
 use std::cell::RefCell;
+#[cfg(feature = "render-android-svg")]
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use schnellui::signal::Runtime;
+use schnellui::signal::{add_change_listener, remove_change_listener, ChangeListenerId};
 use schnellui::template::Template;
 
 use super::diff::{diff_root, emit_full, IdAlloc};
 use super::ops::{self, event, kind, prop, Op};
 use super::queries;
+#[cfg(feature = "render-android-svg")]
 use super::svg::SvgCache;
 use super::template::AndroidTemplate;
 use super::tree::{AndroidNode, Value};
@@ -71,32 +72,42 @@ type View = Box<dyn FnMut(&mut AndroidTemplate) -> AndroidNode>;
 
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
+thread_local! {
+    /// The wake states whose renderer is running a render, dispatch, resize or
+    /// update on this thread. A write made here is already part of that render
+    /// and must not wake the host. A write from any other thread still does.
+    static BUSY_HERE: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Decides when the host must be told to call `nativeUpdate`.
 ///
-/// The signal runtime has no hook that fires when a signal is set. It does keep
-/// a global version that every change bumps. The renderer records the version
-/// it last rendered at, and a change beyond that, made while no dispatch,
-/// resize, update or render is running, calls the wake callback once. The
-/// callback stays quiet until the next render.
+/// The renderer registers a signal change listener while it is alive. A change
+/// made while no render, dispatch, resize or update runs on the writing thread
+/// calls the wake callback once. The callback stays quiet until the next
+/// render starts. A memo that recomputes inside the view changes the global
+/// version too, but it does so on the rendering thread, so it stays quiet
+/// like any other write made while the renderer is busy.
 pub(crate) struct WakeState {
     callback: Mutex<Option<Wake>>,
-    /// The signal version the last render saw.
-    seen: AtomicU64,
-    /// How many of render, dispatch, resize and update are running.
-    busy: AtomicUsize,
-    /// The callback fired and no render has happened since.
+    /// The callback fired and no render has started since.
     fired: AtomicBool,
-    polling: AtomicBool,
 }
 
 impl WakeState {
-    /// Fires the callback if a signal changed since the last render. Safe to
-    /// call from any thread. Returns whether it fired.
-    pub(crate) fn check(&self) -> bool {
-        if self.busy.load(Ordering::Acquire) > 0 {
-            return false;
-        }
-        if Runtime::global_version() == self.seen.load(Ordering::Acquire) {
+    fn key(&self) -> usize {
+        self as *const Self as usize
+    }
+
+    fn busy_here(&self) -> bool {
+        let key = self.key();
+        BUSY_HERE.with(|busy| busy.borrow().contains(&key))
+    }
+
+    /// Called by the change listener after a write, on the writing thread.
+    /// Fires the callback unless this thread is inside the renderer or the
+    /// callback already fired. Returns whether it fired.
+    pub(crate) fn notify(&self) -> bool {
+        if self.busy_here() {
             return false;
         }
         let callback = match self.callback.lock() {
@@ -114,20 +125,26 @@ impl WakeState {
     }
 }
 
-/// Marks the renderer busy while a render runs, so changes made by the handler
-/// or the view itself do not wake the host.
+/// Marks the renderer busy on this thread while a render runs, so changes made
+/// by the handler or the view itself do not wake the host.
 struct Busy(Arc<WakeState>);
 
 impl Busy {
     fn new(state: &Arc<WakeState>) -> Self {
-        state.busy.fetch_add(1, Ordering::AcqRel);
+        BUSY_HERE.with(|busy| busy.borrow_mut().push(state.key()));
         Self(state.clone())
     }
 }
 
 impl Drop for Busy {
     fn drop(&mut self) {
-        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+        let key = self.0.key();
+        BUSY_HERE.with(|busy| {
+            let mut busy = busy.borrow_mut();
+            if let Some(at) = busy.iter().rposition(|k| *k == key) {
+                busy.remove(at);
+            }
+        });
     }
 }
 
@@ -138,12 +155,15 @@ pub struct AndroidRenderer {
     viewport: Viewport,
     tree: Option<AndroidNode>,
     ids: IdAlloc,
+    #[cfg(feature = "render-android-svg")]
     svg: Rc<RefCell<SvgCache>>,
     wake: Arc<WakeState>,
+    listener: ChangeListenerId,
 }
 
 impl Drop for AndroidRenderer {
     fn drop(&mut self) {
+        remove_change_listener(self.listener);
         if let Ok(mut callback) = self.wake.callback.lock() {
             *callback = None;
         }
@@ -157,19 +177,27 @@ impl AndroidRenderer {
         viewport: Viewport,
         mut view: impl FnMut() -> V + 'static,
     ) -> Self {
+        let wake = Arc::new(WakeState {
+            callback: Mutex::new(None),
+            fired: AtomicBool::new(false),
+        });
+        let listener = {
+            let wake = Arc::downgrade(&wake);
+            add_change_listener(move || {
+                if let Some(wake) = wake.upgrade() {
+                    wake.notify();
+                }
+            })
+        };
         Self {
             view: Box::new(move |template| view().render(template)),
             viewport,
             tree: None,
             ids: IdAlloc(0),
+            #[cfg(feature = "render-android-svg")]
             svg: Rc::default(),
-            wake: Arc::new(WakeState {
-                callback: Mutex::new(None),
-                seen: AtomicU64::new(Runtime::global_version()),
-                busy: AtomicUsize::new(0),
-                fired: AtomicBool::new(false),
-                polling: AtomicBool::new(false),
-            }),
+            wake,
+            listener,
         }
     }
 
@@ -182,42 +210,8 @@ impl AndroidRenderer {
         }
     }
 
-    /// Checks for a signal change and fires the wake callback if there is one.
-    /// The polling thread calls this. Returns whether it fired.
-    pub fn check_wake(&self) -> bool {
-        self.wake.check()
-    }
-
-    /// Starts a thread that calls [`check_wake`] every `interval`. It stops
-    /// when the renderer is dropped. Calling this twice starts one thread.
-    ///
-    /// [`check_wake`]: Self::check_wake
-    pub fn start_wake_polling(&self, interval: Duration) {
-        if self.wake.polling.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let state: Weak<WakeState> = Arc::downgrade(&self.wake);
-        let spawned = std::thread::Builder::new()
-            .name("schnellui-wake".into())
-            .spawn(move || {
-                while let Some(state) = state.upgrade() {
-                    state.check();
-                    drop(state);
-                    std::thread::sleep(interval);
-                }
-            });
-        if spawned.is_err() {
-            self.wake.polling.store(false, Ordering::Release);
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn wake_state(&self) -> Arc<WakeState> {
-        self.wake.clone()
-    }
-
     /// How many SVGs were rasterised so far. Tests use it to see the cache work.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "render-android-svg"))]
     pub(crate) fn svg_rasterisations(&self) -> usize {
         self.svg.borrow().rasterisations
     }
@@ -229,18 +223,19 @@ impl AndroidRenderer {
     /// Renders again, diffs against the previous tree and keeps the result.
     fn rerender(&mut self) -> Vec<Op> {
         let _busy = Busy::new(&self.wake);
-        // Read before the view runs: a change made by another thread while it
+        // Re-arm before the view runs: a change made by another thread while it
         // runs is newer than this render and wakes the host again.
-        let version = Runtime::global_version();
+        self.wake.fired.store(false, Ordering::Release);
+        #[cfg(feature = "render-android-svg")]
         let mut template = AndroidTemplate::with_cache(self.viewport, self.svg.clone());
+        #[cfg(not(feature = "render-android-svg"))]
+        let mut template = AndroidTemplate::new(self.viewport);
         let mut new = (self.view)(&mut template);
         let mut ops = Vec::new();
         new.prune_options();
         diff_root(self.tree.as_ref(), &mut new, &mut self.ids, &mut ops);
         queries::resolve(self.tree.as_ref(), &mut new, &mut ops);
         self.tree = Some(new);
-        self.wake.seen.store(version, Ordering::Release);
-        self.wake.fired.store(false, Ordering::Release);
         ops
     }
 

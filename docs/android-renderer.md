@@ -93,7 +93,7 @@ A Slider, TextInput, TextArea or Progress with no WIDTH, MIN_WIDTH, FILL, GROW o
 | 32 | TEXT_WRAP | i32 | Text | 0 no wrap, 1 word, 2 anywhere |
 | 33 | TEXT_ALIGN | i32 | Text | 0 start, 1 center, 2 end, 3 justify |
 | 34 | ELLIPSIS | bool | Text | false |
-| 35 | ROLE | i32 | all | none. The `schnellui::a11y::Role` tag. Heading roles set `setAccessibilityHeading(true)`. |
+| 35 | ROLE | i32 | all | none. The `schnellui::a11y::Role` tag. The Heading role (32) sets `setAccessibilityHeading(true)`. |
 | 36 | A11Y_LABEL | string | all | none. `contentDescription`. On TextInput and TextArea it is also the hint. |
 | 40 | CHECKED | bool | Checkbox, Switch, Radio | false |
 | 41 | VALUE | f32 | Slider, Progress | 0 |
@@ -170,8 +170,8 @@ static void requestUpdate(long app);   // called by Rust, from any thread
 - `nativeDispatch` and `nativeResize` return the diff, or `null` when nothing changed.
 - `s` is `null` for events without a string payload.
 - `nativeUpdate` renders again and returns the diff, or `null`.
-- The signal runtime has no hook that fires on a set. A Rust thread compares the runtime's global version every 32 ms while the app is mounted.
-- Rust calls `requestUpdate` when a signal changes outside `nativeDispatch`, `nativeResize` and `nativeUpdate`, for example from a timer thread. The host posts one main-thread task per app, however many requests arrive before it runs. The task calls `nativeUpdate` and applies the result. A request for an app that is unmounted, or that has no activity attached, is dropped. The next `nativeRender` shows the current state anyway.
+- The renderer registers a signal change listener (`schnellui::signal::add_change_listener`) when it is built and removes it when `nativeUnmount` drops it. The runtime calls the listener on the thread that wrote the signal, after it released its lock. A write made on a thread that is inside `nativeRender`, `nativeDispatch`, `nativeResize` or `nativeUpdate` does not call it, because that render shows the change. Other threads do, also while a render runs. It calls `requestUpdate` at most once, until the next render starts.
+- Rust calls `requestUpdate` when a signal changes outside `nativeDispatch`, `nativeResize` and `nativeUpdate`, for example from a timer thread. The writing thread makes the call. Rust attaches it to the JVM for that one call and detaches it afterwards, so a worker thread is never left attached and can exit. If `requestUpdate` throws, Rust clears the Java exception and writes the error to logcat under the tag `schnellui`. The host posts one main-thread task per app, however many requests arrive before it runs. The task calls `nativeUpdate` and applies the result. A request for an app that is unmounted, or that has no activity attached, is dropped. The next `nativeRender` shows the current state anyway.
 
 An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdylib`. The host loads the library named by the `schnellui.lib` meta-data entry of the activity.
 
@@ -205,10 +205,10 @@ An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdy
 - List: a Column with ROLE list and A11Y_LABEL from `label`. ListItem: TEXT from `label`, SELECTED, children as content, CLICK runs `on_click`.
 
 - Table: Table with A11Y_LABEL from `label`, children as rows. TableRow: ITEMS from `items`, SELECTED, children as content, CLICK runs `on_click`, A11Y_LABEL from `label`.
-- RichText: a Column of a 20 sp Text of `label` with the `ColumnHeader` role when the label is not empty, which the host treats as a heading because `Role` has no heading, a word-wrapping Text of `value`, then the children.
+- RichText: a Column of a 20 sp Text of `label` with the `Heading` role (32) when the label is not empty, a word-wrapping Text of `value`, then the children.
 - Icon: a 20 sp Text of `detail`, or of U+25C6 when the detail is empty, with an image role and A11Y_LABEL from `label`.
 - DragHandle: a ghost Button with TEXT U+22EE U+22EE and A11Y_LABEL from `label`. CLICK runs `on_click`. Dragging is not supported.
-- Svg: an Image whose SRC is a PNG `data:` URL. Rust rasterises `markup`, or `value` when there is no markup, at `width` by `height` times the display density, and caches the result by source and size. A11Y_LABEL from `label`.
+- Svg: an Image whose SRC is a PNG `data:` URL. Rust rasterises `markup`, or `value` when there is no markup, at `width` by `height` times the display density, and caches the result by source and size. A11Y_LABEL from `label`. Without the cargo feature `render-android-svg` Rust does not link the SVG code. The Svg is then a Stack of the given WIDTH and HEIGHT, with A11Y_LABEL from `label` and no SRC.
 - ThemeProvider: `value` "dark" is theme 2 and "light" is theme 1. Any other value is a plain Column.
 
 A Dropdown or ProgressBar with a non-empty label is wrapped in a Column that holds a 14 sp Text of the label and then the widget. A key goes on the wrapper.

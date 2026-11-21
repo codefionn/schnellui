@@ -6,13 +6,19 @@
 //! view runs on the host through [`AndroidRenderer`], which is how the tests
 //! here drive it.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::Weak;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use schnellui::render_android::AndroidRenderer;
 use schnellui::signal::{create_signal, Signal};
+#[cfg(feature = "svg")]
+use schnellui::template::svg;
 use schnellui::template::{
     badge, column, dialog, divider, drag_handle, dropdown, icon, image, link, list, list_item,
-    loading_spinner, progress_bar, radio, rich_text, row, scroll, svg, switch, tab, tab_bar, table,
+    loading_spinner, progress_bar, radio, rich_text, row, scroll, switch, tab, tab_bar, table,
     table_row, text_area, theme_provider, Align, Button, Checkbox, ComponentRef, ContainerKind,
     ContainerProps, Pad, ResponsiveQuery, Slider, Spacer, Template, TemplateRenderer, Text,
     TextInput,
@@ -22,6 +28,7 @@ use schnellui::template::{
 const PIXEL_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 
 /// A red square with a blue disc, rasterised by Rust into a PNG.
+#[cfg(feature = "svg")]
 const BADGE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect x="2" y="2" width="44" height="44" rx="8" fill="#d32f2f"/><circle cx="24" cy="24" r="12" fill="#1976d2"/></svg>"##;
 
 /// Width of the box a size query looks at, when it is narrow and when it is wide.
@@ -83,11 +90,16 @@ impl Gallery {
     }
 
     /// Starts a thread that adds a second to the counter, once per second.
-    /// The render does not know about it: the renderer notices the change
-    /// itself and asks the host for an update.
-    pub fn start_ticker(&self) {
-        let seconds = self.seconds;
-        std::thread::spawn(move || run_ticker(seconds, Duration::from_secs(1), None));
+    /// The render does not know about it: the signal change listener of the
+    /// renderer notices the write and asks the host for an update. The thread
+    /// stops when the returned [`Ticker`] drops.
+    pub fn start_ticker(&self) -> Ticker {
+        self.start_ticker_every(Duration::from_secs(1))
+    }
+
+    /// Like [`start_ticker`](Self::start_ticker) with another period.
+    pub fn start_ticker_every(&self, period: Duration) -> Ticker {
+        Ticker::start(self.seconds, period)
     }
 
     /// The whole screen. Call it once per render.
@@ -327,6 +339,14 @@ impl Gallery {
                 )
             }));
 
+        let shapes = row()
+            .gap(12.0)
+            .align(Align::Center)
+            .child(icon().detail("\u{2605}").label("Star"))
+            .child(drag_handle().label("Reorder"));
+        #[cfg(feature = "svg")]
+        let shapes = shapes.child(svg().value(BADGE_SVG).size(48.0, 48.0).label("Red square"));
+
         let rich = column()
             .gap(8.0)
             .child(Text::new("Rich text, icon, drag handle and svg").size(20.0))
@@ -335,14 +355,7 @@ impl Gallery {
                     .label("Release notes")
                     .value("Tables, themes and size queries are native views now."),
             )
-            .child(
-                row()
-                    .gap(12.0)
-                    .align(Align::Center)
-                    .child(icon().detail("\u{2605}").label("Star"))
-                    .child(drag_handle().label("Reorder"))
-                    .child(svg().value(BADGE_SVG).size(48.0, 48.0).label("Red square")),
-            );
+            .child(shapes);
 
         let themed = column()
             .gap(8.0)
@@ -501,26 +514,103 @@ impl Template for Lines {
     }
 }
 
-/// Adds a second to `seconds` every `period`, `limit` times or forever.
-fn run_ticker(seconds: Signal<u32>, period: Duration, limit: Option<u32>) {
-    let mut done = 0;
-    while limit.is_none_or(|limit| done < limit) {
-        std::thread::sleep(period);
-        seconds.update(|s| *s += 1);
-        done += 1;
+/// Threads of [`Ticker`] that are still running. Tests read it.
+static LIVE_TICKERS: AtomicUsize = AtomicUsize::new(0);
+
+/// The stop signal that a [`Ticker`] shares with its thread.
+#[derive(Default)]
+struct Stop {
+    stopped: Mutex<bool>,
+    wake: Condvar,
+}
+
+/// Owns the background thread that counts seconds. Dropping it stops the
+/// thread without waiting for it, so an unmount does not block.
+pub struct Ticker {
+    stop: Arc<Stop>,
+}
+
+impl Ticker {
+    fn start(seconds: Signal<u32>, period: Duration) -> Self {
+        let stop = Arc::new(Stop::default());
+        let thread_stop = stop.clone();
+        LIVE_TICKERS.fetch_add(1, Ordering::SeqCst);
+        let spawned = std::thread::Builder::new()
+            .name("schnellui-ticker".into())
+            .spawn(move || {
+                while !wait_or_stop(&thread_stop, period) {
+                    seconds.update(|s| *s += 1);
+                }
+                drop(thread_stop);
+                LIVE_TICKERS.fetch_sub(1, Ordering::SeqCst);
+            });
+        if spawned.is_err() {
+            LIVE_TICKERS.fetch_sub(1, Ordering::SeqCst);
+        }
+        Self { stop }
+    }
+
+    /// A handle that stops upgrading once the thread has exited.
+    #[cfg(test)]
+    fn probe(&self) -> Weak<Stop> {
+        Arc::downgrade(&self.stop)
     }
 }
 
-/// Mounts the gallery. The Android entry point and the tests both use it.
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        if let Ok(mut stopped) = self.stop.stopped.lock() {
+            *stopped = true;
+        }
+        self.stop.wake.notify_all();
+    }
+}
+
+/// Sleeps for `period` or until the ticker stops. Returns whether it stopped.
+fn wait_or_stop(stop: &Stop, period: Duration) -> bool {
+    let Ok(guard) = stop.stopped.lock() else {
+        return true;
+    };
+    match stop
+        .wake
+        .wait_timeout_while(guard, period, |stopped| !*stopped)
+    {
+        Ok((stopped, _)) => *stopped,
+        Err(_) => true,
+    }
+}
+
+/// Builds the gallery of one mount together with its ticker. The view closure
+/// of the mount must own the ticker, and the renderer owns the closure, so
+/// unmounting the app drops the ticker and stops its thread. Each mount gets
+/// its own gallery and its own ticker.
+pub fn ticking() -> (Gallery, Ticker) {
+    let gallery = Gallery::new();
+    let ticker = gallery.start_ticker();
+    (gallery, ticker)
+}
+
+/// Mounts the gallery with its ticker, the way the Android entry point does.
+pub fn mount_ticking(viewport: schnellui::render_android::Viewport) -> AndroidRenderer {
+    let (gallery, ticker) = ticking();
+    AndroidRenderer::new(viewport, move || {
+        let _ticker = &ticker;
+        gallery.view()
+    })
+}
+
+/// Mounts the gallery. The tests use it, because it has no ticker.
 pub fn mount(viewport: schnellui::render_android::Viewport) -> AndroidRenderer {
     let gallery = Gallery::new();
     AndroidRenderer::new(viewport, move || gallery.view())
 }
 
 schnellui::android_app!({
-    let gallery = Gallery::new();
-    gallery.start_ticker();
-    move || gallery.view()
+    let (gallery, ticker) = ticking();
+    move || {
+        let _ticker = &ticker;
+        gallery.view()
+    }
 });
 
 #[cfg(test)]
@@ -706,8 +796,17 @@ mod tests {
         assert!(text_id(&ops, "Release notes").is_some());
         assert!(text_id(&ops, "\u{2605}").is_some());
         assert!(text_id(&ops, "\u{22ee}\u{22ee}").is_some());
-        // The svg is the second Image, with a PNG data URL.
-        let images = kind_ids(&ops, kind::IMAGE);
+        #[cfg(feature = "svg")]
+        svg_is_a_png_image(&ops);
+        // Without the feature the gallery has no svg tile, only the image tile.
+        #[cfg(not(feature = "svg"))]
+        assert_eq!(kind_ids(&ops, kind::IMAGE).len(), 1);
+    }
+
+    /// The svg is the second Image, with a PNG data URL.
+    #[cfg(feature = "svg")]
+    fn svg_is_a_png_image(ops: &[Op]) {
+        let images = kind_ids(ops, kind::IMAGE);
         assert_eq!(images.len(), 2);
         let src = ops.iter().find_map(|op| match op {
             Op::SetStr { id, prop: p, value } if *id == images[1] && *p == prop::SRC => {
@@ -790,10 +889,19 @@ mod tests {
         assert_eq!(set_f32(&diff, parent, prop::WIDTH), Some(260.0));
     }
 
+    fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+        let start = std::time::Instant::now();
+        while !done() {
+            if start.elapsed() > Duration::from_secs(5) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        true
+    }
+
     #[test]
-    fn a_background_thread_counts_seconds_and_wakes_the_host() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+    fn the_ticker_counts_seconds_and_wakes_the_host() {
         let gallery = Gallery::new();
         let mut app = AndroidRenderer::new(Viewport::new(360.0, 800.0, 2.0, false), move || {
             gallery.view()
@@ -805,15 +913,55 @@ mod tests {
         });
         let ops = decode(&app.render()).unwrap();
         let label = text_id(&ops, "Running for 0 s").expect("counter");
-        app.start_wake_polling(Duration::from_millis(2));
+        let ticker = gallery.start_ticker_every(Duration::from_millis(2));
+        assert!(wait_until(|| woken.load(Ordering::SeqCst) == 1));
+        drop(ticker);
+        let diff = app.update().expect("diff");
+        assert!(set_text(&diff, label)
+            .expect("text")
+            .starts_with("Running for "));
+    }
+
+    #[test]
+    fn the_ticker_stops_when_the_app_is_unmounted_and_a_second_mount_has_one() {
+        let base = LIVE_TICKERS.load(Ordering::SeqCst);
+        let viewport = Viewport::new(360.0, 800.0, 2.0, false);
+        let first = mount_ticking(viewport);
+        assert_eq!(LIVE_TICKERS.load(Ordering::SeqCst), base + 1);
+        drop(first);
+        assert!(wait_until(|| LIVE_TICKERS.load(Ordering::SeqCst) == base));
+        let second = mount_ticking(viewport);
+        assert_eq!(LIVE_TICKERS.load(Ordering::SeqCst), base + 1);
+        drop(second);
+        assert!(wait_until(|| LIVE_TICKERS.load(Ordering::SeqCst) == base));
+    }
+
+    #[test]
+    fn a_stopped_ticker_releases_its_thread() {
+        let gallery = Gallery::new();
+        let ticker = gallery.start_ticker();
+        let probe = ticker.probe();
+        drop(ticker);
+        assert!(wait_until(|| probe.upgrade().is_none()));
+    }
+
+    #[test]
+    fn a_background_thread_counts_seconds_and_wakes_the_host() {
+        let gallery = Gallery::new();
+        let mut app = AndroidRenderer::new(Viewport::new(360.0, 800.0, 2.0, false), move || {
+            gallery.view()
+        });
+        let woken = Arc::new(AtomicUsize::new(0));
+        let seen = woken.clone();
+        app.set_wake(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let ops = decode(&app.render()).unwrap();
+        let label = text_id(&ops, "Running for 0 s").expect("counter");
         let seconds = gallery.seconds;
-        std::thread::spawn(move || run_ticker(seconds, Duration::from_millis(5), Some(1)))
+        std::thread::spawn(move || seconds.update(|s| *s += 1))
             .join()
             .unwrap();
-        let start = std::time::Instant::now();
-        while woken.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(5) {
-            std::thread::sleep(Duration::from_millis(2));
-        }
         assert_eq!(woken.load(Ordering::SeqCst), 1);
         let diff = app.update().expect("diff");
         assert_eq!(set_text(&diff, label).as_deref(), Some("Running for 1 s"));

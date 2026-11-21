@@ -16,6 +16,7 @@ pub mod glue;
 pub mod ops;
 mod queries;
 mod renderer;
+#[cfg(feature = "render-android-svg")]
 mod svg;
 mod template;
 #[cfg(test)]

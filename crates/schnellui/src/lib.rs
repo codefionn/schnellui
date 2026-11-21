@@ -8,6 +8,12 @@
 //! `dispatch_action`) is what makes the framework legible to an AI agent
 //! (Directive #5, §7).
 
+// Clippy 1.97 reports every `thread_local!` on Android as non-const, including
+// the ones that already use `const { .. }`. The expansion for Android targets
+// hides the const block from the lint. The initialisers are const, so the
+// lint is off there.
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
+
 // The `view!` macro and the merged pillar modules address this crate by name
 // (`::schnellui::…`), exactly as downstream applications do. Declaring the crate
 // under its own name keeps those absolute paths resolvable from inside.

@@ -4,7 +4,7 @@
 //! An app handle is a leaked `Box<AndroidRenderer>`. All calls come from the
 //! Android main thread, as the contract requires.
 
-use std::time::Duration;
+use std::ffi::{c_char, c_int, CString};
 
 use jni::errors::LogErrorAndDefault;
 use jni::objects::JValue;
@@ -36,31 +36,59 @@ pub fn mount<'a>(
         let handle = ptr as usize as i64;
         // SAFETY: `ptr` was just leaked and nothing else holds it yet.
         let renderer = unsafe { &mut *ptr };
+        // The renderer registers a signal change listener while it lives, so
+        // this callback runs on whichever thread wrote the signal.
         renderer.set_wake(move || request_update(&vm, &bridge, handle));
-        renderer.start_wake_polling(WAKE_POLL);
         Ok(handle)
     })
     .resolve::<LogErrorAndDefault>()
 }
 
-/// How often the wake thread looks for a signal change.
-const WAKE_POLL: Duration = Duration::from_millis(32);
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(prio: c_int, tag: *const c_char, text: *const c_char) -> c_int;
+}
+
+const ANDROID_LOG_ERROR: c_int = 6;
+
+/// Writes one line to logcat under the tag `schnellui`.
+fn log_error(message: &str) {
+    let text = CString::new(message.replace('\0', " ")).unwrap_or_default();
+    // SAFETY: both strings are NUL terminated and outlive the call.
+    unsafe {
+        __android_log_write(ANDROID_LOG_ERROR, c"schnellui".as_ptr(), text.as_ptr());
+    }
+}
 
 /// Calls the static `SchnellBridge.requestUpdate(long)` from the current
 /// thread, attaching it if needed. The host posts the update to its main
 /// thread.
+///
+/// This runs on the thread that wrote a signal, which can be any Rust thread.
+/// The attachment is scoped: the thread is attached for this call and detached
+/// when it returns, so a worker thread is never left attached to the JVM and
+/// can exit without waiting on it. A wake fires at most once per render, so
+/// the cost of attaching each time is small. A thread that was already
+/// attached stays attached.
+///
+/// If `requestUpdate` throws, the pending Java exception is cleared so it does
+/// not surface in unrelated Java code on this thread, and the error goes to
+/// logcat.
 fn request_update(vm: &jni::JavaVM, bridge: &jni::refs::Global<JClass<'static>>, handle: i64) {
-    let called = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-        env.call_static_method(
+    let called = vm.attach_current_thread_for_scope(|env| -> jni::errors::Result<()> {
+        let result = env.call_static_method(
             bridge,
             jni_str!("requestUpdate"),
             jni_sig!("(J)V"),
             &[JValue::Long(handle)],
-        )?;
-        Ok(())
+        );
+        if env.exception_check() {
+            env.exception_clear();
+        }
+        result.map(|_| ())
     });
     if let Err(error) = called {
-        eprintln!("schnellui: requestUpdate failed: {error}");
+        log_error(&format!("requestUpdate failed: {error}"));
     }
 }
 

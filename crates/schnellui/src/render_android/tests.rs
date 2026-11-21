@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use schnellui::signal::create_signal;
 use schnellui::template::{
@@ -1732,7 +1731,7 @@ fn table_and_rows_map_onto_kinds() {
     assert_eq!(row.props.get(&prop::SELECTED), Some(&Value::I32(1)));
     assert_eq!(row.children.len(), 1);
     // A row without items has no ITEMS prop.
-    assert!(render_widget(table_row()).props.get(&prop::ITEMS).is_none());
+    assert!(!render_widget(table_row()).props.contains_key(&prop::ITEMS));
     let disabled = render_widget(table_row().disabled(true));
     assert_eq!(disabled.props.get(&prop::ENABLED), Some(&Value::I32(0)));
 }
@@ -1778,7 +1777,7 @@ fn rich_text_icon_and_drag_handle_map_onto_views() {
     );
     assert_eq!(
         title.props.get(&prop::ROLE),
-        Some(&Value::I32(Role::ColumnHeader.as_u16() as i32))
+        Some(&Value::I32(Role::Heading.as_u16() as i32))
     );
     let body = &n.children[1];
     assert_eq!(
@@ -2033,8 +2032,10 @@ fn a_matched_node_gets_a_set_when_its_target_moves_and_a_clear_when_it_is_lost()
     let _ = ops;
 }
 
+#[cfg(feature = "render-android-svg")]
 const SQUARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
 
+#[cfg(feature = "render-android-svg")]
 fn data_url_png(url: &str) -> Vec<u8> {
     let b64 = url
         .strip_prefix("data:image/png;base64,")
@@ -2055,6 +2056,7 @@ fn data_url_png(url: &str) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "render-android-svg")]
 #[test]
 fn svg_becomes_an_image_with_a_png_data_url_and_is_cached() {
     let tick = create_signal(0);
@@ -2093,6 +2095,7 @@ fn svg_becomes_an_image_with_a_png_data_url_and_is_cached() {
     assert_eq!(other.svg_rasterisations(), 1);
 }
 
+#[cfg(feature = "render-android-svg")]
 #[test]
 fn svg_uses_markup_and_its_own_size_and_survives_bad_source() {
     let mut template = AndroidTemplate::new(vp());
@@ -2121,6 +2124,7 @@ fn svg_uses_markup_and_its_own_size_and_survives_bad_source() {
     );
 }
 
+#[cfg(feature = "render-android-svg")]
 #[test]
 fn base64_matches_the_standard_vectors() {
     let enc = |s: &str| {
@@ -2135,6 +2139,25 @@ fn base64_matches_the_standard_vectors() {
     assert_eq!(enc("foob"), "Zm9vYg==");
     assert_eq!(enc("fooba"), "Zm9vYmE=");
     assert_eq!(enc("foobar"), "Zm9vYmFy");
+}
+
+#[cfg(not(feature = "render-android-svg"))]
+#[test]
+fn svg_without_the_feature_is_a_stack_of_the_given_size_with_its_label() {
+    let mut template = AndroidTemplate::new(vp());
+    let n = svg()
+        .value("<svg/>")
+        .size(20.0, 10.0)
+        .label("red square")
+        .render(&mut template);
+    assert_eq!(n.kind, kind::STACK);
+    assert!(!n.props.contains_key(&prop::SRC));
+    assert_eq!(n.props.get(&prop::WIDTH), Some(&Value::F32(20.0)));
+    assert_eq!(n.props.get(&prop::HEIGHT), Some(&Value::F32(10.0)));
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("red square".into()))
+    );
 }
 
 #[test]
@@ -2173,19 +2196,48 @@ fn wake_fires_once_for_a_change_outside_dispatch() {
     let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
     let count = counting_wake(&mut app);
     app.render();
-    assert!(!app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
     n.set(1);
-    assert!(app.check_wake());
     assert_eq!(count.load(Ordering::SeqCst), 1);
     // More changes before the host updates do not call again.
     n.set(2);
-    assert!(!app.check_wake());
     assert_eq!(count.load(Ordering::SeqCst), 1);
     // After the update it wakes again.
     assert!(app.update().is_some());
-    assert!(!app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 1);
     n.set(3);
-    assert!(app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn wake_fires_once_for_a_write_from_another_thread_and_again_only_after_a_render() {
+    let n = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
+    let count = counting_wake(&mut app);
+    app.render();
+    std::thread::spawn(move || n.set(1)).join().unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    std::thread::spawn(move || n.set(2)).join().unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert!(app.update().is_some());
+    std::thread::spawn(move || n.set(3)).join().unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_write_from_another_thread_during_a_render_still_wakes() {
+    let n = create_signal(0);
+    let other = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || {
+        // A second thread writes while this thread renders.
+        std::thread::spawn(move || other.set(1)).join().unwrap();
+        Text::new(format!("n={}", n.get()))
+    });
+    let count = counting_wake(&mut app);
+    app.render();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    // The wake is armed again by the next render, which wakes once more.
+    app.update();
     assert_eq!(count.load(Ordering::SeqCst), 2);
 }
 
@@ -2202,66 +2254,55 @@ fn wake_stays_quiet_for_changes_inside_dispatch_resize_and_update() {
     let button = host.ids_of_kind(kind::BUTTON)[0];
     let diff = app.borrow_mut().dispatch(button, Event::Click);
     assert!(diff.is_some());
-    assert!(
-        !app.borrow().check_wake(),
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
         "a change made by a handler wakes"
     );
-    assert_eq!(count.load(Ordering::SeqCst), 0);
     // An update renders the change, so it does not wake either.
     n.set(10);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
     assert!(app.borrow_mut().update().is_some());
-    assert!(!app.borrow().check_wake());
-    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
     // Resize renders too.
-    n.set(11);
     app.borrow_mut().resize(500.0, 640.0);
-    assert!(!app.borrow().check_wake());
-    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn wake_does_not_fire_while_a_dispatch_is_running() {
+fn a_memo_over_a_signal_set_in_a_handler_does_not_wake_after_the_dispatch() {
+    use schnellui::signal::create_memo;
     let n = create_signal(0);
-    let count = Arc::new(AtomicUsize::new(0));
-    let state: Rc<RefCell<Option<Arc<super::renderer::WakeState>>>> = Rc::default();
-    let polled = Rc::new(RefCell::new(None));
-    let (slot, result) = (state.clone(), polled.clone());
+    let doubled = create_memo(move || n.get() * 2);
     let mut app = AndroidRenderer::new(vp(), move || {
-        let (slot, result) = (slot.clone(), result.clone());
-        Button::new("b").on_click(move || {
-            n.set(n.get() + 1);
-            // What the polling thread does, but during the handler.
-            let handle = slot.borrow().clone().unwrap();
-            *result.borrow_mut() = Some(handle.check());
-        })
+        Button::new(format!("d={}", doubled.get())).on_click(move || n.set(n.get() + 1))
     });
-    let seen = count.clone();
-    app.set_wake(move || {
-        seen.fetch_add(1, Ordering::SeqCst);
-    });
-    *state.borrow_mut() = Some(app.wake_state());
+    let count = counting_wake(&mut app);
     let mut host = Host::default();
     host.apply(&ops_of(&app.render()));
     let button = host.ids_of_kind(kind::BUTTON)[0];
-    app.dispatch(button, Event::Click);
-    assert_eq!(*polled.borrow(), Some(false));
+    let diff = app.dispatch(button, Event::Click).expect("diff");
+    host.apply(&ops_of(&diff));
+    assert_eq!(count.load(Ordering::SeqCst), 0, "the memo woke the host");
+    // The change reached the view through the memo.
+    assert_eq!(doubled.get(), 2);
     assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert_eq!(app.update(), None);
+    // A later change from outside still wakes.
+    n.set(5);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn the_wake_thread_fires_for_a_change_from_another_thread() {
+fn the_listener_is_removed_when_the_renderer_drops() {
+    let before = schnellui::signal::change_listener_count();
     let n = create_signal(0);
     let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
+    assert_eq!(schnellui::signal::change_listener_count(), before + 1);
     let count = counting_wake(&mut app);
     app.render();
-    app.start_wake_polling(Duration::from_millis(2));
-    app.start_wake_polling(Duration::from_millis(2));
-    std::thread::spawn(move || n.set(1)).join().unwrap();
-    let start = std::time::Instant::now();
-    while count.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(count.load(Ordering::SeqCst), 1);
-    assert!(app.update().is_some());
+    drop(app);
+    assert_eq!(schnellui::signal::change_listener_count(), before);
+    n.set(1);
+    assert_eq!(count.load(Ordering::SeqCst), 0);
 }

@@ -33,6 +33,7 @@ fn role_tag_roundtrip() {
         Role::Menu,
         Role::MenuItem,
         Role::PasswordInput,
+        Role::Heading,
     ] {
         assert_eq!(Role::from_u16(r.as_u16()), r);
     }
@@ -50,6 +51,10 @@ fn role_table_tags_are_dense_and_dom_names_follow_labels() {
         }
     }
     assert_eq!(Role::TableRow.dom_name(), "table-row");
+    assert_eq!(Role::Heading.as_u16(), 32);
+    assert_eq!(Role::Heading.label(), "heading");
+    assert_eq!(Role::Heading.dom_name(), "heading");
+    assert_eq!(Role::Heading.to_accesskit(), accesskit::Role::Heading);
     assert_eq!(Role::from_u16(u16::MAX), Role::Group);
 }
 

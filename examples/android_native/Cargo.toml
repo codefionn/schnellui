@@ -11,5 +11,11 @@ publish = false
 name = "android_native"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["svg"]
+# Rasterises the SVG tile of the gallery. Build with --no-default-features for a
+# smaller library: the Svg component is then an empty Stack that keeps its label.
+svg = ["schnellui/render-android-svg"]
+
 [dependencies]
 schnellui = { workspace = true, features = ["render-android"] }

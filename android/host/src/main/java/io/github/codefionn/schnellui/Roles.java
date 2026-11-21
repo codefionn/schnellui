@@ -12,14 +12,11 @@ public final class Roles {
     public static final int PROGRESS_INDICATOR = 9;
     public static final int SWITCH = 10;
     public static final int RADIO = 11;
-    public static final int COLUMN_HEADER = 21;
+    public static final int HEADING = 32;
 
-    /**
-     * True for roles that announce as a heading. The Rust Role table has no Heading variant,
-     * so a column header is the closest match.
-     */
+    /** True for roles that announce as a heading. */
     public static boolean isHeading(int role) {
-        return role == COLUMN_HEADER;
+        return role == HEADING;
     }
 
     /** The accessibility class name for a role, or null to keep the view's own. */

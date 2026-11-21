@@ -21,7 +21,9 @@ cargo test --locked \
     -p schnellui-icons-md -p schnellui-bench -- --test-threads=1
 cargo test --locked -p schnellui --features render-html,ssr --lib render_html -- --test-threads=1
 cargo test --locked -p schnellui --features render-android --lib render_android -- --test-threads=1
+cargo test --locked -p schnellui --features render-android-svg --lib render_android -- --test-threads=1
 cargo test --locked -p android_native -- --test-threads=1
+cargo test --locked -p android_native --no-default-features -- --test-threads=1
 scripts/check-android-symbols.sh
 
 # Run live apps with unusable display addresses, drive them through private debug

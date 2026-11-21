@@ -9,8 +9,9 @@ import org.junit.Test;
 
 public class RolesTest {
     @Test
-    public void columnHeaderIsHeading() {
-        assertTrue(Roles.isHeading(21));
+    public void onlyTheHeadingRoleIsHeading() {
+        assertTrue(Roles.isHeading(32));
+        assertFalse(Roles.isHeading(21));
         assertFalse(Roles.isHeading(2));
         assertFalse(Roles.isHeading(-1));
     }

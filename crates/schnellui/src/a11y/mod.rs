@@ -150,6 +150,10 @@ roles! {
     /// A submittable group of fields: a [`Role::Button`] marked as a submit
     /// button activates the nearest enclosing form.
     Form = 31 => Form, "form", "form";
+    // Appended after `Form = 31` so the scene a11y column stays wire-stable.
+    /// A section heading. Native renderers mark the view as an accessibility
+    /// heading.
+    Heading = 32 => Heading, "heading", "heading";
 }
 
 impl Role {

@@ -144,6 +144,7 @@ impl<T: Send + Sync + 'static> Signal<T> {
         propagate_change(&mut rt, self.id);
         drop(rt);
         drop(old);
+        notify_change();
     }
 
     /// **PUSH** via in-place mutation. Always fires (mutation is assumed to change);
@@ -194,6 +195,9 @@ impl<T: Send + Sync + 'static> Signal<T> {
             propagate_change(&mut rt, self.id);
         }
         drop(rt);
+        if restored {
+            notify_change();
+        }
         match result {
             Ok(value) if restored => Some(value),
             Ok(_) => None,

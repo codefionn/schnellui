@@ -973,6 +973,9 @@ pub(crate) fn recompute(id: NodeId) {
         propagate_change(&mut rt, id);
     }
     drop(rt);
+    if existed && changed {
+        notify_change();
+    }
     // The previous run's children drop now: the node is no longer RUNNING and no
     // observer is installed, so a `Drop` that reads a signal adds no edge and a
     // panicking `Drop` cannot leave the node stuck.

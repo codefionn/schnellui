@@ -49,10 +49,15 @@ slotmap::new_key_type! {
 
 mod arena;
 mod handles;
+mod listeners;
 mod owner;
 mod subscription;
 pub use arena::*;
 pub use handles::*;
+#[cfg(all(test, feature = "render-android"))]
+pub(crate) use listeners::change_listener_count;
+pub(crate) use listeners::notify_change;
+pub use listeners::{add_change_listener, remove_change_listener, ChangeListenerId};
 pub use owner::*;
 pub use subscription::*;
 

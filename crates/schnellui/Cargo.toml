@@ -102,6 +102,11 @@ render-html = [
 # picks the native-activity one. Its glue needs an `android_main`, which
 # `android_app!` defines as an empty function.
 render-android = ["dep:jni", "winit/android-native-activity"]
+# SVG support of the Android renderer: the Svg component becomes a PNG image.
+# Without it the Svg component is an empty Stack of the given size that keeps its
+# label, and `render_android` does not reference the SVG parser, the rasteriser,
+# text shaping or PNG encoding.
+render-android-svg = ["render-android"]
 # Server-side rendering entry points of the HTML renderer.
 ssr = ["render-html"]
 # Headless host and retained-state checks for property-based fuzzing

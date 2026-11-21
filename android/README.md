@@ -43,6 +43,8 @@ To include the native library:
 
 The APK is `demo/build/outputs/apk/debug/demo-debug.apk`.
 
+The demo library rasterises SVGs through the `svg` feature of `examples/android_native`, which turns on `schnellui/render-android-svg`. `./build-rust.sh --no-default-features` builds the smaller library without it. The Svg component is then an empty Stack of the given size that keeps its label, and the gallery has no SVG tile.
+
 ## Install and launch
 
 ```sh
@@ -97,4 +99,4 @@ Android does the layout. Some props map approximately:
 - MAX_WIDTH and MAX_HEIGHT only clamp an explicit WIDTH, HEIGHT or BASIS. Platform views have no max size.
 - JUSTIFY space-between, space-around and space-evenly are done in `FlexLinearLayout` after the normal layout pass.
 - WRAP is ignored.
-- A column header role is the only heading role, because the Rust `Role` table has no Heading.
+- The Heading role (tag 32) is the only heading role. A column header is not a heading.
