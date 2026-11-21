@@ -29,6 +29,7 @@ public class SchnellActivity extends Activity {
     private ViewApplier applier;
     private long app;
     private boolean dark;
+    private float mountDensity;
     private float lastW = -1;
     private float lastH = -1;
 
@@ -82,6 +83,7 @@ public class SchnellActivity extends Activity {
     private void mount() {
         dark = isDark();
         float density = getResources().getDisplayMetrics().density;
+        mountDensity = density;
         Configuration c = getResources().getConfiguration();
         lastW = c.screenWidthDp;
         lastH = c.screenHeightDp;
@@ -130,8 +132,9 @@ public class SchnellActivity extends Activity {
         if (app == 0) {
             return;
         }
-        if (isDark() != dark) {
-            // The theme is fixed at mount, so a night mode change builds the app again.
+        if (isDark() != dark || getResources().getDisplayMetrics().density != mountDensity) {
+            // The theme and the dp to px factor are fixed at mount, so a night mode or
+            // density change builds the app again.
             unmount();
             mount();
         } else {
