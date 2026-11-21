@@ -251,6 +251,8 @@ ephemeral port. There is no fixed-port fallback.
 
 Optimized builds omit automatic startup. Applications that deliberately want the
 same facility in an optimized build can enable SchnellUI's
-`debug-instrumentation` Cargo feature. Do not expose or forward the port: the API
-is intentionally unauthenticated because it is restricted to the local machine
-and debug workflows.
+`debug-instrumentation` Cargo feature. Even though requests require the per-run
+bearer token in `X-Schnellui-Debug-Token` (and TCP requests also validate `Host`
+and reject foreign `Origin` headers), never expose or forward the socket or port
+outside the local machine: the server is designed strictly for local development
+and automated testing workflows.

@@ -1,9 +1,10 @@
 # Binary size
 
-Debug info is most of a schnellui binary. A debug build of scriptschnell-term was
-1.19 GB with cargo's defaults and 139 MB with the profiles below. Its release build
-went down to 67 MB. Test executables shrink the same way, so `target/` grows far
-slower.
+Debug info makes up most of a `schnellui` binary under Cargo's defaults. For
+example, a debug build of a full desktop app (`scriptschnell-term`) dropped from
+1.19 GB with Cargo's defaults to 139 MB with the profiles below, and its release
+build shrank to 67 MB. Test executables shrink the same way, so `target/` grows far
+more slowly.
 
 Cargo ignores the profiles of dependencies, so an app that uses schnellui has to set
 these in its own workspace `Cargo.toml`. This workspace uses the same ones.

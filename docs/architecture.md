@@ -8,9 +8,11 @@ in [Known gaps against SOUL.md](#known-gaps-against-soulmd).
 SchnellUI has two complementary UI paths:
 
 - A retained native path: build a `View` tree once, then update the retained scene
-  incrementally and render it with WGPU.
+  incrementally and render it with WGPU (`render_wgpu`) or the SIMD CPU fallback
+  (`render_soft`).
 - A renderer-generic path: express components as `Template` values and render the
-  same value either into the retained tree or into semantic HTML.
+  same value into the retained tree, semantic HTML (`render_html`), or native
+  Android views (`render_android`).
 
 The umbrella [`schnellui`](../crates/schnellui/src/lib.rs) crate is the application
 boundary. It re-exports the public building blocks and owns the native runtime.
@@ -21,7 +23,7 @@ flowchart TB
   core["schnellui<br/>App and public re-exports"]
   authoring["Authoring<br/>macro, template, signal, store, localization"]
   retained["Retained native<br/>widgets, scene, layout, text, a11y"]
-  outputs["Outputs<br/>WGPU, HTML, platform, testing"]
+  outputs["Outputs<br/>WGPU, SIMD CPU, HTML, Android, platform, testing"]
 
   app --> core
   core --> authoring
@@ -38,8 +40,8 @@ The pillars are separated by responsibility rather than by widget:
 | --- | --- | --- |
 | Authoring | [`schnellui-macro`](../crates/schnellui-macro), [`schnellui-view-parser`](../crates/schnellui-view-parser), [`schnellui::template`](../crates/schnellui/src/template), [`schnellui::signal`](../crates/schnellui/src/signal), [`schnellui::store`](../crates/schnellui/src/store), [`schnellui::localization`](../crates/schnellui/src/localization) | `view!` parsing and code generation, renderer-neutral component values, local signals, selector-backed shared state, messages. |
 | Retained model | [`schnellui::widgets`](../crates/schnellui/src/widgets), [`schnellui::scene`](../crates/schnellui/src/scene), [`schnellui::layout`](../crates/schnellui/src/layout), [`schnellui::text`](../crates/schnellui/src/text) | Builds widgets into a retained scene, computes geometry, shapes text, keeps interaction callbacks. |
-| Native integration | [`schnellui`](../crates/schnellui), [`schnellui::render_wgpu`](../crates/schnellui/src/render_wgpu), [`schnellui::platform`](../crates/schnellui/src/platform), [`schnellui::a11y`](../crates/schnellui/src/a11y) | App lifecycle, GPU presentation, window events, AccessKit trees, system-wide (global) shortcuts, the system's global menu bar (macOS only; never drawn in the window). |
-| Alternative output and support | [`schnellui::render_html`](../crates/schnellui/src/render_html), [`schnellui::testing`](../crates/schnellui/src/testing), themes, icons, charts, Servo | DOM and CSS rendering, scenario testing, optional domain integrations. |
+| Native integration | [`schnellui`](../crates/schnellui), [`schnellui::render_wgpu`](../crates/schnellui/src/render_wgpu), [`schnellui::render_soft`](../crates/schnellui/src/render_soft), [`schnellui::platform`](../crates/schnellui/src/platform), [`schnellui::a11y`](../crates/schnellui/src/a11y) | App lifecycle, GPU and SIMD CPU presentation, window events, AccessKit trees, system-wide (global) shortcuts, the system's global menu bar (macOS only; never drawn in the window). |
+| Alternative output and support | [`schnellui::render_html`](../crates/schnellui/src/render_html), [`schnellui::render_android`](../crates/schnellui/src/render_android), [`schnellui::testing`](../crates/schnellui/src/testing), themes, icons, charts, Servo | Semantic DOM/CSS/SSR rendering, native Android view op-buffers, scenario testing, optional domain integrations. |
 
 `schnellui::store` is a signal-backed facade for shared application models. A
 `Store<T>` owns the state, and `Selector` values expose equality-gated derived
@@ -57,7 +59,7 @@ Examples are workspace members too. Start with [`hello`](../examples/hello/src/m
 
 `App::mount*` calls `View::build` once ([`App::mount_boxed`](../crates/schnellui/src/app_new.rs)).
 The resulting widgets populate an app-owned runtime (callbacks and dynamic slots) and
-a retained [`Scene`](../crates/schnellui/src/scene/scene.rs). Later frames do not
+a retained [`Scene`](../crates/schnellui/src/scene/retained.rs). Later frames do not
 rebuild the view. Signal subscriptions and dynamic slots mutate the affected scene
 data, and the dirty channels (below) name the work left to do.
 
@@ -241,7 +243,7 @@ release over the link, and a press released elsewhere fires nothing.
 
 ## Dirty channels and their consumers
 
-The [`Scene`](../crates/schnellui/src/scene/scene.rs) tracks changes as sparse lists
+The [`Scene`](../crates/schnellui/src/scene/retained.rs) tracks changes as sparse lists
 and counters, not as a damage rectangle. `Scene::mark_dirty` is the only writer.
 
 | Channel | Where it lives | Who reads it |
@@ -291,7 +293,7 @@ renderer and a windowed one can share one scene and each stay current.
   slot drawn after it and moves the layer boundaries, so draw order stays the same.
   Only the changed bytes are uploaded (`upload_range`).
 - Ranged node patches. A node written through `Scene::paint_range_mut`
-  ([`scene.rs`](../crates/schnellui/src/scene/scene.rs)) records the changed
+  ([`retained.rs`](../crates/schnellui/src/scene/retained.rs)) records the changed
   primitive ranges, and `Scene::paint_dirty_ranges` returns them until the next
   `clear_dirty`. Any other paint write this frame (`paint_mut`, `mark_dirty`,
   `set_color`) makes the node whole-node dirty again. `Instances::update_node_ranges`
@@ -827,7 +829,7 @@ clips the renderer applies.
   it through `pointer_hit_at` when all three still match. The entry is stored after
   the hover decoration is applied, so that paint-only change does not invalidate it.
 
-## The `Template` renderer seam and HTML
+## The `Template` renderer seam, HTML and Android
 
 [`Template`](../crates/schnellui/src/template/mod.rs) is a statically typed component
 value. Its `render` method accepts a `TemplateRenderer`, whose associated `Node` is
@@ -836,16 +838,20 @@ ownership stay in `schnellui::template`. Renderers only map them to nodes.
 
 The retained adapter is
 [`SceneTemplate`](../crates/schnellui/src/widgets/template.rs): it returns `AnyView`,
-which `App::mount_template` mounts normally. The HTML branch uses
-[`HtmlRenderer`](../crates/schnellui/src/render_html/renderer.rs) and `DomTemplate`
+which `App::mount_template` mounts normally. The HTML branch (feature `render-html`)
+uses [`HtmlRenderer`](../crates/schnellui/src/render_html/renderer.rs) and `DomTemplate`
 ([`template.rs`](../crates/schnellui/src/render_html/template.rs)) to emit semantic DOM
 and CSS. It uses no canvas and does not translate WGPU draw commands. SSR and routing
-are in [`ssr.rs`](../crates/schnellui/src/render_html/ssr.rs) and
-[`ssr/router.rs`](../crates/schnellui/src/render_html/ssr/router.rs).
+(feature `ssr`) are in [`ssr.rs`](../crates/schnellui/src/render_html/ssr.rs) and
+[`ssr/router.rs`](../crates/schnellui/src/render_html/ssr/router.rs). The Android branch
+(feature `render-android`) uses
+[`AndroidRenderer`](../crates/schnellui/src/render_android/renderer.rs) and
+`AndroidTemplate` to diff a node tree into a binary op buffer applied to real
+`android.widget` views over JNI (see [android-renderer.md](android-renderer.md)).
 
 ```rust,ignore
+use schnellui::template::{column, Button, Text};
 use schnellui::App;
-use schnellui_template::{column, Button, Text};
 
 let page = column()
     .child(Text::new("Template component"))
@@ -859,8 +865,8 @@ A template value is consumed when rendered. Create it again (often from a small 
 factory) when targeting more than one backend:
 
 ```rust,ignore
-use schnellui_render_html::HtmlRenderer;
-use schnellui_template::{column, Button, Text};
+use schnellui::render_html::HtmlRenderer;
+use schnellui::template::{column, Button, Text};
 
 let document = HtmlRenderer::new(640, 360).render(
     column().child(Text::new("Template component")).child(Button::new("Continue")),
@@ -873,10 +879,13 @@ flowchart LR
   T[Template component tree] --> R{TemplateRenderer}
   R --> ST[SceneTemplate]
   ST --> V[retained View]
-  V --> N[App, Scene, layout, WGPU]
+  V --> N[App, Scene, layout, WGPU / SIMD CPU]
   R --> DT[DomTemplate]
   DT --> H[HTML and CSS]
   H --> B[Browser or SSR hydration]
+  R --> AT[AndroidTemplate]
+  AT --> AO[Diffed binary op buffer]
+  AO --> AW[android.widget views via JNI]
 ```
 
 How the HTML path works:
@@ -937,8 +946,8 @@ SOUL.md makes zero allocation on the re-render path a hard rule. Two things enfo
 
 - [`bench/`](../bench/src/main.rs) is the `schnellui-bench` binary. Its table of paths
   ([`config.rs`](../bench/src/config.rs), `paths`) has 19 `Zero` rows, 3 `Bounded`
-  rows and 10 `Report` rows. A zero row must allocate nothing in every measured
-  iteration, so a drifting count fails. The scale rows (`scale_paths`) run a path at
+  rows and 11 `Report` rows. A zero row must allocate nothing in every measured
+  iteration, so a drifting count fails. The 19 scale rows (`scale_paths`) run a path at
   n = 10, 100 and 1000 and print `SCALES-FLAT` only if the time ratio stays under 3x
   and allocation counts and bytes are identical with no net retained allocations.
   The process exits non-zero on any failed budget or scale row. `--allocations-only`
@@ -952,16 +961,15 @@ SOUL.md makes zero allocation on the re-render path a hard rule. Two things enfo
   ```
 
 [`scripts/ci.sh`](../scripts/ci.sh) runs formatting, core unit and integration tests,
-allocation tests, and the release benchmark's deterministic allocation gate. The
-GitHub Actions workflow installs a software Vulkan adapter so GPU pixel equivalence
-tests can run on a hosted Linux runner, and retains the JSON allocation report.
-Wall-clock scaling remains a local benchmark check. There is no instruction-count
-gate yet.
+HTML and Android renderer tests, live headless-windowed tests, allocation tests, and
+the release benchmark's deterministic allocation gate. The GitHub Actions workflow
+installs a software Vulkan adapter so GPU pixel equivalence tests can run on a hosted
+Linux runner, and retains the JSON allocation report. Wall-clock scaling remains a
+local benchmark check. There is no instruction-count gate yet.
 
 Budgets only go down. Never raise one, and never turn a zero row into a non-zero row.
-Other agents may share the machine, so wrap cargo calls as
-`agent-bus run --mutex schnellui-cargo -- cargo ...`. The debugging servers are
-described in [docs/debugging](debugging/DEBUG_INSTRUMENTATION.md).
+The debugging servers are described in
+[docs/debugging](debugging/DEBUG_INSTRUMENTATION.md).
 
 ## Known gaps against SOUL.md
 
@@ -976,9 +984,11 @@ with the evidence.
   New static child types are text, column, row, stack and spacer. Other widget
   changes and attribute removals request a rebuild. Templates own data descriptors,
   not preallocated scene nodes shared between applications.
-- Tile caching currently uses one picture. Changed-frame dependency checks hash
-  every instance. Scroll and property updates gather changed instance
-  coordinates; they do not yet composite independently cached scroll slices.
+- Tile caching currently uses one picture rather than separate slices by update
+  frequency. Incremental fingerprinting re-hashes only instances in `changed_spans`,
+  but refolding a marked tile still scans every stored instance span linearly, dirty
+  frames clear the scratch attachment as a whole, and scroll/property updates still
+  re-gather instance coordinates rather than compositing independently cached slices.
 - No interned primitive scene, GPU indirection cache, or indirect draws. `PaintData`
   owns primitives and GPU buffers hold direct quad, glyph and image instances.
 - CI enforces deterministic allocation counts and bytes. `iai-callgrind` and `divan`
