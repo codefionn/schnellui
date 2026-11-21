@@ -43,6 +43,20 @@ Ids are non-zero and never reused within one mount. A CREATE comes before any ot
 | 8 | Slider | `SeekBar` |
 | 9 | TextInput | `EditText` |
 | 10 | Spacer | `Space` |
+| 11 | Switch | `Switch`. TEXT is the visible label. |
+| 12 | Radio | `RadioButton`. TEXT is the visible label. |
+| 13 | Dropdown | `Spinner` in dropdown mode |
+| 14 | Progress | horizontal determinate `ProgressBar` |
+| 15 | Loading | indeterminate circular `ProgressBar` |
+| 16 | TextArea | multi-line `EditText`, at least 3 lines tall, text starts at the top |
+| 17 | Image | `ImageView`, scaled to fit inside its box |
+| 18 | Divider | 1 dp high `View` drawn with the theme's `listDivider`, as wide as its parent |
+| 19 | Badge | `TextView` with 12 sp text on a pill-shaped background in the theme accent color |
+| 20 | Link | `TextView` in the theme link color, underlined, clickable |
+| 21 | Dialog | a zero-size placeholder `View` in its parent. Its children live in an `android.app.Dialog` window. See below. |
+| 22 | TabBar | `HorizontalScrollView` around a horizontal `LinearLayout`. Children go into the inner layout. |
+| 23 | Tab | borderless `Button`. SELECTED sets the view's selected state, bold text and an accent underline. |
+| 24 | ListItem | horizontal `LinearLayout`, at least 48 dp tall, with the `selectableItemBackground` ripple when enabled. Its first view is a `TextView` showing TEXT, which the host owns. Children follow it. SELECTED sets the activated state. |
 
 ## Properties
 
@@ -70,35 +84,52 @@ A Slider or TextInput with no WIDTH, MIN_WIDTH, FILL, GROW or stretch is 160 dp 
 | 22 | GAP | f32 | Row, Column | 0. Space between adjacent children. |
 | 23 | WRAP | bool | Row, Column | false. Hosts may ignore it for now. |
 | 24 | SCROLLBAR | bool | Scroll | false |
-| 30 | TEXT | string | Text, Button, TextInput | empty |
+| 30 | TEXT | string | Text, Button, TextInput, Switch, Radio, TextArea, Badge, Link, Tab, ListItem, Dialog (window title) | empty |
 | 31 | TEXT_SIZE | f32 | Text | view default |
 | 32 | TEXT_WRAP | i32 | Text | 0 no wrap, 1 word, 2 anywhere |
 | 33 | TEXT_ALIGN | i32 | Text | 0 start, 1 center, 2 end, 3 justify |
 | 34 | ELLIPSIS | bool | Text | false |
 | 35 | ROLE | i32 | all | none. The `schnellui::a11y::Role` tag. Heading roles set `setAccessibilityHeading(true)`. |
-| 36 | A11Y_LABEL | string | all | none. `contentDescription`. On TextInput it is also the hint. |
-| 40 | CHECKED | bool | Checkbox | false |
-| 41 | VALUE | f32 | Slider | 0 |
-| 42 | MIN | f32 | Slider | 0 |
-| 43 | MAX | f32 | Slider | 100 |
+| 36 | A11Y_LABEL | string | all | none. `contentDescription`. On TextInput and TextArea it is also the hint. |
+| 40 | CHECKED | bool | Checkbox, Switch, Radio | false |
+| 41 | VALUE | f32 | Slider, Progress | 0 |
+| 42 | MIN | f32 | Slider, Progress | 0 |
+| 43 | MAX | f32 | Slider, Progress | 100 |
 | 44 | STEP | f32 | Slider | 0, which means continuous. The host then uses 1000 positions. |
 | 45 | PASSWORD | bool | TextInput | false |
 | 46 | APPEARANCE | i32 | Button | 0 solid, 1 ghost (borderless button style) |
+| 50 | ITEMS | string | Dropdown | empty. The option labels joined with U+001F. An empty string means no options. |
+| 52 | SELECTED_INDEX | i32 | Dropdown | -1, which means no selection. The host then shows the first option. |
+| 53 | SRC | string | Image | none. A `data:` URL with base64 PNG, JPEG or WebP, an absolute file path, or `asset:///name` for an APK asset. Other schemes are logged and show nothing. |
+| 54 | HREF | string | Link | none. On a click the host opens an `http`, `https` or `mailto` HREF with an `ACTION_VIEW` intent, after it sends CLICK. |
+| 55 | SELECTED | bool | Tab, ListItem | false |
+
+Codes 47 to 49 and 51 are unused.
 
 ## Events
 
 | Code | Event | Sent by | Payload |
 |------|-------|---------|---------|
-| 1 | CLICK | Button | none |
-| 2 | TOGGLE | Checkbox | `i` is 0 or 1 |
+| 1 | CLICK | Button, Radio, Link, Tab, ListItem | none |
+| 2 | TOGGLE | Checkbox, Switch | `i` is 0 or 1 |
 | 3 | CHANGE | Slider | `f` is the value between MIN and MAX |
-| 4 | INPUT | TextInput | `s` is the whole text |
+| 4 | INPUT | TextInput, TextArea | `s` is the whole text |
+| 5 | SELECT | Dropdown | `i` is the index of the chosen option |
+| 6 | DISMISS | Dialog | none. The user pressed back or tapped outside. |
+
+A `RadioButton` checks itself when tapped. Rust records CHECKED as true for a Radio before it runs the CLICK handler, so a handler that does not select it gets the view unchecked again. For SELECT Rust records SELECTED_INDEX the same way.
 
 The host attaches listeners to every view of these kinds and reports every user change. Rust ignores events for nodes without a handler.
 
 The host sends no event for a change it made itself while applying ops. A SET that matches what the view already shows is a no-op, so the cursor and IME composition of an `EditText` survive a round trip.
 
 Rust records the reported value in its previous tree before it runs the handler. If the handler rejects the change, the diff then contains a SET that puts the view back.
+
+## Dialog
+
+A Dialog node is a window. The host shows it while the node is attached to the tree under the root, and dismisses it when the node is removed or detached. INSERT with a Dialog as parent puts the child into the dialog's content, a vertical `LinearLayout` with 24 dp padding inside a `ScrollView`. TEXT is the window title. The dialog uses the activity's theme.
+
+The host never closes a dialog on its own. Back and outside taps send DISMISS and leave the window open. The app closes it by rendering without the node. When the activity goes away the host dismisses every dialog window without sending DISMISS, and the next full render shows them again.
 
 ## JNI
 
@@ -128,7 +159,27 @@ An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdy
 - `responsive` with a viewport target sets VISIBLE from the current viewport size, and is re-evaluated on resize. Parent and component targets are always visible for now.
 - `keyed` gives the node its key for the diff. `component_ref` returns the child unchanged for now.
 - `text`, `button`, `checkbox`, `slider` and `text_input` create the matching kind. Dynamic text is evaluated at each render.
-- `component` maps a `ComponentKind` that has a kind above onto it. Every other kind renders as a Column of its children, led by a Text of its label when the label is not empty. Later stages replace these fallbacks with native widgets.
+- `component` maps a `ComponentKind` that has a kind above onto it, as the next section lists. Every other kind renders as a Column of its children, led by a Text of its label when the label is not empty. A later stage replaces these fallbacks.
+
+## Component mapping
+
+`ComponentProps` fields map as follows. `disabled` becomes ENABLED false everywhere. `width` and `height` become WIDTH and HEIGHT.
+
+- Switch: TEXT from `label`, CHECKED from `checked`, TOGGLE runs `on_toggle`.
+- Radio: TEXT from `label`, CHECKED from `selected || checked`, CLICK runs `on_click`.
+- Dropdown: its options are `items` followed by its DropdownOption children. An option's label is its `label`, and its value is its `value`, or its label when the value is empty. An entry of `items` is both label and value. Options are not nodes. They become ITEMS, and SELECTED_INDEX is the first option with `selected`, or the first whose value equals the Dropdown's `value`. SELECT runs `on_input` with the option's value. A11Y_LABEL from `label`.
+- ProgressBar: Progress with VALUE from `number`, MIN, MAX. A11Y_LABEL from `label`.
+- LoadingSpinner: Loading with A11Y_LABEL from `label`.
+- TextArea: TEXT from `value`, A11Y_LABEL from `label`, INPUT runs `on_input`.
+- Image: SRC from `value`, A11Y_LABEL from `label`.
+- Divider: Divider.
+- Badge: TEXT from `label`.
+- Link: TEXT from `label`, HREF from `value`, CLICK runs `on_click`.
+- Dialog: TEXT from `label`, children as content. DISMISS runs the handler the retained renderer uses to close a dialog.
+- TabBar: children as content, A11Y_LABEL from `label`. Tab: TEXT from `label`, SELECTED, CLICK runs `on_click`.
+- List: a Column with ROLE list and A11Y_LABEL from `label`. ListItem: TEXT from `label`, SELECTED, children as content, CLICK runs `on_click`.
+
+A Dropdown or ProgressBar with a non-empty label is wrapped in a Column that holds a 14 sp Text of the label and then the widget. A key goes on the wrapper.
 
 ## Diff
 
@@ -136,4 +187,4 @@ Children are matched by key first, then by position and kind among unkeyed sibli
 
 ## Not yet
 
-Signal changes that happen outside an event or resize (timers, threads) do not reach the host. Theme colors, dark-mode palettes from `Theme`, and every `ComponentKind` without a base-set view are later stages.
+Signal changes that happen outside an event or resize (timers, threads) do not reach the host. Theme colors and dark-mode palettes from `Theme` are a later stage. So are DockArea, DragHandle, Icon, GroupedTabList, TabGroup, TabNode, Table, TableRow, RichText, Svg and ThemeProvider, which use the fallback.
