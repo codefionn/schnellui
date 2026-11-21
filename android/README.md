@@ -9,7 +9,7 @@ This is the Java side of the Android renderer. Rust renders a template into a tr
   - `OpReader` decodes a buffer. It is plain Java and runs in JVM tests.
   - `ViewApplier` applies ops to views and attaches the event listeners.
   - `Items`, `ProgressMath`, `ImageSrc`, `HrefPolicy` and `Contrast` are plain Java helpers for the Dropdown, Progress, Image, Link and Badge kinds. They run in JVM tests.
-  - `SchnellBridge` declares the five native methods.
+  - `SchnellBridge` declares the six native methods and `requestUpdate`, which Rust calls from any thread. Updates are coalesced into one main-thread `nativeUpdate` per app.
   - `SchnellActivity` loads the library, mounts the app and feeds it resizes.
 - `demo` is an application that extends `SchnellActivity`. Its manifest names the native library in the `schnellui.lib` meta-data entry.
 - `build-rust.sh` builds `examples/android_native` and copies the `.so` files into `demo/src/main/jniLibs/<abi>/`.
@@ -79,6 +79,14 @@ Every kind is a platform view under `Theme.DeviceDefault`.
 | Dialog | a zero-size `View` plus an `android.app.Dialog` window |
 | TabBar, Tab | `HorizontalScrollView` around a `LinearLayout`, borderless `Button` |
 | ListItem | horizontal `LinearLayout` with a host-owned `TextView` first |
+| Table, TableRow | `TableLayout`, `TableRow` with one host-owned `TextView` cell per ITEMS entry. Children follow the cells. |
+| ThemeProvider | vertical `LinearLayout`, 10 dp padding, rounded `colorBackground` of its theme |
+
+A node made by CREATE_THEMED is built with a `ContextThemeWrapper` over `Theme.DeviceDefault.Light` or `Theme.DeviceDefault`, so it ignores the system dark mode. All its theme lookups use that context. A themed Dialog uses the theme for its window.
+
+SHOW_TARGET with the SHOW bounds hides a node unless its target's content box fits. The host listens for layout of the target and applies the change after the layout pass. The listener goes away on CLEAR, on REMOVE of either node and on `reset()`.
+
+A Dialog has no title strip. TEXT is shown in a host-owned `TextView` at the top of the content and is also the window title for accessibility. ENABLED and A11Y_LABEL go to the dialog content.
 
 A Dialog window opens when its node is attached under the root. It closes when the node or an ancestor is removed. Back and outside taps send DISMISS and leave it open. `ViewApplier.reset()` closes every dialog without an event.
 

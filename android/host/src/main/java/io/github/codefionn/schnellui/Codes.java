@@ -19,6 +19,7 @@ public final class Codes {
     public static final int OP_INSERT = 0x06;
     public static final int OP_REMOVE = 0x07;
     public static final int OP_SET_ROOT = 0x08;
+    public static final int OP_CREATE_THEMED = 0x09;
 
     // View kinds.
     public static final int KIND_ROW = 1;
@@ -45,6 +46,13 @@ public final class Codes {
     public static final int KIND_TAB_BAR = 22;
     public static final int KIND_TAB = 23;
     public static final int KIND_LIST_ITEM = 24;
+    public static final int KIND_TABLE = 25;
+    public static final int KIND_TABLE_ROW = 26;
+    public static final int KIND_THEME_PROVIDER = 27;
+
+    // Themes of CREATE_THEMED.
+    public static final int THEME_LIGHT = 1;
+    public static final int THEME_DARK = 2;
 
     // Props.
     public static final int PROP_WIDTH = 1;
@@ -86,6 +94,11 @@ public final class Codes {
     public static final int PROP_SRC = 53;
     public static final int PROP_HREF = 54;
     public static final int PROP_SELECTED = 55;
+    public static final int PROP_SHOW_TARGET = 56;
+    public static final int PROP_SHOW_MIN_W = 57;
+    public static final int PROP_SHOW_MAX_W = 58;
+    public static final int PROP_SHOW_MIN_H = 59;
+    public static final int PROP_SHOW_MAX_H = 60;
 
     // Events.
     public static final int EVENT_CLICK = 1;
