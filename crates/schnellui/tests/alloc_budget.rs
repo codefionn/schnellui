@@ -106,8 +106,6 @@ fn rerender_on_one_signal_allocates_nothing() {
     );
 }
 
-/// A second, independent signal-change frame is still zero — proves the first
-/// measured frame did not merely ride warm capacity that a third frame would exhaust.
 /// A write with no change listener registered must not allocate. The hook
 /// costs one atomic load on that path.
 #[test]
@@ -123,6 +121,8 @@ fn a_signal_write_without_a_listener_allocates_nothing() {
     assert_eq!(info.bytes_total, 0);
 }
 
+/// A second, independent signal-change frame is still zero — proves the first
+/// measured frame did not merely ride warm capacity that a third frame would exhaust.
 #[test]
 fn repeated_rerenders_stay_zero() {
     let mut app = paint_scenario(320, 240);

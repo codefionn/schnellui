@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 type Listener = Arc<dyn Fn() + Send + Sync>;
 
 /// How many listeners are registered. The write path reads only this when it
-/// is zero, so a write with no listener adds one relaxed atomic load.
+/// is zero, so a write with no listener adds one atomic load.
 static LISTENER_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 static LISTENERS: Lazy<Mutex<Registry>> = Lazy::new(|| {
@@ -89,7 +89,11 @@ fn notify_slow() {
         .iter()
         .map(|(_, listener)| listener.clone())
         .collect();
-    for listener in snapshot {
-        listener();
-    }
+    // Untracked, so a signal a listener reads does not become a dependency of
+    // the memo or effect whose body made the write.
+    super::untrack(|| {
+        for listener in snapshot {
+            listener();
+        }
+    });
 }

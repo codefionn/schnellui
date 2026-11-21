@@ -526,6 +526,7 @@ struct Stop {
 
 /// Owns the background thread that counts seconds. Dropping it stops the
 /// thread without waiting for it, so an unmount does not block.
+#[must_use = "dropping the Ticker stops its thread"]
 pub struct Ticker {
     stop: Arc<Stop>,
 }
