@@ -84,7 +84,8 @@ accesskit_winit = "0.34"
 # touches this — it is only reached through `App::run_windowed`.
 winit = "0.30.5"
 # Presents the CPU renderer's picture in a native window (`schnellui::render_soft`).
-softbuffer = { version = "0.4.0", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+# 0.4.7 is the first release that compiles for Android.
+softbuffer = { version = "0.4.7", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 arboard = { version = "3.5", default-features = false, features = ["image-data", "wayland-data-control"] }
 
 # --- native accessibility preferences ---
