@@ -86,4 +86,31 @@ public class IdTreeTest {
         assertEquals(0, t.parentOf(2));
         assertTrue(t.childrenOf(1).isEmpty());
     }
+
+    @Test
+    public void isUnderWalksParentsToTheRoot() {
+        IdTree t = withIds(1, 2, 3, 4);
+        t.insert(1, 2, 0);
+        t.insert(2, 3, 0);
+        assertTrue(t.isUnder(3, 1));
+        assertTrue(t.isUnder(1, 1));
+        assertFalse(t.isUnder(4, 1)); // Detached.
+        assertFalse(t.isUnder(3, 0));
+        assertFalse(t.isUnder(9, 1)); // Unknown.
+        t.detach(2);
+        assertFalse(t.isUnder(3, 1));
+    }
+
+    @Test
+    public void removingAnAncestorForgetsADialogSubtree() {
+        // 1 root, 2 column, 3 dialog, 4 dialog content.
+        IdTree t = withIds(1, 2, 3, 4);
+        t.insert(1, 2, 0);
+        t.insert(2, 3, 0);
+        t.insert(3, 4, 0);
+        assertTrue(t.isUnder(3, 1));
+        List<Integer> gone = t.remove(2);
+        assertTrue(gone.containsAll(Arrays.asList(2, 3, 4)));
+        assertFalse(t.contains(3));
+    }
 }

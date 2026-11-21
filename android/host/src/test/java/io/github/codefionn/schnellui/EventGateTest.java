@@ -48,4 +48,21 @@ public class EventGateTest {
         g.fire(1, 1, 0, 0f, null);
         assertEquals(1, calls);
     }
+
+    @Test
+    public void suppressesAnEchoFromAViewSetWhileApplying() {
+        // A Switch, Radio or Dropdown set by an op reports through the gate. Nothing goes out.
+        EventGate g = gate();
+        g.begin();
+        try {
+            assertNull(g.fire(9, Codes.EVENT_TOGGLE, 1, 0f, null));
+            assertNull(g.fire(9, Codes.EVENT_SELECT, 2, 0f, null));
+            assertNull(g.fire(9, Codes.EVENT_CLICK, 0, 0f, null));
+        } finally {
+            g.end();
+        }
+        assertEquals(0, calls);
+        assertArrayEquals(new byte[] {9, Codes.EVENT_SELECT}, g.fire(9, Codes.EVENT_SELECT, 2, 0f, null));
+        assertEquals(1, calls);
+    }
 }

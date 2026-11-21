@@ -79,13 +79,14 @@ public class OpReaderTest {
     @Test
     public void createWithEveryKind() throws Exception {
         Buf b = Buf.withHeader();
-        for (int kind = 1; kind <= 10; kind++) {
+        for (int kind = 1; kind <= 24; kind++) {
             b.u8(0x01).u32(kind + 100).u8(kind);
         }
         List<String> ops = decode(b.bytes());
-        assertEquals(10, ops.size());
+        assertEquals(24, ops.size());
         assertEquals("create 101 1", ops.get(0));
         assertEquals("create 110 10", ops.get(9));
+        assertEquals("create 124 24", ops.get(23));
     }
 
     @Test

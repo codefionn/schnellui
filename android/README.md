@@ -8,6 +8,7 @@ This is the Java side of the Android renderer. Rust renders a template into a tr
   - `Codes` holds every op, kind, prop and event code.
   - `OpReader` decodes a buffer. It is plain Java and runs in JVM tests.
   - `ViewApplier` applies ops to views and attaches the event listeners.
+  - `Items`, `ProgressMath`, `ImageSrc`, `HrefPolicy` and `Contrast` are plain Java helpers for the Dropdown, Progress, Image, Link and Badge kinds. They run in JVM tests.
   - `SchnellBridge` declares the five native methods.
   - `SchnellActivity` loads the library, mounts the app and feeds it resizes.
 - `demo` is an application that extends `SchnellActivity`. Its manifest names the native library in the `schnellui.lib` meta-data entry.
@@ -60,6 +61,26 @@ Or run `./gradlew :demo:installDebug` and then the `am start` line.
 5. A size change calls `nativeResize`. A night mode change unmounts and mounts again.
 
 An app activity needs `android:configChanges` for `orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode`. Without it Android recreates the activity on rotation.
+
+## Views
+
+Every kind is a platform view under `Theme.DeviceDefault`.
+
+| Kind | View |
+|------|------|
+| Row, Column, Stack, Scroll | `LinearLayout`, `FrameLayout`, `ScrollView` |
+| Text, Button, Checkbox, Slider, TextInput, Spacer | `TextView`, `Button`, `CheckBox`, `SeekBar`, `EditText`, `Space` |
+| Switch, Radio | `Switch`, `RadioButton` |
+| Dropdown | `Spinner` in dropdown mode |
+| Progress, Loading | `ProgressBar`, horizontal and indeterminate |
+| TextArea | multi-line `EditText` |
+| Image | `ImageView` |
+| Divider, Badge, Link | `View`, `TextView`, `TextView`, colored from theme attributes |
+| Dialog | a zero-size `View` plus an `android.app.Dialog` window |
+| TabBar, Tab | `HorizontalScrollView` around a `LinearLayout`, borderless `Button` |
+| ListItem | horizontal `LinearLayout` with a host-owned `TextView` first |
+
+A Dialog window opens when its node is attached under the root. It closes when the node or an ancestor is removed. Back and outside taps send DISMISS and leave it open. `ViewApplier.reset()` closes every dialog without an event.
 
 ## Layout notes
 

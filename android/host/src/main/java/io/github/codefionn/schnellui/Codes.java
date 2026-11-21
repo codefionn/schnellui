@@ -31,6 +31,20 @@ public final class Codes {
     public static final int KIND_SLIDER = 8;
     public static final int KIND_TEXT_INPUT = 9;
     public static final int KIND_SPACER = 10;
+    public static final int KIND_SWITCH = 11;
+    public static final int KIND_RADIO = 12;
+    public static final int KIND_DROPDOWN = 13;
+    public static final int KIND_PROGRESS = 14;
+    public static final int KIND_LOADING = 15;
+    public static final int KIND_TEXT_AREA = 16;
+    public static final int KIND_IMAGE = 17;
+    public static final int KIND_DIVIDER = 18;
+    public static final int KIND_BADGE = 19;
+    public static final int KIND_LINK = 20;
+    public static final int KIND_DIALOG = 21;
+    public static final int KIND_TAB_BAR = 22;
+    public static final int KIND_TAB = 23;
+    public static final int KIND_LIST_ITEM = 24;
 
     // Props.
     public static final int PROP_WIDTH = 1;
@@ -67,10 +81,17 @@ public final class Codes {
     public static final int PROP_STEP = 44;
     public static final int PROP_PASSWORD = 45;
     public static final int PROP_APPEARANCE = 46;
+    public static final int PROP_ITEMS = 50;
+    public static final int PROP_SELECTED_INDEX = 52;
+    public static final int PROP_SRC = 53;
+    public static final int PROP_HREF = 54;
+    public static final int PROP_SELECTED = 55;
 
     // Events.
     public static final int EVENT_CLICK = 1;
     public static final int EVENT_TOGGLE = 2;
     public static final int EVENT_CHANGE = 3;
     public static final int EVENT_INPUT = 4;
+    public static final int EVENT_SELECT = 5;
+    public static final int EVENT_DISMISS = 6;
 }

@@ -78,7 +78,7 @@ public class ContractTest {
     @Test
     public void kindCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "View kinds");
-        assertEquals(10, rows.size());
+        assertEquals(24, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("KIND_" + ident(r[2])));
         }
@@ -87,7 +87,7 @@ public class ContractTest {
     @Test
     public void propCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "Properties");
-        assertEquals(34, rows.size());
+        assertEquals(39, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("PROP_" + ident(r[2])));
         }
@@ -96,7 +96,7 @@ public class ContractTest {
     @Test
     public void eventCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "Events");
-        assertEquals(4, rows.size());
+        assertEquals(6, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("EVENT_" + ident(r[2])));
         }
@@ -112,7 +112,7 @@ public class ContractTest {
                 count++;
             }
         }
-        assertEquals(8 + 10 + 34 + 4, count);
+        assertEquals(8 + 24 + 39 + 6, count);
         assertEquals(0x53, Codes.MAGIC);
         assertEquals(0x01, Codes.VERSION);
     }
