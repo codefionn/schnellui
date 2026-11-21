@@ -73,6 +73,9 @@ public final class ViewApplier {
         /** Where children go. Null for leaf kinds. The inner layout for Scroll. */
         final ViewGroup content;
 
+        /** VISIBLE for a Dialog. Its placeholder stays GONE, so this drives the window. */
+        boolean visible = true;
+
         float width = Float.NaN;
         float height = Float.NaN;
         float minW = Float.NaN;
@@ -385,6 +388,8 @@ public final class ViewApplier {
             }
             case Codes.KIND_DIALOG: {
                 view = new View(context);
+                // GONE so the placeholder takes no gap or spread slot in its parent.
+                view.setVisibility(View.GONE);
                 HostDialog d = new HostDialog(context, id);
                 ScrollView sv = new ScrollView(context);
                 FlexLinearLayout inner = new FlexLinearLayout(context, LinearLayout.VERTICAL);
@@ -650,7 +655,7 @@ public final class ViewApplier {
             return;
         }
         if (n.dialog != null) {
-            if (tree.isUnder(id, rootId)) {
+            if (tree.isUnder(id, rootId) && n.visible) {
                 showDialog(n);
             } else {
                 dismissDialog(n);
@@ -1074,6 +1079,13 @@ public final class ViewApplier {
                 applyPadding(n);
                 break;
             case Codes.PROP_VISIBLE: {
+                if (n.kind == Codes.KIND_DIALOG) {
+                    if (n.visible != on) {
+                        n.visible = on;
+                        refreshDialogs(n.id);
+                    }
+                    break;
+                }
                 int want = on ? View.VISIBLE : View.GONE;
                 if (n.view.getVisibility() != want) {
                     n.view.setVisibility(want);
