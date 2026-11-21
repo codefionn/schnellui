@@ -18,8 +18,12 @@ import android.widget.TextView;
  * Hosts a native schnellui app in platform views. The library to load comes from the
  * {@code schnellui.lib} meta-data entry of the activity, for example {@code android_native}.
  *
- * <p>Declare {@code android:configChanges} for orientation, screen size, density and uiMode
- * on the activity so a change reaches {@link #onConfigurationChanged} and the views survive.
+ * <p>Declare {@code android:configChanges} for orientation and screen size on the activity
+ * so a rotation reaches {@link #onConfigurationChanged} and the views survive.
+ *
+ * <p>The Rust app outlives the activity instance across a configuration change. A night mode
+ * or density change recreates the activity so the window and every view pick up the new
+ * theme, and the new instance rebuilds its views from the same app. Signals keep their values.
  */
 public class SchnellActivity extends Activity {
     private static final String TAG = "SchnellUI";
@@ -54,7 +58,18 @@ public class SchnellActivity extends Activity {
             showError("Cannot load lib" + lib + ".so.\nBuild it with android/build-rust.sh.");
             return;
         }
-        mount();
+        Object retained = getLastNonConfigurationInstance();
+        if (retained instanceof Long && (Long) retained != 0) {
+            app = (Long) retained;
+            attach();
+        } else {
+            mount();
+        }
+    }
+
+    @Override
+    public Object onRetainNonConfigurationInstance() {
+        return app == 0 ? null : Long.valueOf(app);
     }
 
     private String readLibName() {
@@ -88,8 +103,31 @@ public class SchnellActivity extends Activity {
         lastW = c.screenWidthDp;
         lastH = c.screenHeightDp;
         app = SchnellBridge.nativeMount(lastW, lastH, density, dark);
+        buildViews();
+    }
+
+    /** Builds views for an app that an earlier activity instance mounted. */
+    private void attach() {
+        dark = isDark();
+        mountDensity = getResources().getDisplayMetrics().density;
+        // The first layout pass reports the real size. Rust answers null if it is unchanged.
+        lastW = -1;
+        lastH = -1;
+        buildViews();
+    }
+
+    private void buildViews() {
         applier = new ViewApplier(this, container, new EventGate(SchnellBridge.sinkFor(app)));
         applier.apply(SchnellBridge.nativeRender(app));
+    }
+
+    /** Drops the views and keeps the Rust app for the next activity instance. */
+    private void detach() {
+        app = 0;
+        if (applier != null) {
+            applier.reset();
+            applier = null;
+        }
     }
 
     private void unmount() {
@@ -133,10 +171,9 @@ public class SchnellActivity extends Activity {
             return;
         }
         if (isDark() != dark || getResources().getDisplayMetrics().density != mountDensity) {
-            // The theme and the dp to px factor are fixed at mount, so a night mode or
-            // density change builds the app again.
-            unmount();
-            mount();
+            // The window theme and the dp to px factor are fixed when the activity starts.
+            // Recreating keeps the Rust app through onRetainNonConfigurationInstance.
+            recreate();
         } else {
             onContainerSize();
         }
@@ -144,7 +181,11 @@ public class SchnellActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        unmount();
+        if (isChangingConfigurations()) {
+            detach();
+        } else {
+            unmount();
+        }
         super.onDestroy();
     }
 

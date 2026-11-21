@@ -900,6 +900,9 @@ public final class ViewApplier {
         n.view.setLayoutParams(lp);
     }
 
+    /** Width of a Slider or TextInput that has no WIDTH, MIN_WIDTH, FILL or GROW. */
+    private static final float DEFAULT_FIELD_WIDTH_DP = 160f;
+
     private static float clampMax(float v, float max) {
         return Float.isNaN(max) ? v : Math.min(v, max);
     }
@@ -922,6 +925,12 @@ public final class ViewApplier {
         }
         if (n.fill || stretch) {
             return ViewGroup.LayoutParams.MATCH_PARENT;
+        }
+        boolean slim = n.kind == Codes.KIND_SLIDER || n.kind == Codes.KIND_TEXT_INPUT;
+        if (horizontalAxis && slim && Float.isNaN(n.minW)) {
+            // A wrap-content SeekBar is as wide as its thumb, and an empty EditText is
+            // a sliver. Both get a usable width until the app sets one.
+            return px(clampMax(DEFAULT_FIELD_WIDTH_DP, max));
         }
         return ViewGroup.LayoutParams.WRAP_CONTENT;
     }

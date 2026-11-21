@@ -46,6 +46,8 @@ Ids are non-zero and never reused within one mount. A CREATE comes before any ot
 
 ## Properties
 
+A Slider or TextInput with no WIDTH, MIN_WIDTH, FILL, GROW or stretch is 160 dp wide. A wrap-content `SeekBar` would be as wide as its thumb.
+
 | Code | Prop | Type | Applies to | Default |
 |------|------|------|-----------|---------|
 | 1 | WIDTH | f32 | all | wrap content |
