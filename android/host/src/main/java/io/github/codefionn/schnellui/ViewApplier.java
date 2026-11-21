@@ -84,8 +84,10 @@ public final class ViewApplier {
         /** The VISIBLE prop. For a Dialog the placeholder stays GONE, so this drives the window. */
         boolean visible = true;
 
-        /** Size query. showTarget is -1 when off, 0 for the parent, else an ancestor id. */
-        int showTarget = -1;
+        /** Size query. queryOn says whether it is set. showTarget is 0 for the parent, else
+         * an ancestor id, kept as the raw u32 bits so every id stays valid. */
+        boolean queryOn;
+        int showTarget;
         float showMinW = Float.NaN;
         float showMaxW = Float.NaN;
         float showMinH = Float.NaN;
@@ -257,7 +259,13 @@ public final class ViewApplier {
         @Override
         public void setI32(int id, int prop, int value) {
             Node n = node(id);
-            if (n != null) {
+            if (n != null && prop == Codes.PROP_SHOW_TARGET) {
+                // A node id. The float path would round ids above 2^24.
+                n.queryOn = true;
+                n.showTarget = value;
+                queryNodes.add(n);
+                scheduleQuery(n);
+            } else if (n != null) {
                 setNumber(n, prop, value);
             }
         }
@@ -700,7 +708,7 @@ public final class ViewApplier {
             p.content.requestLayout();
         }
         refreshDialogs(child);
-        if (c.showTarget >= 0) {
+        if (c.queryOn) {
             scheduleQuery(c); // SHOW_TARGET 0 follows the node to its new parent.
         }
     }
@@ -1236,6 +1244,7 @@ public final class ViewApplier {
                 break;
             }
             case Codes.PROP_SHOW_TARGET:
+                n.queryOn = true;
                 n.showTarget = (int) v;
                 queryNodes.add(n);
                 scheduleQuery(n);
@@ -1578,7 +1587,8 @@ public final class ViewApplier {
 
     /** Turns the query off. The node follows VISIBLE alone again. */
     private void clearQuery(Node n) {
-        n.showTarget = -1;
+        n.queryOn = false;
+        n.showTarget = 0;
         unbindQuery(n);
         queryNodes.remove(n);
         if (!n.queryOk) {
@@ -1598,7 +1608,7 @@ public final class ViewApplier {
     /** Puts the layout listener on the current target. Returns the target view or null. */
     private View bindQuery(final Node n) {
         int targetId = n.showTarget == 0 ? tree.parentOf(n.id) : n.showTarget;
-        Node t = targetId <= 0 ? null : nodes.get(targetId);
+        Node t = targetId == 0 ? null : nodes.get(targetId);
         View tv = t == null ? null : queryTargetView(t);
         if (tv != n.queryView) {
             unbindQuery(n);
@@ -1617,13 +1627,13 @@ public final class ViewApplier {
 
     /** Checks the query once after the current pass, never inside a layout pass. */
     private void scheduleQuery(final Node n) {
-        if (n.showTarget < 0 || n.queryPosted) {
+        if (!n.queryOn || n.queryPosted) {
             return;
         }
         n.queryPosted = true;
         n.view.post(() -> {
             n.queryPosted = false;
-            if (nodes.get(n.id) == n && n.showTarget >= 0) {
+            if (nodes.get(n.id) == n && n.queryOn) {
                 evaluateQuery(n);
             }
         });
