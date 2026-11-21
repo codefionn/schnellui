@@ -10,7 +10,7 @@ use schnellui::template::{
 
 use super::ops::{kind, prop};
 use super::renderer::Viewport;
-use super::tree::AndroidNode;
+use super::tree::{AndroidNode, OptionMarker};
 
 /// Renders templates into an [`AndroidNode`] tree.
 pub struct AndroidTemplate {
@@ -79,6 +79,33 @@ fn apply_flex(node: &mut AndroidNode, props: &FlexChild) {
 
 fn apply_insets(node: &mut AndroidNode, insets: EdgeInsets) {
     node.pad(insets.left, insets.top, insets.right, insets.bottom);
+}
+
+fn set_text(node: &mut AndroidNode, text: &str) {
+    if !text.is_empty() {
+        node.str(prop::TEXT, text);
+    }
+}
+
+impl AndroidTemplate {
+    /// Puts a visible 14 sp label above `widget` when `label` is not empty.
+    fn with_label(&mut self, label: &str, widget: AndroidNode) -> AndroidNode {
+        if label.is_empty() {
+            return widget;
+        }
+        let text = self.text(TextProps {
+            content: TextContent::Static(label.to_owned().into()),
+            size: 14.0,
+            role: Role::Label,
+            wrap: WrapMode::NoWrap,
+            align: TextAlign::Start,
+            ellipsis: false,
+        });
+        let mut column = AndroidNode::new(kind::COLUMN);
+        column.children.push(text);
+        column.children.push(widget);
+        column
+    }
 }
 
 impl TemplateRenderer for AndroidTemplate {
@@ -335,6 +362,156 @@ impl TemplateRenderer for AndroidTemplate {
                 password: false,
             }),
             ComponentKind::Spacer => self.spacer(),
+            ComponentKind::Switch => {
+                let mut node = AndroidNode::new(kind::SWITCH);
+                set_text(&mut node, &props.label);
+                node.bool(prop::CHECKED, props.checked);
+                node.handlers.toggle = props.on_toggle;
+                node
+            }
+            ComponentKind::Radio => {
+                let mut node = AndroidNode::new(kind::RADIO);
+                set_text(&mut node, &props.label);
+                node.bool(prop::CHECKED, props.selected || props.checked);
+                node.handlers.click = props.on_click;
+                node
+            }
+            ComponentKind::Dropdown => {
+                let mut node = AndroidNode::new(kind::DROPDOWN);
+                let mut labels: Vec<String> = Vec::new();
+                let mut values: Vec<String> = Vec::new();
+                let mut selected = None;
+                for item in &props.items {
+                    labels.push(item.clone().into_owned());
+                    values.push(item.clone().into_owned());
+                }
+                for child in children {
+                    if let Some(option) = child.option {
+                        if option.selected && selected.is_none() {
+                            selected = Some(labels.len());
+                        }
+                        labels.push(option.label);
+                        values.push(option.value);
+                    }
+                }
+                if selected.is_none() && !props.value.is_empty() {
+                    selected = values.iter().position(|v| *v == props.value);
+                }
+                if !labels.is_empty() {
+                    node.str(prop::ITEMS, labels.join("\u{1f}"));
+                }
+                if let Some(index) = selected {
+                    node.i32(prop::SELECTED_INDEX, index as i32);
+                }
+                labelled(&mut node, &props.label);
+                if props.disabled {
+                    node.bool(prop::ENABLED, false);
+                }
+                node.option_values = values;
+                node.handlers.select = props.on_input;
+                self.with_label(&props.label, node)
+            }
+            ComponentKind::DropdownOption => {
+                let mut node = AndroidNode::new(kind::SPACER);
+                let label = props.label.clone().into_owned();
+                let value = if props.value.is_empty() {
+                    label.clone()
+                } else {
+                    props.value.clone()
+                };
+                node.option = Some(OptionMarker {
+                    label,
+                    value,
+                    selected: props.selected,
+                });
+                node
+            }
+            ComponentKind::ProgressBar => {
+                let mut node = AndroidNode::new(kind::PROGRESS);
+                node.f32(prop::VALUE, props.number);
+                node.f32(prop::MIN, props.min);
+                node.f32(prop::MAX, props.max);
+                labelled(&mut node, &props.label);
+                if props.disabled {
+                    node.bool(prop::ENABLED, false);
+                }
+                self.with_label(&props.label, node)
+            }
+            ComponentKind::LoadingSpinner => {
+                let mut node = AndroidNode::new(kind::LOADING);
+                labelled(&mut node, &props.label);
+                if props.disabled {
+                    node.bool(prop::ENABLED, false);
+                }
+                node
+            }
+            ComponentKind::TextArea => {
+                let mut node = AndroidNode::new(kind::TEXT_AREA);
+                node.str(prop::TEXT, props.value.clone());
+                labelled(&mut node, &props.label);
+                node.handlers.input = props.on_input;
+                node
+            }
+            ComponentKind::Image => {
+                let mut node = AndroidNode::new(kind::IMAGE);
+                if !props.value.is_empty() {
+                    node.str(prop::SRC, props.value.clone());
+                }
+                labelled(&mut node, &props.label);
+                node
+            }
+            ComponentKind::Divider => AndroidNode::new(kind::DIVIDER),
+            ComponentKind::Badge => {
+                let mut node = AndroidNode::new(kind::BADGE);
+                set_text(&mut node, &props.label);
+                node
+            }
+            ComponentKind::Link => {
+                let mut node = AndroidNode::new(kind::LINK);
+                set_text(&mut node, &props.label);
+                if !props.value.is_empty() {
+                    node.str(prop::HREF, props.value.clone());
+                }
+                node.handlers.click = props.on_click;
+                node
+            }
+            // The retained renderer has no handler for closing a dialog, so the
+            // click slot of the props is the dismiss handler here.
+            ComponentKind::Dialog => {
+                let mut node = AndroidNode::new(kind::DIALOG);
+                set_text(&mut node, &props.label);
+                node.children = children;
+                node.handlers.dismiss = props.on_click;
+                node
+            }
+            ComponentKind::TabBar => {
+                let mut node = AndroidNode::new(kind::TAB_BAR);
+                node.children = children;
+                labelled(&mut node, &props.label);
+                node
+            }
+            ComponentKind::Tab => {
+                let mut node = AndroidNode::new(kind::TAB);
+                set_text(&mut node, &props.label);
+                node.bool(prop::SELECTED, props.selected);
+                node.handlers.click = props.on_click;
+                node
+            }
+            ComponentKind::List => {
+                let mut node = AndroidNode::new(kind::COLUMN);
+                node.i32(prop::ROLE, Role::List.as_u16() as i32);
+                labelled(&mut node, &props.label);
+                node.children = children;
+                node
+            }
+            ComponentKind::ListItem => {
+                let mut node = AndroidNode::new(kind::LIST_ITEM);
+                set_text(&mut node, &props.label);
+                node.bool(prop::SELECTED, props.selected);
+                node.children = children;
+                node.handlers.click = props.on_click;
+                node
+            }
             _ => {
                 let mut column = AndroidNode::new(kind::COLUMN);
                 if !props.label.is_empty() {
@@ -352,10 +529,19 @@ impl TemplateRenderer for AndroidTemplate {
                 column
             }
         };
-        if matches!(
-            props.kind,
-            ComponentKind::Button | ComponentKind::Checkbox | ComponentKind::TextInput
-        ) && props.disabled
+        if props.disabled
+            && matches!(
+                props.kind,
+                ComponentKind::Button
+                    | ComponentKind::Checkbox
+                    | ComponentKind::TextInput
+                    | ComponentKind::Switch
+                    | ComponentKind::Radio
+                    | ComponentKind::TextArea
+                    | ComponentKind::Link
+                    | ComponentKind::Tab
+                    | ComponentKind::ListItem
+            )
         {
             node.bool(prop::ENABLED, false);
         }
