@@ -6,17 +6,29 @@
 //! view runs on the host through [`AndroidRenderer`], which is how the tests
 //! here drive it.
 
+use std::time::Duration;
+
 use schnellui::render_android::AndroidRenderer;
 use schnellui::signal::{create_signal, Signal};
 use schnellui::template::{
-    badge, column, dialog, divider, dropdown, image, link, list, list_item, loading_spinner,
-    progress_bar, radio, row, scroll, switch, tab, tab_bar, text_area, Align, Button, Checkbox,
-    ContainerKind, ContainerProps, Pad, Slider, Spacer, Template, TemplateRenderer, Text,
+    badge, column, dialog, divider, drag_handle, dropdown, icon, image, link, list, list_item,
+    loading_spinner, progress_bar, radio, rich_text, row, scroll, svg, switch, tab, tab_bar, table,
+    table_row, text_area, theme_provider, Align, Button, Checkbox, ComponentRef, ContainerKind,
+    ContainerProps, Pad, ResponsiveQuery, Slider, Spacer, Template, TemplateRenderer, Text,
     TextInput,
 };
 
 /// A 1 by 1 red PNG, scaled up by the image view.
 const PIXEL_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+/// A red square with a blue disc, rasterised by Rust into a PNG.
+const BADGE_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect x="2" y="2" width="44" height="44" rx="8" fill="#d32f2f"/><circle cx="24" cy="24" r="12" fill="#1976d2"/></svg>"##;
+
+/// Width of the box a size query looks at, when it is narrow and when it is wide.
+const NARROW: f32 = 120.0;
+const WIDE: f32 = 260.0;
+/// The text of a query shows from this content width on.
+const SHOW_FROM: f32 = 200.0;
 
 const COLORS: [&str; 3] = ["Red", "Green", "Blue"];
 const TABS: [&str; 3] = ["One", "Two", "Three"];
@@ -37,6 +49,13 @@ pub struct Gallery {
     dialog_open: Signal<bool>,
     tab: Signal<usize>,
     fruit: Signal<usize>,
+    row_picked: Signal<bool>,
+    themed_on: Signal<bool>,
+    parent_wide: Signal<bool>,
+    component_wide: Signal<bool>,
+    seconds: Signal<u32>,
+    /// The reference the component query below looks for.
+    target: ComponentRef,
 }
 
 impl Gallery {
@@ -54,7 +73,21 @@ impl Gallery {
             dialog_open: create_signal(false),
             tab: create_signal(0),
             fruit: create_signal(1),
+            row_picked: create_signal(false),
+            themed_on: create_signal(true),
+            parent_wide: create_signal(false),
+            component_wide: create_signal(false),
+            seconds: create_signal(0),
+            target: ComponentRef::new(),
         }
+    }
+
+    /// Starts a thread that adds a second to the counter, once per second.
+    /// The render does not know about it: the renderer notices the change
+    /// itself and asks the host for an update.
+    pub fn start_ticker(&self) {
+        let seconds = self.seconds;
+        std::thread::spawn(move || run_ticker(seconds, Duration::from_secs(1), None));
     }
 
     /// The whole screen. Call it once per render.
@@ -72,6 +105,12 @@ impl Gallery {
             dialog_open,
             tab: tab_sel,
             fruit,
+            row_picked,
+            themed_on,
+            parent_wide,
+            component_wide,
+            seconds,
+            target,
         } = *self;
 
         let counter = column()
@@ -261,6 +300,107 @@ impl Gallery {
                 format!("Picked {}", FRUITS[fruit.get()])
             }));
 
+        let tables = column()
+            .gap(8.0)
+            .child(Text::new("Table").size(20.0))
+            .child(
+                table()
+                    .label("People")
+                    .child(table_row().label("Header").item("Name").item("Role"))
+                    .child(
+                        table_row()
+                            .label("Ada")
+                            .item("Ada")
+                            .item("Engineer")
+                            .selected(row_picked.get())
+                            .on_click(move || row_picked.update(|on| *on = !*on)),
+                    ),
+            )
+            .child(Text::dynamic(move || {
+                format!(
+                    "Row {}",
+                    if row_picked.get() {
+                        "selected"
+                    } else {
+                        "not selected"
+                    }
+                )
+            }));
+
+        let rich = column()
+            .gap(8.0)
+            .child(Text::new("Rich text, icon, drag handle and svg").size(20.0))
+            .child(
+                rich_text()
+                    .label("Release notes")
+                    .value("Tables, themes and size queries are native views now."),
+            )
+            .child(
+                row()
+                    .gap(12.0)
+                    .align(Align::Center)
+                    .child(icon().detail("\u{2605}").label("Star"))
+                    .child(drag_handle().label("Reorder"))
+                    .child(svg().value(BADGE_SVG).size(48.0, 48.0).label("Red square")),
+            );
+
+        let themed = column()
+            .gap(8.0)
+            .child(Text::new("Theme provider").size(20.0))
+            .child(
+                theme_provider()
+                    .value("dark")
+                    .child(Text::new("Always dark"))
+                    .child(Button::new("Dark button"))
+                    .child(
+                        switch()
+                            .label("Dark switch")
+                            .checked(themed_on.get())
+                            .on_toggle(move |on| themed_on.set(on)),
+                    ),
+            )
+            .child(Text::dynamic(move || {
+                format!("Dark switch {}", if themed_on.get() { "on" } else { "off" })
+            }));
+
+        let width_of = |wide: bool| if wide { WIDE } else { NARROW };
+        let parent_query = column()
+            .gap(8.0)
+            .child(Text::new("Parent query").size(20.0))
+            .child(Button::new("Toggle parent width").on_click(move || {
+                parent_wide.update(|w| *w = !*w);
+            }))
+            .child(
+                column().width(width_of(parent_wide.get())).child(
+                    Text::new("The parent is wide")
+                        .show_when(ResponsiveQuery::parent().min_width(SHOW_FROM)),
+                ),
+            );
+        let component_query = column()
+            .gap(8.0)
+            .child(Text::new("Component query").size(20.0))
+            .child(Button::new("Toggle component width").on_click(move || {
+                component_wide.update(|w| *w = !*w);
+            }))
+            .child(
+                column()
+                    .width(width_of(component_wide.get()))
+                    .child(
+                        row()
+                            .child(Text::new("The component is wide").show_when(
+                                ResponsiveQuery::component(target).min_width(SHOW_FROM),
+                            )),
+                    )
+                    .with_ref(target),
+            );
+
+        let ticker = column()
+            .gap(8.0)
+            .child(Text::new("Background thread").size(20.0))
+            .child(Text::dynamic(move || {
+                format!("Running for {} s", seconds.get())
+            }));
+
         scroll().fill().child(
             Pad::all(16.0).child(
                 column()
@@ -280,6 +420,12 @@ impl Gallery {
                     .child(DialogSection(dialog_open))
                     .child(tabs)
                     .child(items)
+                    .child(tables)
+                    .child(rich)
+                    .child(themed)
+                    .child(parent_query)
+                    .child(component_query)
+                    .child(ticker)
                     .child(Spacer::new()),
             ),
         )
@@ -355,6 +501,16 @@ impl Template for Lines {
     }
 }
 
+/// Adds a second to `seconds` every `period`, `limit` times or forever.
+fn run_ticker(seconds: Signal<u32>, period: Duration, limit: Option<u32>) {
+    let mut done = 0;
+    while limit.is_none_or(|limit| done < limit) {
+        std::thread::sleep(period);
+        seconds.update(|s| *s += 1);
+        done += 1;
+    }
+}
+
 /// Mounts the gallery. The Android entry point and the tests both use it.
 pub fn mount(viewport: schnellui::render_android::Viewport) -> AndroidRenderer {
     let gallery = Gallery::new();
@@ -363,6 +519,7 @@ pub fn mount(viewport: schnellui::render_android::Viewport) -> AndroidRenderer {
 
 schnellui::android_app!({
     let gallery = Gallery::new();
+    gallery.start_ticker();
     move || gallery.view()
 });
 
@@ -413,6 +570,17 @@ mod tests {
             id: label,
             prop: prop::TEXT,
             value: "Clicked 1 times".into(),
+        }));
+        let badge = kind_ids(&ops, kind::BADGE)[0];
+        assert!(ops.contains(&Op::SetStr {
+            id: badge,
+            prop: prop::TEXT,
+            value: "0".into(),
+        }));
+        assert!(diff.contains(&Op::SetStr {
+            id: badge,
+            prop: prop::TEXT,
+            value: "1".into(),
         }));
     }
 
@@ -487,7 +655,167 @@ mod tests {
         let diff = decode(&app.dispatch(open, Event::Click).expect("diff")).unwrap();
         let dialog = kind_ids(&diff, kind::DIALOG);
         assert_eq!(dialog.len(), 1);
+        // The Close button inside the dialog closes it.
+        let close = text_id(&diff, "Close").expect("close button");
+        let closed = decode(&app.dispatch(close, Event::Click).expect("diff")).unwrap();
+        assert!(closed.contains(&Op::Remove { id: dialog[0] }));
+        // So does DISMISS, on a dialog that was opened again.
+        let diff = decode(&app.dispatch(open, Event::Click).expect("diff")).unwrap();
+        let dialog = kind_ids(&diff, kind::DIALOG);
+        assert_eq!(dialog.len(), 1);
         let diff = decode(&app.dispatch(dialog[0], Event::Dismiss).expect("diff")).unwrap();
         assert!(diff.contains(&Op::Remove { id: dialog[0] }));
+    }
+
+    fn set_i32(ops: &[Op], id: u32, p: u8) -> Option<i32> {
+        ops.iter().find_map(|op| match op {
+            Op::SetI32 { id: i, prop, value } if *i == id && *prop == p => Some(*value),
+            _ => None,
+        })
+    }
+
+    fn set_f32(ops: &[Op], id: u32, p: u8) -> Option<f32> {
+        ops.iter().find_map(|op| match op {
+            Op::SetF32 { id: i, prop, value } if *i == id && *prop == p => Some(*value),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn tables_rich_text_icons_and_svg_render() {
+        let mut app = mount(Viewport::new(360.0, 800.0, 2.0, false));
+        let ops = decode(&app.render()).unwrap();
+        assert_eq!(kind_ids(&ops, kind::TABLE).len(), 1);
+        let rows = kind_ids(&ops, kind::TABLE_ROW);
+        assert_eq!(rows.len(), 2);
+        assert!(ops.contains(&Op::SetStr {
+            id: rows[1],
+            prop: prop::ITEMS,
+            value: "Ada\u{1f}Engineer".into(),
+        }));
+        // The selectable row toggles and the text under the table follows.
+        let status = text_id(&ops, "Row not selected").expect("status");
+        let diff = decode(&app.dispatch(rows[1], Event::Click).expect("diff")).unwrap();
+        assert_eq!(set_i32(&diff, rows[1], prop::SELECTED), Some(1));
+        assert!(diff.contains(&Op::SetStr {
+            id: status,
+            prop: prop::TEXT,
+            value: "Row selected".into(),
+        }));
+        // Rich text, icon, drag handle.
+        assert!(text_id(&ops, "Release notes").is_some());
+        assert!(text_id(&ops, "\u{2605}").is_some());
+        assert!(text_id(&ops, "\u{22ee}\u{22ee}").is_some());
+        // The svg is the second Image, with a PNG data URL.
+        let images = kind_ids(&ops, kind::IMAGE);
+        assert_eq!(images.len(), 2);
+        let src = ops.iter().find_map(|op| match op {
+            Op::SetStr { id, prop: p, value } if *id == images[1] && *p == prop::SRC => {
+                Some(value.clone())
+            }
+            _ => None,
+        });
+        assert!(src
+            .expect("svg src")
+            .starts_with("data:image/png;base64,iVBORw0KGgo"));
+    }
+
+    #[test]
+    fn dark_theme_provider_holds_its_children() {
+        let mut app = mount(Viewport::new(360.0, 800.0, 2.0, false));
+        let ops = decode(&app.render()).unwrap();
+        let themed: Vec<(u32, u8)> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::CreateThemed { id, kind: k, theme } if *k == kind::THEME_PROVIDER => {
+                    Some((*id, *theme))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(themed.len(), 1);
+        assert_eq!(themed[0].1, 2);
+        let themed_kinds: Vec<u8> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::CreateThemed { kind, theme: 2, .. } => Some(*kind),
+                _ => None,
+            })
+            .collect();
+        for k in [kind::TEXT, kind::BUTTON, kind::SWITCH] {
+            assert!(themed_kinds.contains(&k), "kind {k} not themed");
+        }
+        // Nothing else is themed: the provider, its text, button and switch.
+        assert_eq!(themed_kinds.len(), 4);
+        // The switch inside still reports to Rust.
+        let switch = ops
+            .iter()
+            .find_map(|op| match op {
+                Op::CreateThemed { id, kind: k, .. } if *k == kind::SWITCH => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        let status = text_id(&ops, "Dark switch on").expect("status");
+        let diff = app.dispatch(switch, Event::Toggle(false)).expect("diff");
+        assert_eq!(set_text(&diff, status).as_deref(), Some("Dark switch off"));
+    }
+
+    #[test]
+    fn size_queries_follow_the_toggled_width() {
+        let mut app = mount(Viewport::new(360.0, 800.0, 2.0, false));
+        let ops = decode(&app.render()).unwrap();
+        // Parent query: target 0, shown from 200 dp.
+        let parent_text = text_id(&ops, "The parent is wide").expect("parent text");
+        assert_eq!(set_i32(&ops, parent_text, prop::SHOW_TARGET), Some(0));
+        assert_eq!(set_f32(&ops, parent_text, prop::SHOW_MIN_W), Some(200.0));
+        // Component query: the target is the column that carries the width.
+        let component_text = text_id(&ops, "The component is wide").expect("component text");
+        let target = set_i32(&ops, component_text, prop::SHOW_TARGET).expect("target");
+        assert_ne!(target, 0);
+        assert_eq!(set_f32(&ops, target as u32, prop::WIDTH), Some(120.0));
+        assert_eq!(set_f32(&ops, component_text, prop::SHOW_MIN_W), Some(200.0));
+        // The buttons change the widths of the targets.
+        let button = text_id(&ops, "Toggle component width").expect("button");
+        let diff = decode(&app.dispatch(button, Event::Click).expect("diff")).unwrap();
+        assert_eq!(set_f32(&diff, target as u32, prop::WIDTH), Some(260.0));
+        let button = text_id(&ops, "Toggle parent width").expect("button");
+        let diff = decode(&app.dispatch(button, Event::Click).expect("diff")).unwrap();
+        let parent = ops
+            .iter()
+            .find_map(|op| match op {
+                Op::Insert { parent, child, .. } if *child == parent_text => Some(*parent),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(set_f32(&diff, parent, prop::WIDTH), Some(260.0));
+    }
+
+    #[test]
+    fn a_background_thread_counts_seconds_and_wakes_the_host() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let gallery = Gallery::new();
+        let mut app = AndroidRenderer::new(Viewport::new(360.0, 800.0, 2.0, false), move || {
+            gallery.view()
+        });
+        let woken = Arc::new(AtomicUsize::new(0));
+        let seen = woken.clone();
+        app.set_wake(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let ops = decode(&app.render()).unwrap();
+        let label = text_id(&ops, "Running for 0 s").expect("counter");
+        app.start_wake_polling(Duration::from_millis(2));
+        let seconds = gallery.seconds;
+        std::thread::spawn(move || run_ticker(seconds, Duration::from_millis(5), Some(1)))
+            .join()
+            .unwrap();
+        let start = std::time::Instant::now();
+        while woken.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(woken.load(Ordering::SeqCst), 1);
+        let diff = app.update().expect("diff");
+        assert_eq!(set_text(&diff, label).as_deref(), Some("Running for 1 s"));
     }
 }

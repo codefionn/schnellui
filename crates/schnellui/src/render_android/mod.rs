@@ -14,7 +14,9 @@ mod diff;
 #[cfg(target_os = "android")]
 pub mod glue;
 pub mod ops;
+mod queries;
 mod renderer;
+mod svg;
 mod template;
 #[cfg(test)]
 mod tests;
@@ -47,7 +49,7 @@ macro_rules! android_app {
 /// Exports the `SchnellBridge` native methods from a `cdylib`.
 ///
 /// See the other definition of this macro for the argument. The expansion is
-/// the five `extern "system"` functions of `docs/android-renderer.md`.
+/// the six `extern "system"` functions of `docs/android-renderer.md`.
 #[cfg(target_os = "android")]
 #[macro_export]
 macro_rules! android_app {
@@ -115,6 +117,15 @@ macro_rules! android_app {
             height: f32,
         ) -> $crate::render_android::glue::JByteArray<'a> {
             $crate::render_android::glue::resize(env, class, app, width, height)
+        }
+
+        #[unsafe(no_mangle)]
+        pub extern "system" fn Java_io_github_codefionn_schnellui_SchnellBridge_nativeUpdate<'a>(
+            env: $crate::render_android::glue::EnvUnowned<'a>,
+            class: $crate::render_android::glue::JClass<'a>,
+            app: i64,
+        ) -> $crate::render_android::glue::JByteArray<'a> {
+            $crate::render_android::glue::update(env, class, app)
         }
 
         #[unsafe(no_mangle)]

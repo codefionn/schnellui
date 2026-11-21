@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::ops::Op;
+use super::ops::{prop, Op};
 use super::tree::AndroidNode;
 
 /// Hands out ids. Ids start at 1 and are never reused within one mount.
@@ -24,7 +24,7 @@ pub(crate) fn diff_root(
     ops: &mut Vec<Op>,
 ) {
     match old {
-        Some(old) if old.kind == new.kind => {
+        Some(old) if same_view(old, new) => {
             new.id = old.id;
             diff_node(old, new, ids, ops);
         }
@@ -40,6 +40,26 @@ pub(crate) fn diff_root(
     }
 }
 
+/// Whether the host can keep the view: a kind or theme change needs a new one.
+fn same_view(old: &AndroidNode, new: &AndroidNode) -> bool {
+    old.kind == new.kind && old.theme == new.theme
+}
+
+fn create_op(node: &AndroidNode) -> Op {
+    if node.theme == 0 {
+        Op::Create {
+            id: node.id,
+            kind: node.kind,
+        }
+    } else {
+        Op::CreateThemed {
+            id: node.id,
+            kind: node.kind,
+            theme: node.theme,
+        }
+    }
+}
+
 /// Appends ops that build `root` and everything below it from nothing, ending
 /// in SET_ROOT. Every node must already have an id.
 pub(crate) fn emit_full(root: &AndroidNode, ops: &mut Vec<Op>) {
@@ -48,10 +68,7 @@ pub(crate) fn emit_full(root: &AndroidNode, ops: &mut Vec<Op>) {
 }
 
 fn emit_node(node: &AndroidNode, ops: &mut Vec<Op>) {
-    ops.push(Op::Create {
-        id: node.id,
-        kind: node.kind,
-    });
+    ops.push(create_op(node));
     for (prop, value) in &node.props {
         ops.push(value.set_op(node.id, *prop));
     }
@@ -67,10 +84,7 @@ fn emit_node(node: &AndroidNode, ops: &mut Vec<Op>) {
 
 fn create_subtree(node: &mut AndroidNode, ids: &mut IdAlloc, ops: &mut Vec<Op>) {
     node.id = ids.next();
-    ops.push(Op::Create {
-        id: node.id,
-        kind: node.kind,
-    });
+    ops.push(create_op(node));
     for (prop, value) in &node.props {
         ops.push(value.set_op(node.id, *prop));
     }
@@ -90,10 +104,19 @@ fn diff_node(old: &AndroidNode, new: &mut AndroidNode, ids: &mut IdAlloc, ops: &
     diff_children(old, new, ids, ops);
 }
 
+/// SHOW_TARGET is resolved after the diff, so the diff leaves it alone.
 fn diff_props(old: &AndroidNode, new: &AndroidNode, ops: &mut Vec<Op>) {
     let id = new.id;
-    let mut old_iter = old.props.iter().peekable();
-    let mut new_iter = new.props.iter().peekable();
+    let mut old_iter = old
+        .props
+        .iter()
+        .filter(|(p, _)| **p != prop::SHOW_TARGET)
+        .peekable();
+    let mut new_iter = new
+        .props
+        .iter()
+        .filter(|(p, _)| **p != prop::SHOW_TARGET)
+        .peekable();
     loop {
         match (old_iter.peek(), new_iter.peek()) {
             (None, None) => break,
@@ -154,7 +177,7 @@ fn match_children(old: &[AndroidNode], new: &[AndroidNode]) -> Vec<Option<usize>
                 }
             };
             candidate
-                .filter(|&j| !used[j] && old[j].kind == child.kind)
+                .filter(|&j| !used[j] && same_view(&old[j], child))
                 .inspect(|&j| used[j] = true)
         })
         .collect()

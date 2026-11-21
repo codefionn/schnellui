@@ -1,12 +1,16 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use schnellui::signal::create_signal;
 use schnellui::template::{
-    badge, column, dialog, divider, dropdown, dropdown_option, em, image, link, list, list_item,
-    loading_spinner, progress_bar, radio, row, scroll, stack, switch, tab, tab_bar, text_area,
-    Button, Checkbox, ComponentKind, ComponentProps, Flex, FlexChild, Pad, ResponsiveQuery, Role,
+    badge, column, dialog, divider, drag_handle, dropdown, dropdown_option, em, icon, image, link,
+    list, list_item, loading_spinner, progress_bar, radio, rich_text, row, scroll, stack, svg,
+    switch, tab, tab_bar, table, table_row, text_area, theme_provider, Button, Checkbox,
+    ComponentKind, ComponentProps, ComponentRef, Flex, FlexChild, Pad, ResponsiveQuery, Role,
     Slider, Spacer, Template, TemplateRenderer, Text, TextInput, Widget,
 };
 
@@ -39,6 +43,8 @@ struct Host {
     views: BTreeMap<u32, View>,
     root: Option<u32>,
     ever_created: Vec<u32>,
+    /// The theme of each view made by CREATE_THEMED.
+    themes: BTreeMap<u32, u8>,
 }
 
 impl Host {
@@ -49,6 +55,12 @@ impl Host {
                     assert!(!self.ever_created.contains(id), "id {id} reused");
                     self.ever_created.push(*id);
                     self.views.insert(*id, (*kind, BTreeMap::new(), Vec::new()));
+                }
+                Op::CreateThemed { id, kind, theme } => {
+                    assert!(!self.ever_created.contains(id), "id {id} reused");
+                    self.ever_created.push(*id);
+                    self.views.insert(*id, (*kind, BTreeMap::new(), Vec::new()));
+                    self.themes.insert(*id, *theme);
                 }
                 Op::SetStr { id, prop, value } => {
                     self.views
@@ -105,7 +117,11 @@ impl Host {
     fn shape(&self) -> String {
         fn walk(host: &Host, id: u32, depth: usize, out: &mut String) {
             let (kind, props, children) = &host.views[&id];
-            out.push_str(&format!("{}{kind} {props:?}\n", "  ".repeat(depth)));
+            let theme = host
+                .themes
+                .get(&id)
+                .map_or(String::new(), |t| format!(" theme{t}"));
+            out.push_str(&format!("{}{kind}{theme} {props:?}\n", "  ".repeat(depth)));
             for c in children {
                 walk(host, *c, depth + 1, out);
             }
@@ -1547,4 +1563,705 @@ impl Template for DialogHost {
             nodes,
         )
     }
+}
+
+// ---- stage 3: themes, tables, queries, svg, updates ----
+
+fn raw_ids(host: &Host, k: u8) -> Vec<u32> {
+    host.ids_of_kind(k)
+}
+
+#[test]
+fn create_themed_round_trips() {
+    let ops = vec![
+        Op::CreateThemed {
+            id: 7,
+            kind: kind::THEME_PROVIDER,
+            theme: ops::THEME_DARK,
+        },
+        Op::CreateThemed {
+            id: 8,
+            kind: kind::BUTTON,
+            theme: ops::THEME_LIGHT,
+        },
+    ];
+    let bytes = encode(&ops);
+    assert_eq!(&bytes[..2], &[0x53, 0x01]);
+    assert_eq!(
+        &bytes[2..],
+        &[0x09, 7, 0, 0, 0, 27, 2, 0x09, 8, 0, 0, 0, 6, 1]
+    );
+    assert_eq!(decode(&bytes).unwrap(), ops);
+    assert_eq!(
+        decode(&bytes[..bytes.len() - 1]),
+        Err(DecodeError::Truncated)
+    );
+}
+
+#[test]
+fn stage_three_codes_match_the_doc() {
+    assert_eq!(
+        [kind::TABLE, kind::TABLE_ROW, kind::THEME_PROVIDER],
+        [25, 26, 27]
+    );
+    assert_eq!(
+        [
+            prop::SHOW_TARGET,
+            prop::SHOW_MIN_W,
+            prop::SHOW_MAX_W,
+            prop::SHOW_MIN_H,
+            prop::SHOW_MAX_H
+        ],
+        [56, 57, 58, 59, 60]
+    );
+    assert_eq!([ops::THEME_LIGHT, ops::THEME_DARK], [1, 2]);
+}
+
+fn themes_of(host: &Host, k: u8) -> Vec<Option<u8>> {
+    raw_ids(host, k)
+        .iter()
+        .map(|id| host.themes.get(id).copied())
+        .collect()
+}
+
+#[test]
+fn theme_provider_stamps_its_subtree_and_nested_providers_win() {
+    let h = Harness::new(|| {
+        column()
+            .child(Text::new("outside"))
+            .child(
+                theme_provider()
+                    .value("dark")
+                    .child(Text::new("in dark"))
+                    .child(
+                        theme_provider()
+                            .value("light")
+                            .child(Button::new("in light")),
+                    )
+                    .child(switch().label("in dark again")),
+            )
+            .child(Checkbox::new(false))
+    });
+    let host = &h.host;
+    assert_eq!(host.themes.get(&host.root.unwrap()), None);
+    let providers = raw_ids(host, kind::THEME_PROVIDER);
+    assert_eq!(providers.len(), 2);
+    // Ids follow creation order: the outer provider first.
+    assert_eq!(host.themes[&providers[0]], ops::THEME_DARK);
+    assert_eq!(host.themes[&providers[1]], ops::THEME_LIGHT);
+    assert_eq!(themes_of(host, kind::BUTTON), [Some(ops::THEME_LIGHT)]);
+    assert_eq!(themes_of(host, kind::SWITCH), [Some(ops::THEME_DARK)]);
+    // The Text outside the provider and the one inside it.
+    let texts = raw_ids(host, kind::TEXT);
+    let by_text: Vec<(String, Option<u8>)> = texts
+        .iter()
+        .map(|id| (host.text_of(*id).unwrap(), host.themes.get(id).copied()))
+        .collect();
+    assert!(by_text.contains(&("outside".into(), None)));
+    assert!(by_text.contains(&("in dark".into(), Some(ops::THEME_DARK))));
+    assert_eq!(themes_of(host, kind::CHECKBOX), [None]);
+}
+
+#[test]
+fn unknown_theme_value_is_a_plain_column() {
+    let h = Harness::new(|| theme_provider().value("sepia").child(Button::new("b")));
+    assert!(raw_ids(&h.host, kind::THEME_PROVIDER).is_empty());
+    assert_eq!(h.host.views[&h.host.root.unwrap()].0, kind::COLUMN);
+    assert!(h.host.themes.is_empty());
+}
+
+#[test]
+fn theme_change_recreates_the_node() {
+    let dark = create_signal(true);
+    let mut h = Harness::new(move || {
+        column().child(
+            theme_provider()
+                .value(if dark.get() { "dark" } else { "light" })
+                .child(Button::new("b")),
+        )
+    });
+    let old_provider = raw_ids(&h.host, kind::THEME_PROVIDER)[0];
+    let old_button = raw_ids(&h.host, kind::BUTTON)[0];
+    dark.set(false);
+    let ops = h.refresh();
+    assert!(ops.contains(&Op::Remove { id: old_provider }));
+    assert!(ops.iter().any(|o| matches!(
+        o,
+        Op::CreateThemed { kind: k, theme: 1, .. } if *k == kind::THEME_PROVIDER
+    )));
+    assert!(!h.host.views.contains_key(&old_provider));
+    assert!(!h.host.views.contains_key(&old_button));
+    assert_eq!(themes_of(&h.host, kind::BUTTON), [Some(ops::THEME_LIGHT)]);
+    // Same theme again: nothing to do.
+    assert!(h.refresh().is_empty());
+}
+
+#[test]
+fn table_and_rows_map_onto_kinds() {
+    let n = render_widget(
+        table()
+            .label("People")
+            .size(300.0, 90.0)
+            .child(table_row().item("Name").item("Age").label("header"))
+            .child(
+                table_row()
+                    .item("Ada")
+                    .item("36")
+                    .selected(true)
+                    .child(Button::new("x")),
+            ),
+    );
+    assert_eq!(n.kind, kind::TABLE);
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("People".into()))
+    );
+    assert_eq!(n.props.get(&prop::WIDTH), Some(&Value::F32(300.0)));
+    let header = &n.children[0];
+    assert_eq!(header.kind, kind::TABLE_ROW);
+    assert_eq!(
+        header.props.get(&prop::ITEMS),
+        Some(&Value::Str("Name\u{1f}Age".into()))
+    );
+    assert_eq!(header.props.get(&prop::SELECTED), Some(&Value::I32(0)));
+    assert_eq!(
+        header.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("header".into()))
+    );
+    let row = &n.children[1];
+    assert_eq!(row.props.get(&prop::SELECTED), Some(&Value::I32(1)));
+    assert_eq!(row.children.len(), 1);
+    // A row without items has no ITEMS prop.
+    assert!(render_widget(table_row()).props.get(&prop::ITEMS).is_none());
+    let disabled = render_widget(table_row().disabled(true));
+    assert_eq!(disabled.props.get(&prop::ENABLED), Some(&Value::I32(0)));
+}
+
+#[test]
+fn table_row_click_runs_the_handler() {
+    let picked = create_signal(false);
+    let mut h = Harness::new(move || {
+        table().child(
+            table_row()
+                .item("a")
+                .selected(picked.get())
+                .on_click(move || picked.set(true)),
+        )
+    });
+    let row = raw_ids(&h.host, kind::TABLE_ROW)[0];
+    let ops = h.click(row);
+    assert_eq!(
+        ops,
+        vec![Op::SetI32 {
+            id: row,
+            prop: prop::SELECTED,
+            value: 1
+        }]
+    );
+}
+
+#[test]
+fn rich_text_icon_and_drag_handle_map_onto_views() {
+    let n = render_widget(
+        rich_text()
+            .label("Title")
+            .value("Body text")
+            .child(Text::new("more")),
+    );
+    assert_eq!(n.kind, kind::COLUMN);
+    assert_eq!(n.children.len(), 3);
+    let title = &n.children[0];
+    assert_eq!(title.props.get(&prop::TEXT_SIZE), Some(&Value::F32(20.0)));
+    assert_eq!(
+        title.props.get(&prop::TEXT),
+        Some(&Value::Str("Title".into()))
+    );
+    assert_eq!(
+        title.props.get(&prop::ROLE),
+        Some(&Value::I32(Role::ColumnHeader.as_u16() as i32))
+    );
+    let body = &n.children[1];
+    assert_eq!(
+        body.props.get(&prop::TEXT),
+        Some(&Value::Str("Body text".into()))
+    );
+    assert_eq!(body.props.get(&prop::TEXT_WRAP), Some(&Value::I32(1)));
+    // No label: no heading.
+    assert_eq!(render_widget(rich_text().value("v")).children.len(), 1);
+
+    let n = render_widget(icon().detail("\u{2605}").label("star"));
+    assert_eq!(n.kind, kind::TEXT);
+    assert_eq!(
+        n.props.get(&prop::TEXT),
+        Some(&Value::Str("\u{2605}".into()))
+    );
+    assert_eq!(n.props.get(&prop::TEXT_SIZE), Some(&Value::F32(20.0)));
+    assert_eq!(
+        n.props.get(&prop::ROLE),
+        Some(&Value::I32(Role::Image.as_u16() as i32))
+    );
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("star".into()))
+    );
+    let n = render_widget(icon());
+    assert_eq!(
+        n.props.get(&prop::TEXT),
+        Some(&Value::Str("\u{25c6}".into()))
+    );
+
+    let clicks = Rc::new(RefCell::new(0));
+    let seen = clicks.clone();
+    let mut n = render_widget(
+        drag_handle()
+            .label("Move")
+            .on_click(move || *seen.borrow_mut() += 1),
+    );
+    assert_eq!(n.kind, kind::BUTTON);
+    assert_eq!(
+        n.props.get(&prop::TEXT),
+        Some(&Value::Str("\u{22ee}\u{22ee}".into()))
+    );
+    assert_eq!(n.props.get(&prop::APPEARANCE), Some(&Value::I32(1)));
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Move".into()))
+    );
+    (n.handlers.click.as_mut().unwrap())();
+    assert_eq!(*clicks.borrow(), 1);
+}
+
+fn show_props(host: &Host, id: u32) -> Vec<(u8, Val)> {
+    host.views[&id]
+        .1
+        .iter()
+        .filter(|(p, _)| (prop::SHOW_TARGET..=prop::SHOW_MAX_H).contains(*p))
+        .map(|(p, v)| (*p, v.clone()))
+        .collect()
+}
+
+#[test]
+fn parent_query_sets_target_zero_and_bounds() {
+    let h = Harness::new(|| {
+        column().child(
+            Text::new("p").show_when(
+                ResponsiveQuery::parent()
+                    .min_width(100.0)
+                    .max_width(em(20.0))
+                    .min_height(10.0)
+                    .max_height(50.0),
+            ),
+        )
+    });
+    let text = raw_ids(&h.host, kind::TEXT)[0];
+    let f = |x: f32| Val::F(x.to_bits());
+    assert_eq!(
+        show_props(&h.host, text),
+        vec![
+            (prop::SHOW_TARGET, Val::I(0)),
+            (prop::SHOW_MIN_W, f(100.0)),
+            (prop::SHOW_MAX_W, f(320.0)),
+            (prop::SHOW_MIN_H, f(10.0)),
+            (prop::SHOW_MAX_H, f(50.0)),
+        ]
+    );
+    // The query does not touch VISIBLE.
+    assert_eq!(props_of(&h.host, text).get(&prop::VISIBLE), None);
+}
+
+#[test]
+fn component_query_resolves_to_the_nearest_ancestor() {
+    let outer = ComponentRef::new();
+    let inner = ComponentRef::new();
+    let h = Harness::new(move || {
+        column()
+            .child(
+                column()
+                    .child(
+                        column()
+                            .child(
+                                Text::new("q")
+                                    .show_when(ResponsiveQuery::component(outer).min_width(200.0)),
+                            )
+                            .with_ref(inner),
+                    )
+                    .with_ref(outer),
+            )
+            .child(Text::new("plain"))
+    });
+    let host = &h.host;
+    let root = host.root.unwrap();
+    // The node under the ref "outer": the first child of the root.
+    let outer_id = host.views[&root].2[0];
+    let q = raw_ids(host, kind::TEXT)
+        .into_iter()
+        .find(|id| host.text_of(*id).as_deref() == Some("q"))
+        .unwrap();
+    let shown = show_props(host, q);
+    assert_eq!(shown[0], (prop::SHOW_TARGET, Val::I(outer_id as i32)));
+    assert_eq!(shown[1].0, prop::SHOW_MIN_W);
+    assert_ne!(outer_id, host.views[&outer_id].2[0]);
+}
+
+#[test]
+fn component_query_without_an_ancestor_is_always_shown() {
+    let missing = ComponentRef::new();
+    let h = Harness::new(move || {
+        column()
+            .child(Text::new("q").show_when(ResponsiveQuery::component(missing).min_width(200.0)))
+    });
+    let q = raw_ids(&h.host, kind::TEXT)[0];
+    assert!(!props_of(&h.host, q).contains_key(&prop::SHOW_TARGET));
+    // The ref sits on the node itself, which is no ancestor of itself.
+    let me = ComponentRef::new();
+    let h = Harness::new(move || {
+        column().child(
+            Text::new("q")
+                .show_when(ResponsiveQuery::component(me).min_width(200.0))
+                .with_ref(me),
+        )
+    });
+    let q = raw_ids(&h.host, kind::TEXT)[0];
+    assert!(!props_of(&h.host, q).contains_key(&prop::SHOW_TARGET));
+}
+
+struct Wrap {
+    row: bool,
+    reference: ComponentRef,
+}
+
+impl Template for Wrap {
+    fn render<R: TemplateRenderer>(self, r: &mut R) -> R::Node {
+        let query = ResponsiveQuery::component(self.reference).max_width(80.0);
+        if self.row {
+            row()
+                .child(Text::new("q").show_when(query))
+                .with_ref(self.reference)
+                .render(r)
+        } else {
+            column()
+                .child(Text::new("q").show_when(query))
+                .with_ref(self.reference)
+                .render(r)
+        }
+    }
+}
+
+#[test]
+fn a_changed_target_id_and_a_lost_target_produce_ops() {
+    let reference = ComponentRef::new();
+    let flip = create_signal(false);
+    let mut h = Harness::new(move || Wrap {
+        row: flip.get(),
+        reference,
+    });
+    let q = raw_ids(&h.host, kind::TEXT)[0];
+    let first = h.host.root.unwrap();
+    assert_eq!(
+        show_props(&h.host, q)[0],
+        (prop::SHOW_TARGET, Val::I(first as i32))
+    );
+    // The target is replaced (kind change), so the query node is new too.
+    flip.set(true);
+    let ops = h.refresh();
+    let second = h.host.root.unwrap();
+    assert_ne!(first, second);
+    let q2 = raw_ids(&h.host, kind::TEXT)[0];
+    assert!(ops.contains(&Op::SetI32 {
+        id: q2,
+        prop: prop::SHOW_TARGET,
+        value: second as i32
+    }));
+    assert_eq!(
+        show_props(&h.host, q2)[0],
+        (prop::SHOW_TARGET, Val::I(second as i32))
+    );
+    // Unchanged: no ops.
+    assert!(h.refresh().is_empty());
+}
+
+#[test]
+fn a_matched_node_gets_a_set_when_its_target_moves_and_a_clear_when_it_is_lost() {
+    let reference = ComponentRef::new();
+    let phase = create_signal(0);
+    struct Phase(i32, ComponentRef);
+    impl Template for Phase {
+        fn render<R: TemplateRenderer>(self, r: &mut R) -> R::Node {
+            let q = || Text::new("q").show_when(ResponsiveQuery::component(self.1).min_width(1.0));
+            match self.0 {
+                // The target is the first column.
+                0 => column()
+                    .child(column().child(q()).with_ref(self.1))
+                    .child(column())
+                    .render(r),
+                // The target is the second column: the Text moves there.
+                1 => column()
+                    .child(column())
+                    .child(column().child(q()).with_ref(self.1))
+                    .render(r),
+                // No column carries the ref.
+                _ => column()
+                    .child(column().child(q()))
+                    .child(column())
+                    .render(r),
+            }
+        }
+    }
+    let mut h = Harness::new(move || Phase(phase.get(), reference));
+    let q = raw_ids(&h.host, kind::TEXT)[0];
+    let target = |h: &Harness| h.host.views[&h.host.root.unwrap()].2.clone();
+    let first = target(&h)[0];
+    assert_eq!(
+        show_props(&h.host, q)[0],
+        (prop::SHOW_TARGET, Val::I(first as i32))
+    );
+
+    phase.set(1);
+    let ops = h.refresh();
+    let second = target(&h)[1];
+    let moved = raw_ids(&h.host, kind::TEXT)[0];
+    assert!(ops.contains(&Op::SetI32 {
+        id: moved,
+        prop: prop::SHOW_TARGET,
+        value: second as i32
+    }));
+
+    phase.set(2);
+    let ops = h.refresh();
+    let lost = raw_ids(&h.host, kind::TEXT)[0];
+    assert!(!props_of(&h.host, lost).contains_key(&prop::SHOW_TARGET));
+    let _ = ops;
+}
+
+const SQUARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
+
+fn data_url_png(url: &str) -> Vec<u8> {
+    let b64 = url
+        .strip_prefix("data:image/png;base64,")
+        .expect("png data url");
+    let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in b64.bytes().filter(|c| *c != b'=') {
+        acc = acc << 6 | table.iter().position(|t| *t == c).unwrap() as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    out
+}
+
+#[test]
+fn svg_becomes_an_image_with_a_png_data_url_and_is_cached() {
+    let tick = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || {
+        let _ = tick.get();
+        column().child(svg().value(SQUARE).size(20.0, 10.0).label("red square"))
+    });
+    let mut host = Host::default();
+    host.apply(&ops_of(&app.render()));
+    let image = host.ids_of_kind(kind::IMAGE)[0];
+    let Some(Val::S(url)) = host.views[&image].1.get(&prop::SRC).cloned() else {
+        panic!("no SRC");
+    };
+    let png = data_url_png(&url);
+    let decoder = png::Decoder::new(std::io::Cursor::new(&png));
+    let mut reader = decoder.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    // 20 by 10 dp at density 2.
+    assert_eq!((info.width, info.height), (40, 20));
+    assert_eq!(&buf[..4], &[255, 0, 0, 255]);
+    assert_eq!(
+        host.views[&image].1.get(&prop::A11Y_LABEL),
+        Some(&Val::S("red square".into()))
+    );
+    assert_eq!(app.svg_rasterisations(), 1);
+    // Three more renders with the same source and size do not rasterise.
+    for n in 1..=3 {
+        tick.set(n);
+        assert!(app.update().is_none());
+    }
+    assert_eq!(app.svg_rasterisations(), 1);
+    // A new size is a new entry.
+    let mut other = AndroidRenderer::new(vp(), || svg().value(SQUARE).size(30.0, 30.0));
+    other.render();
+    assert_eq!(other.svg_rasterisations(), 1);
+}
+
+#[test]
+fn svg_uses_markup_and_its_own_size_and_survives_bad_source() {
+    let mut template = AndroidTemplate::new(vp());
+    let n = svg()
+        .markup(schnellui::template::TrustedHtml::from_static(SQUARE))
+        .value("ignored")
+        .render(&mut template);
+    assert_eq!(n.kind, kind::IMAGE);
+    let Some(Value::Str(url)) = n.props.get(&prop::SRC) else {
+        panic!("no SRC");
+    };
+    let png = data_url_png(url);
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&png))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!((info.width, info.height), (20, 20));
+
+    let n = svg().value("not svg").label("broken").render(&mut template);
+    assert_eq!(n.kind, kind::IMAGE);
+    assert!(!n.props.contains_key(&prop::SRC));
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("broken".into()))
+    );
+}
+
+#[test]
+fn base64_matches_the_standard_vectors() {
+    let enc = |s: &str| {
+        let mut out = String::new();
+        super::svg::base64_into(&mut out, s.as_bytes());
+        out
+    };
+    assert_eq!(enc(""), "");
+    assert_eq!(enc("f"), "Zg==");
+    assert_eq!(enc("fo"), "Zm8=");
+    assert_eq!(enc("foo"), "Zm9v");
+    assert_eq!(enc("foob"), "Zm9vYg==");
+    assert_eq!(enc("fooba"), "Zm9vYmE=");
+    assert_eq!(enc("foobar"), "Zm9vYmFy");
+}
+
+#[test]
+fn update_returns_a_diff_after_a_signal_changed_and_none_otherwise() {
+    let n = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
+    let mut host = Host::default();
+    host.apply(&ops_of(&app.render()));
+    assert_eq!(app.update(), None);
+    n.set(5);
+    let ops = ops_of(&app.update().expect("diff"));
+    let text = host.ids_of_kind(kind::TEXT)[0];
+    assert_eq!(
+        ops,
+        vec![Op::SetStr {
+            id: text,
+            prop: prop::TEXT,
+            value: "n=5".into()
+        }]
+    );
+    assert_eq!(app.update(), None);
+}
+
+fn counting_wake(app: &mut AndroidRenderer) -> Arc<AtomicUsize> {
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    app.set_wake(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    count
+}
+
+#[test]
+fn wake_fires_once_for_a_change_outside_dispatch() {
+    let n = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
+    let count = counting_wake(&mut app);
+    app.render();
+    assert!(!app.check_wake());
+    n.set(1);
+    assert!(app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    // More changes before the host updates do not call again.
+    n.set(2);
+    assert!(!app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    // After the update it wakes again.
+    assert!(app.update().is_some());
+    assert!(!app.check_wake());
+    n.set(3);
+    assert!(app.check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn wake_stays_quiet_for_changes_inside_dispatch_resize_and_update() {
+    let n = create_signal(0);
+    let app = Rc::new(RefCell::new(AndroidRenderer::new(vp(), move || {
+        let n = n;
+        Button::new(format!("n={}", n.get())).on_click(move || n.set(n.get() + 1))
+    })));
+    let count = counting_wake(&mut app.borrow_mut());
+    let mut host = Host::default();
+    host.apply(&ops_of(&app.borrow_mut().render()));
+    let button = host.ids_of_kind(kind::BUTTON)[0];
+    let diff = app.borrow_mut().dispatch(button, Event::Click);
+    assert!(diff.is_some());
+    assert!(
+        !app.borrow().check_wake(),
+        "a change made by a handler wakes"
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    // An update renders the change, so it does not wake either.
+    n.set(10);
+    assert!(app.borrow_mut().update().is_some());
+    assert!(!app.borrow().check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    // Resize renders too.
+    n.set(11);
+    app.borrow_mut().resize(500.0, 640.0);
+    assert!(!app.borrow().check_wake());
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn wake_does_not_fire_while_a_dispatch_is_running() {
+    let n = create_signal(0);
+    let count = Arc::new(AtomicUsize::new(0));
+    let state: Rc<RefCell<Option<Arc<super::renderer::WakeState>>>> = Rc::default();
+    let polled = Rc::new(RefCell::new(None));
+    let (slot, result) = (state.clone(), polled.clone());
+    let mut app = AndroidRenderer::new(vp(), move || {
+        let (slot, result) = (slot.clone(), result.clone());
+        Button::new("b").on_click(move || {
+            n.set(n.get() + 1);
+            // What the polling thread does, but during the handler.
+            let handle = slot.borrow().clone().unwrap();
+            *result.borrow_mut() = Some(handle.check());
+        })
+    });
+    let seen = count.clone();
+    app.set_wake(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+    *state.borrow_mut() = Some(app.wake_state());
+    let mut host = Host::default();
+    host.apply(&ops_of(&app.render()));
+    let button = host.ids_of_kind(kind::BUTTON)[0];
+    app.dispatch(button, Event::Click);
+    assert_eq!(*polled.borrow(), Some(false));
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_wake_thread_fires_for_a_change_from_another_thread() {
+    let n = create_signal(0);
+    let mut app = AndroidRenderer::new(vp(), move || Text::new(format!("n={}", n.get())));
+    let count = counting_wake(&mut app);
+    app.render();
+    app.start_wake_polling(Duration::from_millis(2));
+    app.start_wake_polling(Duration::from_millis(2));
+    std::thread::spawn(move || n.set(1)).join().unwrap();
+    let start = std::time::Instant::now();
+    while count.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    assert!(app.update().is_some());
 }

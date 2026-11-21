@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use schnellui::template::{ChangeHandler, ClickHandler, InputHandler, ToggleHandler};
+use schnellui::template::{ChangeHandler, ClickHandler, ComponentRef, InputHandler, ToggleHandler};
 
 use super::ops::{prop, Op};
 
@@ -67,6 +67,13 @@ pub(crate) struct OptionMarker {
     pub selected: bool,
 }
 
+/// What a size query measures. The host gets it as SHOW_TARGET once ids exist.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum QueryTarget {
+    Parent,
+    Component(ComponentRef),
+}
+
 /// One node of the rendered tree. This is the [`AndroidTemplate`] node type.
 ///
 /// [`AndroidTemplate`]: super::AndroidTemplate
@@ -82,6 +89,13 @@ pub struct AndroidNode {
     pub(crate) option: Option<OptionMarker>,
     /// The values of a Dropdown's options, in ITEMS order.
     pub(crate) option_values: Vec<String>,
+    /// Zero for the system theme, else a CREATE_THEMED theme code.
+    pub(crate) theme: u8,
+    /// The reference `component_ref` attached to this node.
+    pub(crate) component_ref: Option<ComponentRef>,
+    /// The target of this node's size query. SHOW_TARGET itself is filled in
+    /// after the diff, see `queries`.
+    pub(crate) query: Option<QueryTarget>,
 }
 
 impl AndroidNode {
@@ -95,6 +109,9 @@ impl AndroidNode {
             handlers: Handlers::default(),
             option: None,
             option_values: Vec::new(),
+            theme: 0,
+            component_ref: None,
+            query: None,
         }
     }
 
@@ -125,6 +142,18 @@ impl AndroidNode {
         self.f32(prop::PAD_TOP, top);
         self.f32(prop::PAD_RIGHT, right);
         self.f32(prop::PAD_BOTTOM, bottom);
+    }
+
+    /// Gives this node and its descendants `theme`, down to nodes that already
+    /// have one. A nested ThemeProvider stamped its own subtree before.
+    pub(crate) fn stamp_theme(&mut self, theme: u8) {
+        if self.theme != 0 {
+            return;
+        }
+        self.theme = theme;
+        for child in &mut self.children {
+            child.stamp_theme(theme);
+        }
     }
 
     /// Drops option markers that no Dropdown consumed.

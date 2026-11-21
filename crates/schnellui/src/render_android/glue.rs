@@ -4,11 +4,14 @@
 //! An app handle is a leaked `Box<AndroidRenderer>`. All calls come from the
 //! Android main thread, as the contract requires.
 
+use std::time::Duration;
+
 use jni::errors::LogErrorAndDefault;
+use jni::objects::JValue;
 pub use jni::objects::{JByteArray, JClass, JString};
 pub use jni::sys::jboolean;
-use jni::Env;
 pub use jni::EnvUnowned;
+use jni::{jni_sig, jni_str, Env};
 
 use super::{AndroidRenderer, Event, Viewport};
 
@@ -24,10 +27,41 @@ pub fn mount<'a>(
     viewport: Viewport,
     factory: fn(Viewport) -> AndroidRenderer,
 ) -> i64 {
-    env.with_env(|_env| -> jni::errors::Result<i64> {
-        Ok(Box::into_raw(Box::new(factory(viewport))) as usize as i64)
+    env.with_env(|env| -> jni::errors::Result<i64> {
+        let vm = env.get_java_vm()?;
+        // A thread that Rust attaches finds classes through the system class
+        // loader, which does not see the app's classes. Keep the class instead.
+        let bridge = env.new_global_ref(&_class)?;
+        let ptr = Box::into_raw(Box::new(factory(viewport)));
+        let handle = ptr as usize as i64;
+        // SAFETY: `ptr` was just leaked and nothing else holds it yet.
+        let renderer = unsafe { &mut *ptr };
+        renderer.set_wake(move || request_update(&vm, &bridge, handle));
+        renderer.start_wake_polling(WAKE_POLL);
+        Ok(handle)
     })
     .resolve::<LogErrorAndDefault>()
+}
+
+/// How often the wake thread looks for a signal change.
+const WAKE_POLL: Duration = Duration::from_millis(32);
+
+/// Calls the static `SchnellBridge.requestUpdate(long)` from the current
+/// thread, attaching it if needed. The host posts the update to its main
+/// thread.
+fn request_update(vm: &jni::JavaVM, bridge: &jni::refs::Global<JClass<'static>>, handle: i64) {
+    let called = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        env.call_static_method(
+            bridge,
+            jni_str!("requestUpdate"),
+            jni_sig!("(J)V"),
+            &[JValue::Long(handle)],
+        )?;
+        Ok(())
+    });
+    if let Err(error) = called {
+        eprintln!("schnellui: requestUpdate failed: {error}");
+    }
 }
 
 /// # Safety
@@ -91,6 +125,17 @@ pub fn resize<'a>(
     env.with_env(|env| -> jni::errors::Result<JByteArray<'a>> {
         // SAFETY: the host passes the handle `nativeMount` returned.
         let bytes = unsafe { app(handle) }.and_then(|app| app.resize(width, height));
+        to_array(env, bytes)
+    })
+    .resolve::<LogErrorAndDefault>()
+}
+
+/// Renders again after a signal changed outside the host's calls. Returns the
+/// diff, or null.
+pub fn update<'a>(mut env: EnvUnowned<'a>, _class: JClass<'a>, handle: i64) -> JByteArray<'a> {
+    env.with_env(|env| -> jni::errors::Result<JByteArray<'a>> {
+        // SAFETY: the host passes the handle `nativeMount` returned.
+        let bytes = unsafe { app(handle) }.and_then(|app| app.update());
         to_array(env, bytes)
     })
     .resolve::<LogErrorAndDefault>()

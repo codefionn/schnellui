@@ -1,5 +1,9 @@
 //! The [`TemplateRenderer`] that builds an [`AndroidNode`] tree.
 
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use schnellui::scene::Size;
 use schnellui::template::{
     Align, ButtonAppearance, ButtonProps, CheckboxProps, ComponentKind, ComponentProps,
@@ -8,18 +12,35 @@ use schnellui::template::{
     TextProps, WrapMode,
 };
 
-use super::ops::{kind, prop};
+use super::ops::{kind, prop, THEME_DARK, THEME_LIGHT};
 use super::renderer::Viewport;
-use super::tree::{AndroidNode, OptionMarker};
+use super::svg::SvgCache;
+use super::tree::{AndroidNode, OptionMarker, QueryTarget};
 
 /// Renders templates into an [`AndroidNode`] tree.
 pub struct AndroidTemplate {
     viewport: Viewport,
+    svg: Rc<RefCell<SvgCache>>,
 }
 
 impl AndroidTemplate {
     pub fn new(viewport: Viewport) -> Self {
-        Self { viewport }
+        Self::with_cache(viewport, Rc::default())
+    }
+
+    /// Shares an SVG cache between renders, so a source is rasterised once.
+    pub(crate) fn with_cache(viewport: Viewport, svg: Rc<RefCell<SvgCache>>) -> Self {
+        Self { viewport, svg }
+    }
+}
+
+/// 16 dp per em, as the doc says.
+fn query_bound(node: &mut AndroidNode, prop: u8, length: Option<schnellui::template::Length>) {
+    if let Some(length) = length {
+        let px = length.to_px();
+        if px.is_finite() {
+            node.f32(prop, px);
+        }
     }
 }
 
@@ -186,19 +207,33 @@ impl TemplateRenderer for AndroidTemplate {
     }
 
     fn responsive(&mut self, query: ResponsiveQuery, mut child: Self::Node) -> Self::Node {
-        if query.target == ResponsiveTarget::Viewport {
-            let size = Size {
-                width: self.viewport.width,
-                height: self.viewport.height,
-            };
-            if !query.matches(size) {
-                child.bool(prop::VISIBLE, false);
+        match query.target {
+            ResponsiveTarget::Viewport => {
+                let size = Size {
+                    width: self.viewport.width,
+                    height: self.viewport.height,
+                };
+                if !query.matches(size) {
+                    child.bool(prop::VISIBLE, false);
+                }
+            }
+            ResponsiveTarget::Parent | ResponsiveTarget::Component(_) => {
+                child.query = Some(match query.target {
+                    ResponsiveTarget::Component(reference) => QueryTarget::Component(reference),
+                    _ => QueryTarget::Parent,
+                });
+                query_bound(&mut child, prop::SHOW_MIN_W, query.min_width);
+                query_bound(&mut child, prop::SHOW_MAX_W, query.max_width);
+                query_bound(&mut child, prop::SHOW_MIN_H, query.min_height);
+                query_bound(&mut child, prop::SHOW_MAX_H, query.max_height);
             }
         }
         child
     }
 
-    fn component_ref(&mut self, _reference: ComponentRef, child: Self::Node) -> Self::Node {
+    /// A node holds one reference. A later call replaces the earlier one.
+    fn component_ref(&mut self, reference: ComponentRef, mut child: Self::Node) -> Self::Node {
+        child.component_ref = Some(reference);
         child
     }
 
@@ -516,6 +551,104 @@ impl TemplateRenderer for AndroidTemplate {
                 node.handlers.click = props.on_click;
                 node
             }
+            ComponentKind::Table => {
+                let mut node = AndroidNode::new(kind::TABLE);
+                labelled(&mut node, &props.label);
+                node.children = children;
+                node
+            }
+            ComponentKind::TableRow => {
+                let mut node = AndroidNode::new(kind::TABLE_ROW);
+                if !props.items.is_empty() {
+                    let cells: Vec<&str> = props.items.iter().map(|c| c.as_ref()).collect();
+                    node.str(prop::ITEMS, cells.join("\u{1f}"));
+                }
+                node.bool(prop::SELECTED, props.selected);
+                labelled(&mut node, &props.label);
+                node.children = children;
+                node.handlers.click = props.on_click;
+                node
+            }
+            ComponentKind::RichText => {
+                let mut column = AndroidNode::new(kind::COLUMN);
+                if !props.label.is_empty() {
+                    let title = self.text(TextProps {
+                        content: TextContent::Static(props.label.clone()),
+                        size: 20.0,
+                        role: Role::ColumnHeader,
+                        wrap: WrapMode::NoWrap,
+                        align: TextAlign::Start,
+                        ellipsis: false,
+                    });
+                    column.children.push(title);
+                }
+                column.children.push(self.text(TextProps {
+                    content: TextContent::Static(props.value.clone().into()),
+                    size: 16.0,
+                    role: Role::Label,
+                    wrap: WrapMode::Word,
+                    align: TextAlign::Start,
+                    ellipsis: false,
+                }));
+                column.children.extend(children);
+                column
+            }
+            ComponentKind::Icon => {
+                let glyph = if props.detail.is_empty() {
+                    Cow::Borrowed("\u{25c6}")
+                } else {
+                    props.detail.clone()
+                };
+                let mut node = self.text(TextProps {
+                    content: TextContent::Static(glyph),
+                    size: 20.0,
+                    role: Role::Image,
+                    wrap: WrapMode::NoWrap,
+                    align: TextAlign::Start,
+                    ellipsis: false,
+                });
+                labelled(&mut node, &props.label);
+                node
+            }
+            ComponentKind::DragHandle => {
+                let mut node = AndroidNode::new(kind::BUTTON);
+                node.str(prop::TEXT, "\u{22ee}\u{22ee}");
+                node.i32(prop::APPEARANCE, 1);
+                labelled(&mut node, &props.label);
+                node.handlers.click = props.on_click;
+                node
+            }
+            ComponentKind::Svg => {
+                let source = props
+                    .markup
+                    .as_ref()
+                    .map_or(props.value.as_str(), |m| m.as_str());
+                let mut node = AndroidNode::new(kind::IMAGE);
+                let url = self.svg.borrow_mut().data_url(
+                    source,
+                    props.width,
+                    props.height,
+                    self.viewport.density,
+                );
+                if let Some(url) = url {
+                    node.str(prop::SRC, url);
+                }
+                labelled(&mut node, &props.label);
+                node
+            }
+            ComponentKind::ThemeProvider => {
+                let mut node = AndroidNode::new(match props.value.as_str() {
+                    "dark" | "light" => kind::THEME_PROVIDER,
+                    _ => kind::COLUMN,
+                });
+                node.children = children;
+                match props.value.as_str() {
+                    "dark" => node.stamp_theme(THEME_DARK),
+                    "light" => node.stamp_theme(THEME_LIGHT),
+                    _ => {}
+                }
+                node
+            }
             _ => {
                 let mut column = AndroidNode::new(kind::COLUMN);
                 if !props.label.is_empty() {
@@ -551,6 +684,13 @@ impl TemplateRenderer for AndroidTemplate {
                     | ComponentKind::Dialog
                     | ComponentKind::TabBar
                     | ComponentKind::List
+                    | ComponentKind::Table
+                    | ComponentKind::TableRow
+                    | ComponentKind::RichText
+                    | ComponentKind::Icon
+                    | ComponentKind::DragHandle
+                    | ComponentKind::Svg
+                    | ComponentKind::ThemeProvider
             )
         {
             node.bool(prop::ENABLED, false);
@@ -571,6 +711,13 @@ impl TemplateRenderer for AndroidTemplate {
                 | ComponentKind::Tab
                 | ComponentKind::List
                 | ComponentKind::ListItem
+                | ComponentKind::Table
+                | ComponentKind::TableRow
+                | ComponentKind::RichText
+                | ComponentKind::Icon
+                | ComponentKind::DragHandle
+                | ComponentKind::Svg
+                | ComponentKind::ThemeProvider
         ) {
             node.opt_f32(prop::WIDTH, props.width);
             node.opt_f32(prop::HEIGHT, props.height);

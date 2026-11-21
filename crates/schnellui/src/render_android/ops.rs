@@ -36,6 +36,9 @@ pub mod kind {
     pub const TAB_BAR: u8 = 22;
     pub const TAB: u8 = 23;
     pub const LIST_ITEM: u8 = 24;
+    pub const TABLE: u8 = 25;
+    pub const TABLE_ROW: u8 = 26;
+    pub const THEME_PROVIDER: u8 = 27;
 }
 
 /// Property codes.
@@ -84,6 +87,12 @@ pub mod prop {
     pub const HREF: u8 = 54;
     /// Selected state of a Tab or ListItem.
     pub const SELECTED: u8 = 55;
+    /// Size query target: 0 is the parent, any other value the id of an ancestor.
+    pub const SHOW_TARGET: u8 = 56;
+    pub const SHOW_MIN_W: u8 = 57;
+    pub const SHOW_MAX_W: u8 = 58;
+    pub const SHOW_MIN_H: u8 = 59;
+    pub const SHOW_MAX_H: u8 = 60;
 }
 
 /// Event codes, as sent from the host.
@@ -104,19 +113,57 @@ const OP_CLEAR: u8 = 0x05;
 const OP_INSERT: u8 = 0x06;
 const OP_REMOVE: u8 = 0x07;
 const OP_SET_ROOT: u8 = 0x08;
+const OP_CREATE_THEMED: u8 = 0x09;
+
+/// Theme 1 of CREATE_THEMED: light.
+pub const THEME_LIGHT: u8 = 1;
+/// Theme 2 of CREATE_THEMED: dark.
+pub const THEME_DARK: u8 = 2;
 
 /// One decoded op. Kind and prop codes stay raw so a buffer from a newer app
 /// still decodes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    Create { id: u32, kind: u8 },
-    SetStr { id: u32, prop: u8, value: String },
-    SetF32 { id: u32, prop: u8, value: f32 },
-    SetI32 { id: u32, prop: u8, value: i32 },
-    Clear { id: u32, prop: u8 },
-    Insert { parent: u32, child: u32, index: u32 },
-    Remove { id: u32 },
-    SetRoot { id: u32 },
+    Create {
+        id: u32,
+        kind: u8,
+    },
+    /// CREATE with a fixed theme, [`THEME_LIGHT`] or [`THEME_DARK`].
+    CreateThemed {
+        id: u32,
+        kind: u8,
+        theme: u8,
+    },
+    SetStr {
+        id: u32,
+        prop: u8,
+        value: String,
+    },
+    SetF32 {
+        id: u32,
+        prop: u8,
+        value: f32,
+    },
+    SetI32 {
+        id: u32,
+        prop: u8,
+        value: i32,
+    },
+    Clear {
+        id: u32,
+        prop: u8,
+    },
+    Insert {
+        parent: u32,
+        child: u32,
+        index: u32,
+    },
+    Remove {
+        id: u32,
+    },
+    SetRoot {
+        id: u32,
+    },
 }
 
 /// Why a buffer did not decode.
@@ -155,6 +202,12 @@ pub fn encode(ops: &[Op]) -> Vec<u8> {
                 out.push(OP_CREATE);
                 put_u32(&mut out, *id);
                 out.push(*kind);
+            }
+            Op::CreateThemed { id, kind, theme } => {
+                out.push(OP_CREATE_THEMED);
+                put_u32(&mut out, *id);
+                out.push(*kind);
+                out.push(*theme);
             }
             Op::SetStr { id, prop, value } => {
                 out.push(OP_SET_STR);
@@ -256,6 +309,11 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Op>, DecodeError> {
             OP_CREATE => Op::Create {
                 id: r.u32()?,
                 kind: r.u8()?,
+            },
+            OP_CREATE_THEMED => Op::CreateThemed {
+                id: r.u32()?,
+                kind: r.u8()?,
+                theme: r.u8()?,
             },
             OP_SET_STR => Op::SetStr {
                 id: r.u32()?,
