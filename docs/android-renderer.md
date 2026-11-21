@@ -60,7 +60,7 @@ Ids are non-zero and never reused within one mount. A CREATE comes before any ot
 
 ## Properties
 
-A Slider or TextInput with no WIDTH, MIN_WIDTH, FILL, GROW or stretch is 160 dp wide. A wrap-content `SeekBar` would be as wide as its thumb.
+A Slider, TextInput, TextArea or Progress with no WIDTH, MIN_WIDTH, FILL, GROW or stretch is 160 dp wide. A wrap-content `SeekBar` would be as wide as its thumb.
 
 | Code | Prop | Type | Applies to | Default |
 |------|------|------|-----------|---------|
@@ -167,7 +167,7 @@ An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdy
 
 - Switch: TEXT from `label`, CHECKED from `checked`, TOGGLE runs `on_toggle`.
 - Radio: TEXT from `label`, CHECKED from `selected || checked`, CLICK runs `on_click`.
-- Dropdown: its options are `items` followed by its DropdownOption children. An option's label is its `label`, and its value is its `value`, or its label when the value is empty. An entry of `items` is both label and value. Options are not nodes. They become ITEMS, and SELECTED_INDEX is the first option with `selected`, or the first whose value equals the Dropdown's `value`. SELECT runs `on_input` with the option's value. A11Y_LABEL from `label`.
+- Dropdown: options must be direct children. Its options are `items` followed by its DropdownOption children. An option's label is its `label`, and its value is its `value`, or its label when the value is empty. An entry of `items` is both label and value. Options are not nodes. They become ITEMS, and SELECTED_INDEX is the first option with `selected`, or the first whose value equals the Dropdown's `value`. SELECT runs `on_input` with the option's value. A11Y_LABEL from `label`.
 - ProgressBar: Progress with VALUE from `number`, MIN, MAX. A11Y_LABEL from `label`.
 - LoadingSpinner: Loading with A11Y_LABEL from `label`.
 - TextArea: TEXT from `value`, A11Y_LABEL from `label`, INPUT runs `on_input`.
@@ -175,7 +175,7 @@ An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdy
 - Divider: Divider.
 - Badge: TEXT from `label`.
 - Link: TEXT from `label`, HREF from `value`, CLICK runs `on_click`.
-- Dialog: TEXT from `label`, children as content. DISMISS runs the handler the retained renderer uses to close a dialog.
+- Dialog: TEXT from `label`, children as content. DISMISS runs `on_click`, because `ComponentProps` has no dismiss handler.
 - TabBar: children as content, A11Y_LABEL from `label`. Tab: TEXT from `label`, SELECTED, CLICK runs `on_click`.
 - List: a Column with ROLE list and A11Y_LABEL from `label`. ListItem: TEXT from `label`, SELECTED, children as content, CLICK runs `on_click`.
 
