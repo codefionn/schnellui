@@ -1091,6 +1091,61 @@ fn code_values_match_the_doc() {
 }
 
 #[test]
+fn new_kinds_carry_size_and_disabled() {
+    let n = render_widget(image().value("data:image/png;base64,AA==").size(48.0, 48.0));
+    assert_eq!(n.props.get(&prop::WIDTH), Some(&Value::F32(48.0)));
+    assert_eq!(n.props.get(&prop::HEIGHT), Some(&Value::F32(48.0)));
+
+    let n = render_widget(progress_bar().label("Load").size(120.0, 8.0));
+    let inner = n
+        .children
+        .iter()
+        .find(|c| c.kind == kind::PROGRESS)
+        .expect("inner progress bar");
+    assert_eq!(inner.props.get(&prop::WIDTH), Some(&Value::F32(120.0)));
+    assert_eq!(inner.props.get(&prop::HEIGHT), Some(&Value::F32(8.0)));
+    assert_eq!(n.props.get(&prop::WIDTH), None);
+
+    let disabled = [
+        switch().disabled(true),
+        radio().disabled(true),
+        loading_spinner().disabled(true),
+        text_area().disabled(true),
+        image().disabled(true),
+        divider().disabled(true),
+        badge().disabled(true),
+        link().disabled(true),
+        dialog().disabled(true),
+        tab_bar().disabled(true),
+        tab().disabled(true),
+        list().disabled(true),
+        list_item().disabled(true),
+    ];
+    for widget in disabled {
+        let n = render_widget(widget);
+        assert_eq!(
+            n.props.get(&prop::ENABLED),
+            Some(&Value::I32(0)),
+            "{}",
+            n.kind
+        );
+    }
+    for widget in [
+        dropdown().label("D").disabled(true),
+        progress_bar().label("P").disabled(true),
+    ] {
+        let n = render_widget(widget);
+        let inner = n.children.last().expect("inner widget");
+        assert_eq!(
+            inner.props.get(&prop::ENABLED),
+            Some(&Value::I32(0)),
+            "{}",
+            inner.kind
+        );
+    }
+}
+
+#[test]
 fn simple_widgets_emit_their_props() {
     let n = render_widget(switch().label("Wifi").checked(true));
     assert_eq!(n.kind, kind::SWITCH);

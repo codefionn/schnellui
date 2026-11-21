@@ -409,6 +409,8 @@ impl TemplateRenderer for AndroidTemplate {
                 }
                 node.option_values = values;
                 node.handlers.select = props.on_input;
+                node.opt_f32(prop::WIDTH, props.width);
+                node.opt_f32(prop::HEIGHT, props.height);
                 self.with_label(&props.label, node)
             }
             ComponentKind::DropdownOption => {
@@ -435,6 +437,8 @@ impl TemplateRenderer for AndroidTemplate {
                 if props.disabled {
                     node.bool(prop::ENABLED, false);
                 }
+                node.opt_f32(prop::WIDTH, props.width);
+                node.opt_f32(prop::HEIGHT, props.height);
                 self.with_label(&props.label, node)
             }
             ComponentKind::LoadingSpinner => {
@@ -541,9 +545,35 @@ impl TemplateRenderer for AndroidTemplate {
                     | ComponentKind::Link
                     | ComponentKind::Tab
                     | ComponentKind::ListItem
+                    | ComponentKind::Image
+                    | ComponentKind::Divider
+                    | ComponentKind::Badge
+                    | ComponentKind::Dialog
+                    | ComponentKind::TabBar
+                    | ComponentKind::List
             )
         {
             node.bool(prop::ENABLED, false);
+        }
+        // Dropdown and ProgressBar set their size on the inner widget above.
+        if matches!(
+            props.kind,
+            ComponentKind::Switch
+                | ComponentKind::Radio
+                | ComponentKind::LoadingSpinner
+                | ComponentKind::TextArea
+                | ComponentKind::Image
+                | ComponentKind::Divider
+                | ComponentKind::Badge
+                | ComponentKind::Link
+                | ComponentKind::Dialog
+                | ComponentKind::TabBar
+                | ComponentKind::Tab
+                | ComponentKind::List
+                | ComponentKind::ListItem
+        ) {
+            node.opt_f32(prop::WIDTH, props.width);
+            node.opt_f32(prop::HEIGHT, props.height);
         }
         node
     }
