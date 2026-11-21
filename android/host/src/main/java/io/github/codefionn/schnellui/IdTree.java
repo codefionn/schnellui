@@ -35,6 +35,19 @@ public final class IdTree {
         return e == null ? 0 : e.parent;
     }
 
+    /** True when the node is the root or has it as an ancestor. Detached nodes are not under it. */
+    public boolean isUnder(int id, int root) {
+        if (root == 0 || !entries.containsKey(id)) {
+            return false;
+        }
+        for (int a = id; a != 0; a = parentOf(a)) {
+            if (a == root) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public List<Integer> childrenOf(int id) {
         Entry e = entries.get(id);
         return e == null ? new ArrayList<>() : new ArrayList<>(e.children);
