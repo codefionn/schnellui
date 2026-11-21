@@ -14,6 +14,8 @@ public final class OpReader {
     public interface Handler {
         void create(int id, int kind);
 
+        void createThemed(int id, int kind, int theme);
+
         void setStr(int id, int prop, String value);
 
         void setF32(int id, int prop, float value);
@@ -60,6 +62,12 @@ public final class OpReader {
                 case Codes.OP_CREATE: {
                     int id = u32();
                     h.create(id, u8());
+                    break;
+                }
+                case Codes.OP_CREATE_THEMED: {
+                    int id = u32();
+                    int kind = u8();
+                    h.createThemed(id, kind, u8());
                     break;
                 }
                 case Codes.OP_SET_STR: {

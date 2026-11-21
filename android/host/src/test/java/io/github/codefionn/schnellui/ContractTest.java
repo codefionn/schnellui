@@ -1,6 +1,7 @@
 package io.github.codefionn.schnellui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
 
@@ -69,7 +70,7 @@ public class ContractTest {
     @Test
     public void opCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "Op buffer");
-        assertEquals(8, rows.size());
+        assertEquals(9, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("OP_" + ident(r[2])));
         }
@@ -78,7 +79,7 @@ public class ContractTest {
     @Test
     public void kindCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "View kinds");
-        assertEquals(24, rows.size());
+        assertEquals(27, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("KIND_" + ident(r[2])));
         }
@@ -87,7 +88,7 @@ public class ContractTest {
     @Test
     public void propCodesMatchDoc() throws Exception {
         List<String[]> rows = table(doc(), "Properties");
-        assertEquals(39, rows.size());
+        assertEquals(44, rows.size());
         for (String[] r : rows) {
             assertEquals(r[2], code(r[1]), constant("PROP_" + ident(r[2])));
         }
@@ -112,7 +113,7 @@ public class ContractTest {
                 count++;
             }
         }
-        assertEquals(8 + 24 + 39 + 6, count);
+        assertEquals(9 + 27 + 44 + 6, count);
         assertEquals(0x53, Codes.MAGIC);
         assertEquals(0x01, Codes.VERSION);
     }
@@ -127,13 +128,27 @@ public class ContractTest {
                 long.class, int.class, int.class, int.class, float.class, String.class);
         check("nativeResize", byte[].class, long.class, float.class, float.class);
         check("nativeUnmount", void.class, long.class);
+        check("nativeUpdate", byte[].class, long.class);
+        Method req = SchnellBridge.class.getDeclaredMethod("requestUpdate", long.class);
+        assertTrue(Modifier.isStatic(req.getModifiers()));
+        assertFalse(Modifier.isNative(req.getModifiers()));
+        assertEquals(void.class, req.getReturnType());
         int natives = 0;
         for (Method m : SchnellBridge.class.getDeclaredMethods()) {
             if (Modifier.isNative(m.getModifiers())) {
                 natives++;
             }
         }
-        assertEquals(5, natives);
+        assertEquals(6, natives);
+    }
+
+    @Test
+    public void consumerRulesKeepTheBridge() throws Exception {
+        File rules = new File("consumer-rules.pro");
+        assumeTrue(rules.exists());
+        String text = new String(Files.readAllBytes(rules.toPath()), StandardCharsets.UTF_8);
+        assertTrue(text.contains("-keep class io.github.codefionn.schnellui.SchnellBridge"));
+        assertTrue(text.contains("static void requestUpdate(long);"));
     }
 
     private static void check(String name, Class<?> ret, Class<?>... params) throws Exception {

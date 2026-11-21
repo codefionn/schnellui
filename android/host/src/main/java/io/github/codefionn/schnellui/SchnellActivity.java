@@ -119,10 +119,14 @@ public class SchnellActivity extends Activity {
     private void buildViews() {
         applier = new ViewApplier(this, container, new EventGate(SchnellBridge.sinkFor(app)));
         applier.apply(SchnellBridge.nativeRender(app));
+        SchnellBridge.register(app, applier);
     }
 
     /** Drops the views and keeps the Rust app for the next activity instance. */
     private void detach() {
+        if (app != 0) {
+            SchnellBridge.unregister(app);
+        }
         app = 0;
         if (applier != null) {
             applier.reset();
@@ -132,6 +136,7 @@ public class SchnellActivity extends Activity {
 
     private void unmount() {
         if (app != 0) {
+            SchnellBridge.unregister(app);
             SchnellBridge.nativeUnmount(app);
             app = 0;
         }
@@ -161,6 +166,9 @@ public class SchnellActivity extends Activity {
         }
         lastW = wDp;
         lastH = hDp;
+        if (applier == null) {
+            return;
+        }
         applier.apply(SchnellBridge.nativeResize(app, wDp, hDp));
     }
 

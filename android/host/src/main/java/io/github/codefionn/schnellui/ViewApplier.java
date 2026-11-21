@@ -26,10 +26,12 @@ import android.util.Log;
 import android.util.TypedValue;
 import android.content.res.TypedArray;
 import android.view.Gravity;
+import android.view.ContextThemeWrapper;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -48,14 +50,18 @@ import android.widget.SeekBar;
 import android.widget.Space;
 import android.widget.Spinner;
 import android.widget.Switch;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 import android.widget.TextView;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Applies decoded ops to platform views. Keeps the id to view map and one {@link Node} per
@@ -72,9 +78,25 @@ public final class ViewApplier {
         final View view;
         /** Where children go. Null for leaf kinds. The inner layout for Scroll. */
         final ViewGroup content;
+        /** The context the view was built with. Theme lookups for this node use it. */
+        final Context ctx;
 
-        /** VISIBLE for a Dialog. Its placeholder stays GONE, so this drives the window. */
+        /** The VISIBLE prop. For a Dialog the placeholder stays GONE, so this drives the window. */
         boolean visible = true;
+
+        /** Size query. showTarget is -1 when off, 0 for the parent, else an ancestor id. */
+        int showTarget = -1;
+        float showMinW = Float.NaN;
+        float showMaxW = Float.NaN;
+        float showMinH = Float.NaN;
+        float showMaxH = Float.NaN;
+        /** Whether the size query currently matches. Combined with visible. */
+        boolean queryOk = true;
+        boolean queryPosted;
+        /** The view that carries the layout listener, and the node id it belongs to. */
+        View queryView;
+        int queryViewId;
+        View.OnLayoutChangeListener queryListener;
 
         float width = Float.NaN;
         float height = Float.NaN;
@@ -127,7 +149,8 @@ public final class ViewApplier {
         ColorStateList baseText;
         Typeface baseFace;
 
-        Node(int id, int kind, View view, ViewGroup content) {
+        Node(int id, int kind, View view, ViewGroup content, Context ctx) {
+            this.ctx = ctx;
             this.id = id;
             this.kind = kind;
             this.view = view;
@@ -152,6 +175,12 @@ public final class ViewApplier {
     private final IdTree tree = new IdTree();
     private int rootId;
     private Button ghostTemplate;
+    /** Live Dialog nodes. Zero lets refreshDialogs return at once. */
+    private int dialogCount;
+    /** Nodes with a size query, so reset and REMOVE find their listeners. */
+    private final Set<Node> queryNodes = new HashSet<>();
+    /** Contexts of CREATE_THEMED by theme code, built on first use. */
+    private final Context[] themed = new Context[3];
 
     public ViewApplier(Context context, ViewGroup host, EventGate gate) {
         this.context = context;
@@ -165,6 +194,11 @@ public final class ViewApplier {
         for (Node n : nodes.values()) {
             dismissDialog(n);
         }
+        for (Node n : new HashSet<>(queryNodes)) {
+            unbindQuery(n);
+        }
+        queryNodes.clear();
+        dialogCount = 0;
         host.removeAllViews();
         nodes.clear();
         tree.clear();
@@ -196,7 +230,12 @@ public final class ViewApplier {
     private final class Ops implements OpReader.Handler {
         @Override
         public void create(int id, int kind) {
-            createNode(id, kind);
+            createNode(id, kind, context);
+        }
+
+        @Override
+        public void createThemed(int id, int kind, int theme) {
+            createNode(id, kind, themeContext(theme));
         }
 
         @Override
@@ -255,7 +294,24 @@ public final class ViewApplier {
         return n;
     }
 
-    private void createNode(int id, int kind) {
+    /** The context for a theme code of CREATE_THEMED. An unknown code uses the default. */
+    private Context themeContext(int theme) {
+        int res;
+        if (theme == Codes.THEME_LIGHT) {
+            res = android.R.style.Theme_DeviceDefault_Light;
+        } else if (theme == Codes.THEME_DARK) {
+            res = android.R.style.Theme_DeviceDefault;
+        } else {
+            Log.w(TAG, "unknown theme " + theme + ", using the activity theme");
+            return context;
+        }
+        if (themed[theme] == null) {
+            themed[theme] = new ContextThemeWrapper(context, res);
+        }
+        return themed[theme];
+    }
+
+    private void createNode(int id, int kind, Context cx) {
         if (id == 0 || nodes.containsKey(id)) {
             Log.w(TAG, "CREATE with bad or reused id " + id);
             return;
@@ -267,28 +323,28 @@ public final class ViewApplier {
         Dialog dialog = null;
         switch (kind) {
             case Codes.KIND_ROW: {
-                FlexLinearLayout l = new FlexLinearLayout(context, LinearLayout.HORIZONTAL);
+                FlexLinearLayout l = new FlexLinearLayout(cx, LinearLayout.HORIZONTAL);
                 view = l;
                 content = l;
                 break;
             }
             case Codes.KIND_COLUMN: {
-                FlexLinearLayout l = new FlexLinearLayout(context, LinearLayout.VERTICAL);
+                FlexLinearLayout l = new FlexLinearLayout(cx, LinearLayout.VERTICAL);
                 view = l;
                 content = l;
                 break;
             }
             case Codes.KIND_STACK: {
-                FrameLayout f = new FrameLayout(context);
+                FrameLayout f = new FrameLayout(cx);
                 view = f;
                 content = f;
                 break;
             }
             case Codes.KIND_SCROLL: {
-                ScrollView s = new ScrollView(context);
+                ScrollView s = new ScrollView(cx);
                 s.setFillViewport(true);
                 s.setVerticalScrollBarEnabled(false);
-                FlexLinearLayout inner = new FlexLinearLayout(context, LinearLayout.VERTICAL);
+                FlexLinearLayout inner = new FlexLinearLayout(cx, LinearLayout.VERTICAL);
                 s.addView(inner, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -297,51 +353,51 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_TEXT: {
-                view = new TextView(context);
+                view = new TextView(cx);
                 break;
             }
             case Codes.KIND_BUTTON:
-                view = new Button(context);
+                view = new Button(cx);
                 break;
             case Codes.KIND_CHECKBOX:
-                view = new CheckBox(context);
+                view = new CheckBox(cx);
                 break;
             case Codes.KIND_SLIDER:
-                view = new SeekBar(context);
+                view = new SeekBar(cx);
                 break;
             case Codes.KIND_TEXT_INPUT: {
-                EditText e = new EditText(context);
+                EditText e = new EditText(cx);
                 e.setInputType(InputType.TYPE_CLASS_TEXT);
                 view = e;
                 break;
             }
             case Codes.KIND_SPACER:
-                view = new Space(context);
+                view = new Space(cx);
                 break;
             case Codes.KIND_SWITCH:
-                view = new Switch(context);
+                view = new Switch(cx);
                 break;
             case Codes.KIND_RADIO:
-                view = new RadioButton(context);
+                view = new RadioButton(cx);
                 break;
             case Codes.KIND_DROPDOWN:
-                view = new Spinner(context, Spinner.MODE_DROPDOWN);
+                view = new Spinner(cx, Spinner.MODE_DROPDOWN);
                 break;
             case Codes.KIND_PROGRESS: {
-                ProgressBar p = new ProgressBar(context, null,
+                ProgressBar p = new ProgressBar(cx, null,
                         android.R.attr.progressBarStyleHorizontal);
                 p.setIndeterminate(false);
                 view = p;
                 break;
             }
             case Codes.KIND_LOADING: {
-                ProgressBar p = new ProgressBar(context);
+                ProgressBar p = new ProgressBar(cx);
                 p.setIndeterminate(true);
                 view = p;
                 break;
             }
             case Codes.KIND_TEXT_AREA: {
-                EditText e = new EditText(context);
+                EditText e = new EditText(cx);
                 e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
                 e.setSingleLine(false);
                 e.setMinLines(3);
@@ -350,21 +406,21 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_IMAGE: {
-                ImageView iv = new ImageView(context);
+                ImageView iv = new ImageView(cx);
                 iv.setAdjustViewBounds(true);
                 iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 view = iv;
                 break;
             }
             case Codes.KIND_DIVIDER: {
-                View v = new View(context);
-                v.setBackground(themeDrawable(android.R.attr.listDivider));
+                View v = new View(cx);
+                v.setBackground(themeDrawable(cx, android.R.attr.listDivider));
                 view = v;
                 break;
             }
             case Codes.KIND_BADGE: {
-                TextView t = new TextView(context);
-                int accent = themeColor(android.R.attr.colorAccent, 0xFF2196F3);
+                TextView t = new TextView(cx);
+                int accent = themeColor(cx, android.R.attr.colorAccent, 0xFF2196F3);
                 GradientDrawable pill = new GradientDrawable();
                 pill.setColor(accent);
                 pill.setCornerRadius(px(100));
@@ -377,23 +433,34 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_LINK: {
-                TextView t = new TextView(context);
-                ColorStateList link = themeColors(android.R.attr.textColorLink);
+                TextView t = new TextView(cx);
+                ColorStateList link = themeColors(cx, android.R.attr.textColorLink);
                 t.setTextColor(link != null ? link
-                        : ColorStateList.valueOf(themeColor(android.R.attr.colorAccent, 0xFF2196F3)));
+                        : ColorStateList.valueOf(themeColor(cx, android.R.attr.colorAccent, 0xFF2196F3)));
                 t.setPaintFlags(t.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
                 t.setClickable(true);
                 view = t;
                 break;
             }
             case Codes.KIND_DIALOG: {
-                view = new View(context);
+                view = new View(cx);
                 // GONE so the placeholder takes no gap or spread slot in its parent.
                 view.setVisibility(View.GONE);
-                HostDialog d = new HostDialog(context, id);
-                ScrollView sv = new ScrollView(context);
-                FlexLinearLayout inner = new FlexLinearLayout(context, LinearLayout.VERTICAL);
+                HostDialog d = new HostDialog(cx, id);
+                ScrollView sv = new ScrollView(cx);
+                FlexLinearLayout inner = new FlexLinearLayout(cx, LinearLayout.VERTICAL);
                 inner.setPadding(px(24), px(24), px(24), px(24));
+                // The window has no title strip. The host draws the title as the first view,
+                // and it stays GONE while TEXT is empty.
+                TextView title = new TextView(cx);
+                title.setTextAppearance(android.R.style.TextAppearance_DeviceDefault_DialogWindowTitle);
+                title.setPadding(0, 0, 0, px(16));
+                title.setVisibility(View.GONE);
+                inner.addView(title, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT));
+                hostText = title;
+                hostViews = 1;
                 sv.addView(inner, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -403,9 +470,9 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_TAB_BAR: {
-                HorizontalScrollView hs = new HorizontalScrollView(context);
+                HorizontalScrollView hs = new HorizontalScrollView(cx);
                 hs.setHorizontalScrollBarEnabled(false);
-                LinearLayout inner = new LinearLayout(context);
+                LinearLayout inner = new LinearLayout(cx);
                 inner.setOrientation(LinearLayout.HORIZONTAL);
                 hs.addView(inner, new FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -415,15 +482,40 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_TAB:
-                view = new Button(context, null, android.R.attr.borderlessButtonStyle);
+                view = new Button(cx, null, android.R.attr.borderlessButtonStyle);
                 break;
+            case Codes.KIND_TABLE: {
+                TableLayout t = new TableLayout(cx);
+                view = t;
+                content = t;
+                break;
+            }
+            case Codes.KIND_TABLE_ROW: {
+                TableRow r = new TableRow(cx);
+                r.setGravity(Gravity.CENTER_VERTICAL);
+                r.setMinimumHeight(px(48));
+                view = r;
+                content = r;
+                break;
+            }
+            case Codes.KIND_THEME_PROVIDER: {
+                FlexLinearLayout l = new FlexLinearLayout(cx, LinearLayout.VERTICAL);
+                l.setPadding(px(10), px(10), px(10), px(10));
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(themeColor(cx, android.R.attr.colorBackground, Color.WHITE));
+                bg.setCornerRadius(px(8));
+                l.setBackground(bg);
+                view = l;
+                content = l;
+                break;
+            }
             case Codes.KIND_LIST_ITEM: {
-                LinearLayout l = new LinearLayout(context);
+                LinearLayout l = new LinearLayout(cx);
                 l.setOrientation(LinearLayout.HORIZONTAL);
                 l.setGravity(Gravity.CENTER_VERTICAL);
                 l.setMinimumHeight(px(48));
                 l.setPadding(px(16), 0, px(16), 0);
-                TextView t = new TextView(context);
+                TextView t = new TextView(cx);
                 t.setVisibility(View.GONE);
                 l.addView(t, new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -438,11 +530,15 @@ public final class ViewApplier {
                 Log.w(TAG, "unknown view kind " + kind + " for id " + id + ", skipped");
                 return;
         }
-        Node n = new Node(id, kind, view, content);
+        Node n = new Node(id, kind, view, content, cx);
         n.hostViews = hostViews;
         n.hostText = hostText;
         n.dialog = dialog;
-        if (kind == Codes.KIND_LIST_ITEM || kind == Codes.KIND_TAB_BAR) {
+        if (dialog != null) {
+            dialogCount++;
+        }
+        if (kind == Codes.KIND_LIST_ITEM || kind == Codes.KIND_TAB_BAR
+                || kind == Codes.KIND_TABLE_ROW) {
             n.align = 1; // Children center on the cross axis.
         }
         nodes.put(id, n);
@@ -539,6 +635,7 @@ public final class ViewApplier {
                 break;
             }
             case Codes.KIND_LIST_ITEM:
+            case Codes.KIND_TABLE_ROW:
                 n.view.setClickable(true);
                 n.view.setOnClickListener(v -> emit(id, Codes.EVENT_CLICK, 0, 0f, null));
                 applyListBackground(n);
@@ -603,6 +700,9 @@ public final class ViewApplier {
             p.content.requestLayout();
         }
         refreshDialogs(child);
+        if (c.showTarget >= 0) {
+            scheduleQuery(c); // SHOW_TARGET 0 follows the node to its new parent.
+        }
     }
 
     private void removeNode(int id) {
@@ -617,10 +717,24 @@ public final class ViewApplier {
         if (rootId == id) {
             rootId = 0;
         }
-        for (int gone : tree.remove(id)) {
+        java.util.List<Integer> goneIds = tree.remove(id);
+        Set<Integer> goneSet = new HashSet<>(goneIds);
+        for (int gone : goneIds) {
             Node g = nodes.remove(gone);
             if (g != null) {
+                if (g.dialog != null) {
+                    dialogCount--;
+                }
                 dismissDialog(g);
+            }
+        }
+        if (!queryNodes.isEmpty()) {
+            // A query ends with its node, and with its target.
+            for (Node q : new HashSet<>(queryNodes)) {
+                if (goneSet.contains(q.id) || (q.queryView != null && goneSet.contains(q.queryViewId))) {
+                    unbindQuery(q);
+                    queryNodes.remove(q);
+                }
             }
         }
     }
@@ -650,12 +764,15 @@ public final class ViewApplier {
 
     /** Shows the dialogs in the subtree that are under the root and dismisses the others. */
     private void refreshDialogs(int id) {
+        if (dialogCount == 0) {
+            return;
+        }
         Node n = nodes.get(id);
         if (n == null) {
             return;
         }
         if (n.dialog != null) {
-            if (tree.isUnder(id, rootId) && n.visible) {
+            if (tree.isUnder(id, rootId) && n.visible && n.queryOk) {
                 showDialog(n);
             } else {
                 dismissDialog(n);
@@ -696,6 +813,7 @@ public final class ViewApplier {
         HostDialog(Context context, int id) {
             super(context);
             this.id = id;
+            requestWindowFeature(Window.FEATURE_NO_TITLE);
             setCancelable(false);
         }
 
@@ -754,7 +872,10 @@ public final class ViewApplier {
 
     private void setText(Node n, String value) {
         if (n.kind == Codes.KIND_DIALOG) {
+            // The window title serves accessibility. The visible title is the host view.
             n.dialog.setTitle(value.isEmpty() ? null : value);
+            n.hostText.setText(value);
+            n.hostText.setVisibility(value.isEmpty() ? View.GONE : View.VISIBLE);
             return;
         }
         TextView t = n.kind == Codes.KIND_LIST_ITEM ? n.hostText
@@ -776,6 +897,10 @@ public final class ViewApplier {
     }
 
     private void setItems(Node n, String value) {
+        if (n.kind == Codes.KIND_TABLE_ROW) {
+            setCells(n, Items.split(value));
+            return;
+        }
         if (n.kind != Codes.KIND_DROPDOWN) {
             skipProp(n, Codes.PROP_ITEMS);
             return;
@@ -786,7 +911,7 @@ public final class ViewApplier {
         }
         n.items = items;
         n.adapterSet = true;
-        ArrayAdapter<String> a = new ArrayAdapter<>(context,
+        ArrayAdapter<String> a = new ArrayAdapter<>(n.ctx,
                 android.R.layout.simple_spinner_item, items);
         a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         ((Spinner) n.view).setAdapter(a);
@@ -804,6 +929,24 @@ public final class ViewApplier {
         if (want >= 0 && sp.getSelectedItemPosition() != want) {
             sp.setSelection(want, false);
         }
+    }
+
+    /** Rebuilds the host-owned cells of a TableRow. Rust children stay after them. */
+    private void setCells(Node n, String[] items) {
+        if (Arrays.equals(items, n.items)) {
+            return;
+        }
+        n.items = items;
+        ViewGroup row = n.content;
+        row.removeViews(0, n.hostViews);
+        for (int i = 0; i < items.length; i++) {
+            TextView cell = new TextView(n.ctx);
+            cell.setText(items[i]);
+            cell.setPadding(px(12), 0, px(12), 0);
+            row.addView(cell, i, new TableRow.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        n.hostViews = items.length;
     }
 
     private void setSrc(Node n, String value) {
@@ -875,21 +1018,22 @@ public final class ViewApplier {
         }
     }
 
-    // Theme colors, so the views follow the system dark mode.
+    // Theme lookups take the node's context. A themed node ignores the activity's theme,
+    // and the other nodes follow the system dark mode.
 
-    private int themeColor(int attr, int fallback) {
+    private int themeColor(Context c, int attr, int fallback) {
         android.util.TypedValue tv = new android.util.TypedValue();
-        if (!context.getTheme().resolveAttribute(attr, tv, true)) {
+        if (!c.getTheme().resolveAttribute(attr, tv, true)) {
             return fallback;
         }
         if (tv.resourceId != 0) {
-            return context.getColor(tv.resourceId);
+            return c.getColor(tv.resourceId);
         }
         return tv.data;
     }
 
-    private ColorStateList themeColors(int attr) {
-        TypedArray a = context.getTheme().obtainStyledAttributes(new int[] {attr});
+    private ColorStateList themeColors(Context c, int attr) {
+        TypedArray a = c.getTheme().obtainStyledAttributes(new int[] {attr});
         try {
             return a.getColorStateList(0);
         } finally {
@@ -897,8 +1041,8 @@ public final class ViewApplier {
         }
     }
 
-    private Drawable themeDrawable(int attr) {
-        TypedArray a = context.getTheme().obtainStyledAttributes(new int[] {attr});
+    private Drawable themeDrawable(Context c, int attr) {
+        TypedArray a = c.getTheme().obtainStyledAttributes(new int[] {attr});
         try {
             return a.getDrawable(0);
         } finally {
@@ -923,7 +1067,7 @@ public final class ViewApplier {
         b.setTypeface(Typeface.create(n.baseFace == null ? Typeface.DEFAULT : n.baseFace,
                 on ? Typeface.BOLD : Typeface.NORMAL));
         if (on) {
-            int accent = themeColor(android.R.attr.colorAccent, 0xFF2196F3);
+            int accent = themeColor(n.ctx, android.R.attr.colorAccent, 0xFF2196F3);
             GradientDrawable bar = new GradientDrawable();
             bar.setColor(accent);
             LayerDrawable ld = new LayerDrawable(new Drawable[] {copyOf(n.baseBg), bar});
@@ -942,26 +1086,25 @@ public final class ViewApplier {
     private void applyListBackground(Node n) {
         StateListDrawable states = new StateListDrawable();
         states.addState(new int[] {android.R.attr.state_activated}, new ColorDrawable(
-                themeColor(android.R.attr.colorControlHighlight, 0x33888888)));
+                themeColor(n.ctx, android.R.attr.colorControlHighlight, 0x33888888)));
         states.addState(new int[0], new ColorDrawable(Color.TRANSPARENT));
         Drawable ripple = n.view.isEnabled()
-                ? themeDrawable(android.R.attr.selectableItemBackground) : null;
+                ? themeDrawable(n.ctx, android.R.attr.selectableItemBackground) : null;
         n.view.setBackground(ripple == null ? states
                 : new LayerDrawable(new Drawable[] {states, ripple}));
         applyPadding(n);
     }
 
+    /** The view that shows the node. A Dialog's own view is a placeholder, so it is the content. */
+    private static View face(Node n) {
+        return n.kind == Codes.KIND_DIALOG ? (View) n.content.getParent() : n.view;
+    }
+
     private void setLabel(Node n, String value) {
-        if (value == null) {
-            n.view.setContentDescription(null);
-            if (n.view instanceof EditText) {
-                ((EditText) n.view).setHint(null);
-            }
-            return;
-        }
-        n.view.setContentDescription(value);
-        if (n.view instanceof EditText) {
-            ((EditText) n.view).setHint(value);
+        View v = face(n);
+        v.setContentDescription(value);
+        if (v instanceof EditText) {
+            ((EditText) v).setHint(value);
         }
     }
 
@@ -987,6 +1130,15 @@ public final class ViewApplier {
                 break;
             case Codes.PROP_MAX:
                 setNumber(n, prop, 100);
+                break;
+            case Codes.PROP_SHOW_TARGET:
+                clearQuery(n);
+                break;
+            case Codes.PROP_SHOW_MIN_W:
+            case Codes.PROP_SHOW_MAX_W:
+            case Codes.PROP_SHOW_MIN_H:
+            case Codes.PROP_SHOW_MAX_H:
+                setNumber(n, prop, Float.NaN);
                 break;
             case Codes.PROP_ROLE:
             case Codes.PROP_SELECTED_INDEX:
@@ -1079,23 +1231,38 @@ public final class ViewApplier {
                 applyPadding(n);
                 break;
             case Codes.PROP_VISIBLE: {
-                if (n.kind == Codes.KIND_DIALOG) {
-                    if (n.visible != on) {
-                        n.visible = on;
-                        refreshDialogs(n.id);
-                    }
-                    break;
-                }
-                int want = on ? View.VISIBLE : View.GONE;
-                if (n.view.getVisibility() != want) {
-                    n.view.setVisibility(want);
-                }
+                n.visible = on;
+                applyShown(n);
                 break;
             }
+            case Codes.PROP_SHOW_TARGET:
+                n.showTarget = (int) v;
+                queryNodes.add(n);
+                scheduleQuery(n);
+                break;
+            case Codes.PROP_SHOW_MIN_W:
+                n.showMinW = v;
+                scheduleQuery(n);
+                break;
+            case Codes.PROP_SHOW_MAX_W:
+                n.showMaxW = v;
+                scheduleQuery(n);
+                break;
+            case Codes.PROP_SHOW_MIN_H:
+                n.showMinH = v;
+                scheduleQuery(n);
+                break;
+            case Codes.PROP_SHOW_MAX_H:
+                n.showMaxH = v;
+                scheduleQuery(n);
+                break;
             case Codes.PROP_ENABLED:
-                if (n.view.isEnabled() != on) {
-                    n.view.setEnabled(on);
-                    if (n.kind == Codes.KIND_LIST_ITEM) {
+                if (face(n).isEnabled() != on) {
+                    face(n).setEnabled(on);
+                    if (n.kind == Codes.KIND_DIALOG) {
+                        n.content.setEnabled(on);
+                    }
+                    if (n.kind == Codes.KIND_LIST_ITEM || n.kind == Codes.KIND_TABLE_ROW) {
                         applyListBackground(n);
                     }
                 }
@@ -1215,7 +1382,7 @@ public final class ViewApplier {
             case Codes.PROP_SELECTED:
                 if (n.kind == Codes.KIND_TAB) {
                     applyTabSelected(n, on);
-                } else if (n.kind == Codes.KIND_LIST_ITEM) {
+                } else if (n.kind == Codes.KIND_LIST_ITEM || n.kind == Codes.KIND_TABLE_ROW) {
                     if (n.view.isActivated() != on) {
                         n.view.setActivated(on);
                     }
@@ -1357,8 +1524,12 @@ public final class ViewApplier {
         n.ghost = ghost;
         Button b = (Button) n.view;
         if (ghost) {
+            Button ghostTemplate = n.ctx == context ? this.ghostTemplate : null;
             if (ghostTemplate == null) {
-                ghostTemplate = new Button(context, null, android.R.attr.borderlessButtonStyle);
+                ghostTemplate = new Button(n.ctx, null, android.R.attr.borderlessButtonStyle);
+                if (n.ctx == context) {
+                    this.ghostTemplate = ghostTemplate;
+                }
             }
             Drawable bg = ghostTemplate.getBackground();
             Drawable.ConstantState cs = bg == null ? null : bg.getConstantState();
@@ -1377,13 +1548,101 @@ public final class ViewApplier {
             b.setBackground(n.solidBg);
             b.setTextColor(n.solidText);
             b.setStateListAnimator(n.solidAnim);
-            Button plain = new Button(context);
+            Button plain = new Button(n.ctx);
             n.defPad[0] = plain.getPaddingLeft();
             n.defPad[1] = plain.getPaddingTop();
             n.defPad[2] = plain.getPaddingRight();
             n.defPad[3] = plain.getPaddingBottom();
         }
         applyPadding(n);
+    }
+
+    // Size queries.
+
+    /** The view whose content box a query measures. A Dialog measures its content. */
+    private static View queryTargetView(Node t) {
+        return t.kind == Codes.KIND_DIALOG ? t.content : t.view;
+    }
+
+    /** Shows or hides the node from VISIBLE and its size query. */
+    private void applyShown(Node n) {
+        if (n.kind == Codes.KIND_DIALOG) {
+            refreshDialogs(n.id);
+            return;
+        }
+        int want = n.visible && n.queryOk ? View.VISIBLE : View.GONE;
+        if (n.view.getVisibility() != want) {
+            n.view.setVisibility(want);
+        }
+    }
+
+    /** Turns the query off. The node follows VISIBLE alone again. */
+    private void clearQuery(Node n) {
+        n.showTarget = -1;
+        unbindQuery(n);
+        queryNodes.remove(n);
+        if (!n.queryOk) {
+            n.queryOk = true;
+            applyShown(n);
+        }
+    }
+
+    private void unbindQuery(Node n) {
+        if (n.queryView != null && n.queryListener != null) {
+            n.queryView.removeOnLayoutChangeListener(n.queryListener);
+        }
+        n.queryView = null;
+        n.queryViewId = 0;
+    }
+
+    /** Puts the layout listener on the current target. Returns the target view or null. */
+    private View bindQuery(final Node n) {
+        int targetId = n.showTarget == 0 ? tree.parentOf(n.id) : n.showTarget;
+        Node t = targetId <= 0 ? null : nodes.get(targetId);
+        View tv = t == null ? null : queryTargetView(t);
+        if (tv != n.queryView) {
+            unbindQuery(n);
+            if (tv != null) {
+                if (n.queryListener == null) {
+                    n.queryListener = (v, l, tp, r, b, ol, ot, or, ob) -> scheduleQuery(n);
+                }
+                tv.addOnLayoutChangeListener(n.queryListener);
+                queryNodes.add(n);
+                n.queryView = tv;
+                n.queryViewId = targetId;
+            }
+        }
+        return tv;
+    }
+
+    /** Checks the query once after the current pass, never inside a layout pass. */
+    private void scheduleQuery(final Node n) {
+        if (n.showTarget < 0 || n.queryPosted) {
+            return;
+        }
+        n.queryPosted = true;
+        n.view.post(() -> {
+            n.queryPosted = false;
+            if (nodes.get(n.id) == n && n.showTarget >= 0) {
+                evaluateQuery(n);
+            }
+        });
+    }
+
+    private void evaluateQuery(Node n) {
+        View tv = bindQuery(n);
+        boolean ok = true;
+        if (tv != null) {
+            boolean laid = tv.isLaidOut();
+            float w = (tv.getWidth() - tv.getPaddingLeft() - tv.getPaddingRight()) / density;
+            float h = (tv.getHeight() - tv.getPaddingTop() - tv.getPaddingBottom()) / density;
+            ok = SizeQuery.matches(laid, w, h,
+                    n.showMinW, n.showMaxW, n.showMinH, n.showMaxH);
+        }
+        if (ok != n.queryOk) {
+            n.queryOk = ok;
+            applyShown(n);
+        }
     }
 
     // Containers and layout.
@@ -1504,7 +1763,9 @@ public final class ViewApplier {
         boolean stretch = align == 3;
         int w = size(n, true, horizontal, !horizontal && stretch);
         int h = size(n, false, !horizontal, horizontal && stretch);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
+        LinearLayout.LayoutParams lp = ll instanceof TableLayout ? new TableLayout.LayoutParams(w, h)
+                : ll instanceof TableRow ? new TableRow.LayoutParams(w, h)
+                : new LinearLayout.LayoutParams(w, h);
         lp.weight = n.grow > 0 ? n.grow : 0;
         if (align == 1) {
             lp.gravity = horizontal ? Gravity.CENTER_VERTICAL : Gravity.CENTER_HORIZONTAL;

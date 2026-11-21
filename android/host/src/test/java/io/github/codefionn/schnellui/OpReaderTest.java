@@ -39,6 +39,10 @@ public class OpReaderTest {
             ops.add("insert " + parent + " " + child + " " + index);
         }
 
+        public void createThemed(int id, int kind, int theme) {
+            ops.add("themed " + id + " " + kind + " " + theme);
+        }
+
         public void remove(int id) {
             ops.add("remove " + id);
         }
@@ -79,14 +83,29 @@ public class OpReaderTest {
     @Test
     public void createWithEveryKind() throws Exception {
         Buf b = Buf.withHeader();
-        for (int kind = 1; kind <= 24; kind++) {
+        for (int kind = 1; kind <= 27; kind++) {
             b.u8(0x01).u32(kind + 100).u8(kind);
         }
         List<String> ops = decode(b.bytes());
-        assertEquals(24, ops.size());
+        assertEquals(27, ops.size());
         assertEquals("create 101 1", ops.get(0));
         assertEquals("create 110 10", ops.get(9));
         assertEquals("create 124 24", ops.get(23));
+        assertEquals("create 127 27", ops.get(26));
+    }
+
+    @Test
+    public void createThemed() throws Exception {
+        byte[] b = Buf.withHeader().u8(0x09).u32(7).u8(25).u8(1)
+                .u8(0x09).u32(8).u8(27).u8(2).bytes();
+        assertEquals(Arrays.asList("themed 7 25 1", "themed 8 27 2"), decode(b));
+    }
+
+    @Test
+    public void truncatedCreateThemed() {
+        assertFails(new Buf().u8(0x53).u8(1).u8(0x09).u32(1).u8(25).bytes(), "truncated");
+        assertFails(new Buf().u8(0x53).u8(1).u8(0x09).u32(1).bytes(), "truncated");
+        assertFails(new Buf().u8(0x53).u8(1).u8(0x09).bytes(), "truncated");
     }
 
     @Test
@@ -215,7 +234,7 @@ public class OpReaderTest {
     @Test
     public void unknownOpIsError() {
         assertFails(Buf.withHeader().u8(0x00).bytes(), "unknown op");
-        assertFails(Buf.withHeader().u8(0x09).u32(1).bytes(), "unknown op");
+        assertFails(Buf.withHeader().u8(0x0a).u32(1).bytes(), "unknown op");
         assertFails(Buf.withHeader().u8(0xff).bytes(), "unknown op");
     }
 
