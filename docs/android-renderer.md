@@ -170,6 +170,7 @@ static void requestUpdate(long app);   // called by Rust, from any thread
 - `nativeDispatch` and `nativeResize` return the diff, or `null` when nothing changed.
 - `s` is `null` for events without a string payload.
 - `nativeUpdate` renders again and returns the diff, or `null`.
+- The signal runtime has no hook that fires on a set. A Rust thread compares the runtime's global version every 32 ms while the app is mounted.
 - Rust calls `requestUpdate` when a signal changes outside `nativeDispatch`, `nativeResize` and `nativeUpdate`, for example from a timer thread. The host posts one main-thread task per app, however many requests arrive before it runs. The task calls `nativeUpdate` and applies the result. A request for an app that is unmounted, or that has no activity attached, is dropped. The next `nativeRender` shows the current state anyway.
 
 An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdylib`. The host loads the library named by the `schnellui.lib` meta-data entry of the activity.
@@ -204,7 +205,7 @@ An app exports these symbols with `schnellui::android_app!(|| view)` from a `cdy
 - List: a Column with ROLE list and A11Y_LABEL from `label`. ListItem: TEXT from `label`, SELECTED, children as content, CLICK runs `on_click`.
 
 - Table: Table with A11Y_LABEL from `label`, children as rows. TableRow: ITEMS from `items`, SELECTED, children as content, CLICK runs `on_click`, A11Y_LABEL from `label`.
-- RichText: a Column of a 20 sp Text of `label` with a heading role when the label is not empty, a word-wrapping Text of `value`, then the children.
+- RichText: a Column of a 20 sp Text of `label` with the `ColumnHeader` role when the label is not empty, which the host treats as a heading because `Role` has no heading, a word-wrapping Text of `value`, then the children.
 - Icon: a 20 sp Text of `detail`, or of U+25C6 when the detail is empty, with an image role and A11Y_LABEL from `label`.
 - DragHandle: a ghost Button with TEXT U+22EE U+22EE and A11Y_LABEL from `label`. CLICK runs `on_click`. Dragging is not supported.
 - Svg: an Image whose SRC is a PNG `data:` URL. Rust rasterises `markup`, or `value` when there is no markup, at `width` by `height` times the display density, and caches the result by source and size. A11Y_LABEL from `label`.
