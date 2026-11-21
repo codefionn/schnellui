@@ -1,0 +1,33 @@
+Create { id: 1, kind: 2 }
+SetF32 { id: 1, prop: 22, value: 8.0 }
+Create { id: 2, kind: 5 }
+SetStr { id: 2, prop: 30, value: "Title" }
+SetF32 { id: 2, prop: 31, value: 20.0 }
+Insert { parent: 1, child: 2, index: 0 }
+Create { id: 3, kind: 6 }
+SetStr { id: 3, prop: 30, value: "Go" }
+Insert { parent: 1, child: 3, index: 1 }
+Create { id: 4, kind: 7 }
+SetStr { id: 4, prop: 36, value: "Agree" }
+SetI32 { id: 4, prop: 40, value: 1 }
+Insert { parent: 1, child: 4, index: 2 }
+Create { id: 5, kind: 8 }
+SetF32 { id: 5, prop: 41, value: 30.0 }
+SetF32 { id: 5, prop: 42, value: 0.0 }
+SetF32 { id: 5, prop: 43, value: 100.0 }
+SetF32 { id: 5, prop: 44, value: 5.0 }
+Insert { parent: 1, child: 5, index: 3 }
+Create { id: 6, kind: 9 }
+SetStr { id: 6, prop: 30, value: "hi" }
+SetStr { id: 6, prop: 36, value: "Name" }
+Insert { parent: 1, child: 6, index: 4 }
+Create { id: 7, kind: 3 }
+SetF32 { id: 7, prop: 10, value: 4.0 }
+SetF32 { id: 7, prop: 11, value: 4.0 }
+SetF32 { id: 7, prop: 12, value: 4.0 }
+SetF32 { id: 7, prop: 13, value: 4.0 }
+Create { id: 8, kind: 10 }
+SetF32 { id: 8, prop: 8, value: 1.0 }
+Insert { parent: 7, child: 8, index: 0 }
+Insert { parent: 1, child: 7, index: 5 }
+SetRoot { id: 1 }

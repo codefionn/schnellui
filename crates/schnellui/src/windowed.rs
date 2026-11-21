@@ -12,10 +12,30 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
+#[cfg(not(target_os = "android"))]
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorIcon as WinitCursorIcon, Theme as WinitTheme, Window, WindowId};
 
 use serde_json::{json, Value};
+
+/// Android's winit has no modifier supplement. Soft keyboards report the same
+/// key and text with or without modifiers, so the plain fields stand in.
+#[cfg(target_os = "android")]
+trait KeyEventExtModifierSupplement {
+    fn key_without_modifiers(&self) -> Key;
+    fn text_with_all_modifiers(&self) -> Option<&str>;
+}
+
+#[cfg(target_os = "android")]
+impl KeyEventExtModifierSupplement for KeyEvent {
+    fn key_without_modifiers(&self) -> Key {
+        self.logical_key.clone()
+    }
+
+    fn text_with_all_modifiers(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+}
 
 use crate::platform::{watch_preferences, PreferenceChange, SystemClipboard};
 use schnellui::scene::{Point, Size, WidgetId as SceneWidgetId, WidgetKind};

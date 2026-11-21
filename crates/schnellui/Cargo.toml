@@ -68,6 +68,10 @@ tokio = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 
+# The JNI glue of the Android renderer. Needed only on Android with render-android.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true, optional = true }
+
 [dev-dependencies]
 # Closure-scoped allocation counter for the zero-alloc budget tests (§4.1).
 # Only compiled for tests; installs a counting global allocator in the test binary.
@@ -92,6 +96,11 @@ render-html = [
     "dep:wasm-bindgen",
     "dep:js-sys",
 ]
+# Native Android renderer (`schnellui::render_android`). The op stream and the diff
+# build everywhere; the JNI glue and its `jni` dependency are Android-only.
+# winit does not build for Android without one activity backend, so the feature
+# picks the native-activity one.
+render-android = ["dep:jni", "winit/android-native-activity"]
 # Server-side rendering entry points of the HTML renderer.
 ssr = ["render-html"]
 # Headless host and retained-state checks for property-based fuzzing

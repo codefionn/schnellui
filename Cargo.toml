@@ -32,6 +32,7 @@ members = [
     "examples/html_native_router_ssr",
     "examples/secure_todo_ssr",
     "examples/servo",
+    "examples/android_native",
 ]
 
 [workspace.package]
@@ -124,6 +125,8 @@ chromiumoxide = "0.9"
 tokio = { version = "1.44.0", features = ["rt-multi-thread", "macros"] }
 futures = "0.3.30"
 wasm-bindgen = "0.2.127"
+# JNI glue of the Android renderer (Android targets only).
+jni = "0.22.4"
 js-sys = "0.3.104"
 
 # Debug info made up most of every binary and test executable. Workspace crates

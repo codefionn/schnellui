@@ -1,0 +1,15 @@
+[package]
+name = "android_native"
+description = "schnellui native Android views: a gallery of the base component set"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "android_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+schnellui = { workspace = true, features = ["render-android"] }
