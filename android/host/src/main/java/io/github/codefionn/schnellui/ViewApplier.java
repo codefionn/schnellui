@@ -302,8 +302,10 @@ public final class ViewApplier {
                     @Override
                     public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
                         if (fromUser) {
-                            emit(id, Codes.EVENT_CHANGE, 0,
-                                    SliderMath.valueFor(progress, n.min, n.max, n.step), null);
+                            // Rust records the reported value, so keep ours in step.
+                            float v = SliderMath.valueFor(progress, n.min, n.max, n.step);
+                            n.value = v;
+                            emit(id, Codes.EVENT_CHANGE, 0, v, null);
                         }
                     }
 
@@ -751,6 +753,9 @@ public final class ViewApplier {
 
     private void applyRole(final Node n) {
         if (n.role < 0) {
+            if (Build.VERSION.SDK_INT >= 28) {
+                n.view.setAccessibilityHeading(false);
+            }
             n.view.setAccessibilityDelegate(null);
             return;
         }
