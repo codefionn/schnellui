@@ -99,7 +99,8 @@ render-html = [
 # Native Android renderer (`schnellui::render_android`). The op stream and the diff
 # build everywhere; the JNI glue and its `jni` dependency are Android-only.
 # winit does not build for Android without one activity backend, so the feature
-# picks the native-activity one.
+# picks the native-activity one. Its glue needs an `android_main`, which
+# `android_app!` defines as an empty function.
 render-android = ["dep:jni", "winit/android-native-activity"]
 # Server-side rendering entry points of the HTML renderer.
 ssr = ["render-html"]

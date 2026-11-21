@@ -12,6 +12,11 @@ pub use jni::EnvUnowned;
 
 use super::{AndroidRenderer, Event, Viewport};
 
+/// The NativeActivity entry point type. `render-android` turns on winit's
+/// native-activity backend, whose glue calls `android_main`. Bionic resolves
+/// every symbol at load, so `android_app!` defines an empty one.
+pub use winit::platform::android::activity::AndroidApp;
+
 /// Builds the app and returns its handle.
 pub fn mount<'a>(
     mut env: EnvUnowned<'a>,

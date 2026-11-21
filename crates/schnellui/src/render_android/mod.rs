@@ -52,6 +52,12 @@ macro_rules! android_app {
 #[macro_export]
 macro_rules! android_app {
     ($view:expr) => {
+        /// Satisfies winit's NativeActivity glue. The Java host never starts a
+        /// NativeActivity, so this does nothing. Without it the library fails
+        /// to load with `cannot locate symbol "android_main"`.
+        #[unsafe(no_mangle)]
+        fn android_main(_app: $crate::render_android::glue::AndroidApp) {}
+
         fn __schnellui_android_mount(
             viewport: $crate::render_android::Viewport,
         ) -> $crate::render_android::AndroidRenderer {
