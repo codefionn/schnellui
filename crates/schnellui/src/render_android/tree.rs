@@ -53,6 +53,18 @@ pub(crate) struct Handlers {
     pub toggle: Option<ToggleHandler>,
     pub change: Option<ChangeHandler>,
     pub input: Option<InputHandler>,
+    /// Dropdown selection. Gets the value of the chosen option.
+    pub select: Option<InputHandler>,
+    /// Dialog dismissal.
+    pub dismiss: Option<ClickHandler>,
+}
+
+/// A `DropdownOption` component. It is no view: the Dropdown above it folds it
+/// into its ITEMS, and any other parent drops it.
+pub(crate) struct OptionMarker {
+    pub label: String,
+    pub value: String,
+    pub selected: bool,
 }
 
 /// One node of the rendered tree. This is the [`AndroidTemplate`] node type.
@@ -66,6 +78,10 @@ pub struct AndroidNode {
     pub(crate) props: BTreeMap<u8, Value>,
     pub(crate) children: Vec<AndroidNode>,
     pub(crate) handlers: Handlers,
+    /// Set on a `DropdownOption` node.
+    pub(crate) option: Option<OptionMarker>,
+    /// The values of a Dropdown's options, in ITEMS order.
+    pub(crate) option_values: Vec<String>,
 }
 
 impl AndroidNode {
@@ -77,6 +93,8 @@ impl AndroidNode {
             props: BTreeMap::new(),
             children: Vec::new(),
             handlers: Handlers::default(),
+            option: None,
+            option_values: Vec::new(),
         }
     }
 
@@ -107,6 +125,14 @@ impl AndroidNode {
         self.f32(prop::PAD_TOP, top);
         self.f32(prop::PAD_RIGHT, right);
         self.f32(prop::PAD_BOTTOM, bottom);
+    }
+
+    /// Drops option markers that no Dropdown consumed.
+    pub(crate) fn prune_options(&mut self) {
+        self.children.retain(|c| c.option.is_none());
+        for child in &mut self.children {
+            child.prune_options();
+        }
     }
 
     /// The node with this id, searching the subtree.

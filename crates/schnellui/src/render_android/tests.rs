@@ -4,12 +4,14 @@ use std::rc::Rc;
 
 use schnellui::signal::create_signal;
 use schnellui::template::{
-    column, em, row, scroll, stack, Button, Checkbox, ComponentKind, ComponentProps, Flex,
-    FlexChild, Pad, ResponsiveQuery, Slider, Spacer, Template, TemplateRenderer, Text, TextInput,
-    Widget,
+    badge, column, dialog, divider, dropdown, dropdown_option, em, image, link, list, list_item,
+    loading_spinner, progress_bar, radio, row, scroll, stack, switch, tab, tab_bar, text_area,
+    Button, Checkbox, ComponentKind, ComponentProps, Flex, FlexChild, Pad, ResponsiveQuery, Role,
+    Slider, Spacer, Template, TemplateRenderer, Text, TextInput, Widget,
 };
 
 use super::ops::{event, kind, prop};
+use super::tree::Value;
 use super::*;
 
 fn vp() -> Viewport {
@@ -182,7 +184,8 @@ impl Harness {
             Event::Toggle(on) => Some((prop::CHECKED, Val::I(*on as i32))),
             Event::Change(v) => Some((prop::VALUE, Val::F(v.to_bits()))),
             Event::Input(s) => Some((prop::TEXT, Val::S(s.clone()))),
-            Event::Click => None,
+            Event::Select(i) => Some((prop::SELECTED_INDEX, Val::I(*i))),
+            Event::Click | Event::Dismiss => None,
         };
         if let Some((p, v)) = shown {
             self.host.views.get_mut(&id).unwrap().1.insert(p, v);
@@ -318,6 +321,9 @@ fn events_decode_from_raw_codes() {
         Some(Event::Input("a".into()))
     );
     assert_eq!(Event::from_raw(4, 0, 0.0, None), None);
+    assert_eq!(Event::from_raw(5, 2, 0.0, None), Some(Event::Select(2)));
+    assert_eq!(Event::from_raw(6, 0, 0.0, None), Some(Event::Dismiss));
+    assert_eq!(Event::from_raw(7, 0, 0.0, None), None);
     assert_eq!(Event::from_raw(99, 0, 0.0, None), None);
     assert_eq!(Event::from_raw(-1, 0, 0.0, None), None);
 }
@@ -758,6 +764,8 @@ fn events_without_a_handler_are_ignored() {
             Event::Toggle(true),
             Event::Change(1.0),
             Event::Input("x".into()),
+            Event::Select(0),
+            Event::Dismiss,
         ] {
             assert_eq!(h.app.dispatch(id, e), None);
         }
@@ -974,7 +982,7 @@ fn every_component_kind_renders() {
 #[test]
 fn fallback_is_a_column_led_by_the_label() {
     let mut app = AndroidRenderer::new(vp(), || {
-        Widget::new(ComponentKind::Dialog)
+        Widget::new(ComponentKind::DockArea)
             .label("Hello")
             .child(Text::new("body"))
     });
@@ -1009,6 +1017,22 @@ fn base_component_kinds_map_onto_views() {
         (ComponentKind::Slider, kind::SLIDER),
         (ComponentKind::TextInput, kind::TEXT_INPUT),
         (ComponentKind::Spacer, kind::SPACER),
+        (ComponentKind::Switch, kind::SWITCH),
+        (ComponentKind::Radio, kind::RADIO),
+        (ComponentKind::Dropdown, kind::DROPDOWN),
+        (ComponentKind::ProgressBar, kind::PROGRESS),
+        (ComponentKind::LoadingSpinner, kind::LOADING),
+        (ComponentKind::TextArea, kind::TEXT_AREA),
+        (ComponentKind::Image, kind::IMAGE),
+        (ComponentKind::Divider, kind::DIVIDER),
+        (ComponentKind::Badge, kind::BADGE),
+        (ComponentKind::Link, kind::LINK),
+        (ComponentKind::Dialog, kind::DIALOG),
+        (ComponentKind::TabBar, kind::TAB_BAR),
+        (ComponentKind::Tab, kind::TAB),
+        (ComponentKind::List, kind::COLUMN),
+        (ComponentKind::ListItem, kind::LIST_ITEM),
+        (ComponentKind::DropdownOption, kind::SPACER),
     ];
     for (component, expected) in cases {
         let mut template = AndroidTemplate::new(vp());
@@ -1025,4 +1049,502 @@ fn rebuild_keeps_ids() {
     let first = ops_of(&app.render());
     let second = ops_of(&app.render());
     assert_eq!(first, second);
+}
+
+// ---- native widget components ----
+
+fn render_widget(widget: impl Template) -> AndroidNode {
+    let mut template = AndroidTemplate::new(vp());
+    widget.render(&mut template)
+}
+
+#[test]
+fn code_values_match_the_doc() {
+    let kinds = [
+        kind::SWITCH,
+        kind::RADIO,
+        kind::DROPDOWN,
+        kind::PROGRESS,
+        kind::LOADING,
+        kind::TEXT_AREA,
+        kind::IMAGE,
+        kind::DIVIDER,
+        kind::BADGE,
+        kind::LINK,
+        kind::DIALOG,
+        kind::TAB_BAR,
+        kind::TAB,
+        kind::LIST_ITEM,
+    ];
+    assert_eq!(kinds.to_vec(), (11u8..=24).collect::<Vec<_>>());
+    assert_eq!(
+        [
+            prop::ITEMS,
+            prop::SELECTED_INDEX,
+            prop::SRC,
+            prop::HREF,
+            prop::SELECTED
+        ],
+        [50, 52, 53, 54, 55]
+    );
+    assert_eq!([event::SELECT, event::DISMISS], [5, 6]);
+}
+
+#[test]
+fn new_kinds_carry_size_and_disabled() {
+    let n = render_widget(image().value("data:image/png;base64,AA==").size(48.0, 48.0));
+    assert_eq!(n.props.get(&prop::WIDTH), Some(&Value::F32(48.0)));
+    assert_eq!(n.props.get(&prop::HEIGHT), Some(&Value::F32(48.0)));
+
+    let n = render_widget(progress_bar().label("Load").size(120.0, 8.0));
+    let inner = n
+        .children
+        .iter()
+        .find(|c| c.kind == kind::PROGRESS)
+        .expect("inner progress bar");
+    assert_eq!(inner.props.get(&prop::WIDTH), Some(&Value::F32(120.0)));
+    assert_eq!(inner.props.get(&prop::HEIGHT), Some(&Value::F32(8.0)));
+    assert_eq!(n.props.get(&prop::WIDTH), None);
+
+    let disabled = [
+        switch().disabled(true),
+        radio().disabled(true),
+        loading_spinner().disabled(true),
+        text_area().disabled(true),
+        image().disabled(true),
+        divider().disabled(true),
+        badge().disabled(true),
+        link().disabled(true),
+        dialog().disabled(true),
+        tab_bar().disabled(true),
+        tab().disabled(true),
+        list().disabled(true),
+        list_item().disabled(true),
+    ];
+    for widget in disabled {
+        let n = render_widget(widget);
+        assert_eq!(
+            n.props.get(&prop::ENABLED),
+            Some(&Value::I32(0)),
+            "{}",
+            n.kind
+        );
+    }
+    for widget in [
+        dropdown().label("D").disabled(true),
+        progress_bar().label("P").disabled(true),
+    ] {
+        let n = render_widget(widget);
+        let inner = n.children.last().expect("inner widget");
+        assert_eq!(
+            inner.props.get(&prop::ENABLED),
+            Some(&Value::I32(0)),
+            "{}",
+            inner.kind
+        );
+    }
+}
+
+#[test]
+fn simple_widgets_emit_their_props() {
+    let n = render_widget(switch().label("Wifi").checked(true));
+    assert_eq!(n.kind, kind::SWITCH);
+    assert_eq!(n.props.get(&prop::TEXT), Some(&Value::Str("Wifi".into())));
+    assert_eq!(n.props.get(&prop::CHECKED), Some(&Value::I32(1)));
+
+    let n = render_widget(radio().label("A").selected(true));
+    assert_eq!(n.kind, kind::RADIO);
+    assert_eq!(n.props.get(&prop::CHECKED), Some(&Value::I32(1)));
+    let n = render_widget(radio().label("A").checked(true).disabled(true));
+    assert_eq!(n.props.get(&prop::CHECKED), Some(&Value::I32(1)));
+    assert_eq!(n.props.get(&prop::ENABLED), Some(&Value::I32(0)));
+    let n = render_widget(radio());
+    assert_eq!(n.props.get(&prop::CHECKED), Some(&Value::I32(0)));
+
+    let n = render_widget(loading_spinner().label("Busy"));
+    assert_eq!(n.kind, kind::LOADING);
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Busy".into()))
+    );
+
+    let n = render_widget(text_area().value("abc").label("Notes"));
+    assert_eq!(n.kind, kind::TEXT_AREA);
+    assert_eq!(n.props.get(&prop::TEXT), Some(&Value::Str("abc".into())));
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Notes".into()))
+    );
+
+    let n = render_widget(image().value("data:image/png;base64,AA==").label("Pic"));
+    assert_eq!(n.kind, kind::IMAGE);
+    assert_eq!(
+        n.props.get(&prop::SRC),
+        Some(&Value::Str("data:image/png;base64,AA==".into()))
+    );
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Pic".into()))
+    );
+
+    assert_eq!(render_widget(divider()).kind, kind::DIVIDER);
+
+    let n = render_widget(badge().label("7"));
+    assert_eq!(n.kind, kind::BADGE);
+    assert_eq!(n.props.get(&prop::TEXT), Some(&Value::Str("7".into())));
+
+    let n = render_widget(link().label("Docs").value("https://example.org"));
+    assert_eq!(n.kind, kind::LINK);
+    assert_eq!(n.props.get(&prop::TEXT), Some(&Value::Str("Docs".into())));
+    assert_eq!(
+        n.props.get(&prop::HREF),
+        Some(&Value::Str("https://example.org".into()))
+    );
+
+    let n = render_widget(tab().label("One").selected(true));
+    assert_eq!(n.kind, kind::TAB);
+    assert_eq!(n.props.get(&prop::SELECTED), Some(&Value::I32(1)));
+    let n = render_widget(list_item().label("Row").child(Text::new("x")));
+    assert_eq!(n.kind, kind::LIST_ITEM);
+    assert_eq!(n.props.get(&prop::SELECTED), Some(&Value::I32(0)));
+    assert_eq!(n.children.len(), 1);
+
+    let n = render_widget(tab_bar().label("Tabs").child(tab().label("a")));
+    assert_eq!(n.kind, kind::TAB_BAR);
+    assert_eq!(n.children.len(), 1);
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Tabs".into()))
+    );
+
+    let n = render_widget(list().label("Things").child(list_item().label("a")));
+    assert_eq!(n.kind, kind::COLUMN);
+    assert_eq!(
+        n.props.get(&prop::ROLE),
+        Some(&Value::I32(Role::List.as_u16() as i32))
+    );
+    assert_eq!(
+        n.props.get(&prop::A11Y_LABEL),
+        Some(&Value::Str("Things".into()))
+    );
+    assert_eq!(n.children.len(), 1);
+
+    let n = render_widget(dialog().label("Title").child(Text::new("body")));
+    assert_eq!(n.kind, kind::DIALOG);
+    assert_eq!(n.props.get(&prop::TEXT), Some(&Value::Str("Title".into())));
+    assert_eq!(n.children.len(), 1);
+}
+
+#[test]
+fn progress_bar_maps_number_and_range() {
+    let n = render_widget(progress_bar().number(30.0).range(0.0, 50.0));
+    assert_eq!(n.kind, kind::PROGRESS);
+    assert_eq!(n.props.get(&prop::VALUE), Some(&Value::F32(30.0)));
+    assert_eq!(n.props.get(&prop::MIN), Some(&Value::F32(0.0)));
+    assert_eq!(n.props.get(&prop::MAX), Some(&Value::F32(50.0)));
+    assert!(!n.props.contains_key(&prop::A11Y_LABEL));
+}
+
+#[test]
+fn labelled_dropdown_and_progress_get_a_label_wrapper_with_the_key() {
+    for w in [
+        render_widget(dropdown().label("Pick").item("a").key("k")),
+        render_widget(progress_bar().label("Pick").key("k")),
+    ] {
+        assert_eq!(w.kind, kind::COLUMN);
+        assert_eq!(w.key.as_deref(), Some("k"));
+        assert_eq!(w.children.len(), 2);
+        assert_eq!(w.children[0].kind, kind::TEXT);
+        assert_eq!(
+            w.children[0].props.get(&prop::TEXT),
+            Some(&Value::Str("Pick".into()))
+        );
+        assert_eq!(
+            w.children[0].props.get(&prop::TEXT_SIZE),
+            Some(&Value::F32(14.0))
+        );
+        assert_eq!(w.children[1].key, None);
+        assert_eq!(
+            w.children[1].props.get(&prop::A11Y_LABEL),
+            Some(&Value::Str("Pick".into()))
+        );
+    }
+    // No label, no wrapper.
+    let n = render_widget(dropdown().item("a"));
+    assert_eq!(n.kind, kind::DROPDOWN);
+}
+
+#[test]
+fn dropdown_folds_items_and_option_children() {
+    let n = render_widget(
+        dropdown()
+            .item("one")
+            .item("two")
+            .child(dropdown_option().label("Three").value("3"))
+            .child(dropdown_option().label("Four"))
+            .value("3"),
+    );
+    assert_eq!(n.kind, kind::DROPDOWN);
+    assert!(n.children.is_empty());
+    assert_eq!(
+        n.props.get(&prop::ITEMS),
+        Some(&Value::Str("one\u{1f}two\u{1f}Three\u{1f}Four".into()))
+    );
+    assert_eq!(n.props.get(&prop::SELECTED_INDEX), Some(&Value::I32(2)));
+    assert_eq!(n.option_values, ["one", "two", "3", "Four"]);
+
+    // A selected option wins over the value.
+    let n = render_widget(
+        dropdown()
+            .item("a")
+            .child(dropdown_option().label("B").selected(true))
+            .value("a"),
+    );
+    assert_eq!(n.props.get(&prop::SELECTED_INDEX), Some(&Value::I32(1)));
+
+    // An item is its own value.
+    let n = render_widget(dropdown().item("a").item("b").value("b"));
+    assert_eq!(n.props.get(&prop::SELECTED_INDEX), Some(&Value::I32(1)));
+
+    // No match, no selection. No options, no ITEMS.
+    let n = render_widget(dropdown().item("a").value("zzz"));
+    assert_eq!(n.props.get(&prop::SELECTED_INDEX), None);
+    let n = render_widget(dropdown());
+    assert_eq!(n.props.get(&prop::ITEMS), None);
+}
+
+#[test]
+fn stray_option_markers_are_dropped() {
+    let mut h = Harness::new(|| {
+        column()
+            .child(Text::new("a"))
+            .child(dropdown_option().label("x"))
+    });
+    let root = h.host.root.unwrap();
+    assert_eq!(h.host.views[&root].2.len(), 1);
+    assert!(h.refresh().is_empty());
+}
+
+#[test]
+fn select_calls_on_input_with_the_value() {
+    let picked = create_signal(String::new());
+    let mut h = Harness::new(move || {
+        column()
+            .child(
+                dropdown()
+                    .child(dropdown_option().label("Red").value("r"))
+                    .child(dropdown_option().label("Green").value("g"))
+                    .value(picked.get())
+                    .on_input(move |v| picked.set(v.to_string())),
+            )
+            .child(Text::dynamic(move || picked.get()))
+    });
+    let dd = h.host.ids_of_kind(kind::DROPDOWN)[0];
+    let ops = h.send(dd, Event::Select(1));
+    assert_eq!(picked.get(), "g");
+    // The host already shows index 1, and the render agrees: only the text moves.
+    assert!(ops.iter().all(|op| !matches!(
+        op,
+        Op::SetI32 { prop: p, .. } | Op::Clear { prop: p, .. } if *p == prop::SELECTED_INDEX
+    )));
+    assert_eq!(h.app.dispatch(dd, Event::Select(5)), None);
+    assert_eq!(h.app.dispatch(dd, Event::Select(-1)), None);
+}
+
+#[test]
+fn rejected_select_restores_the_selection() {
+    let mut h =
+        Harness::new(|| column().child(dropdown().item("a").item("b").value("a").on_input(|_| {})));
+    let dd = h.host.ids_of_kind(kind::DROPDOWN)[0];
+    assert_eq!(
+        h.send(dd, Event::Select(1)),
+        vec![Op::SetI32 {
+            id: dd,
+            prop: prop::SELECTED_INDEX,
+            value: 0
+        }]
+    );
+}
+
+#[test]
+fn switch_toggle_and_text_area_input_run_handlers() {
+    let on = create_signal(false);
+    let text = create_signal(String::new());
+    let mut h = Harness::new(move || {
+        column()
+            .child(
+                switch()
+                    .label("s")
+                    .checked(on.get())
+                    .on_toggle(move |v| on.set(v)),
+            )
+            .child(
+                text_area()
+                    .value(text.get())
+                    .on_input(move |s| text.set(s.to_string())),
+            )
+            .child(Text::dynamic(move || {
+                format!("{}|{}", on.get(), text.get())
+            }))
+    });
+    let sw = h.host.ids_of_kind(kind::SWITCH)[0];
+    let ta = h.host.ids_of_kind(kind::TEXT_AREA)[0];
+    let label = h.host.ids_of_kind(kind::TEXT)[0];
+    h.send(sw, Event::Toggle(true));
+    assert!(on.get());
+    h.send(ta, Event::Input("a\nb".into()));
+    assert_eq!(text.get(), "a\nb");
+    assert_eq!(h.host.text_of(label).as_deref(), Some("true|a\nb"));
+}
+
+#[test]
+fn rejected_switch_restores() {
+    let mut h = Harness::new(|| column().child(switch().checked(false).on_toggle(|_| {})));
+    let sw = h.host.ids_of_kind(kind::SWITCH)[0];
+    assert_eq!(
+        h.send(sw, Event::Toggle(true)),
+        vec![Op::SetI32 {
+            id: sw,
+            prop: prop::CHECKED,
+            value: 0
+        }]
+    );
+}
+
+#[test]
+fn link_tab_and_list_item_click() {
+    let n = create_signal(0);
+    let mut h = Harness::new(move || {
+        column()
+            .child(link().label("l").on_click(move || n.update(|v| *v += 1)))
+            .child(tab().label("t").on_click(move || n.update(|v| *v += 10)))
+            .child(
+                list_item()
+                    .label("i")
+                    .on_click(move || n.update(|v| *v += 100)),
+            )
+            .child(Text::dynamic(move || format!("{}", n.get())))
+    });
+    let text = h.host.ids_of_kind(kind::TEXT)[0];
+    for (k, total) in [
+        (kind::LINK, "1"),
+        (kind::TAB, "11"),
+        (kind::LIST_ITEM, "111"),
+    ] {
+        let id = h.host.ids_of_kind(k)[0];
+        h.click(id);
+        assert_eq!(h.host.text_of(text).as_deref(), Some(total), "{k}");
+    }
+}
+
+#[test]
+fn radio_click_without_selecting_is_unchecked_again() {
+    let mut h = Harness::new(|| column().child(radio().label("r").selected(false).on_click(|| {})));
+    let r = h.host.ids_of_kind(kind::RADIO)[0];
+    // The host checks the radio itself before it reports the click.
+    h.host
+        .views
+        .get_mut(&r)
+        .unwrap()
+        .1
+        .insert(prop::CHECKED, Val::I(1));
+    assert_eq!(
+        h.click(r),
+        vec![Op::SetI32 {
+            id: r,
+            prop: prop::CHECKED,
+            value: 0
+        }]
+    );
+}
+
+#[test]
+fn radio_group_follows_its_signal() {
+    let pick = create_signal(0);
+    let mut h = Harness::new(move || {
+        column()
+            .child(
+                radio()
+                    .label("a")
+                    .selected(pick.get() == 0)
+                    .on_click(move || pick.set(0)),
+            )
+            .child(
+                radio()
+                    .label("b")
+                    .selected(pick.get() == 1)
+                    .on_click(move || pick.set(1)),
+            )
+    });
+    let radios = h.host.ids_of_kind(kind::RADIO);
+    h.host
+        .views
+        .get_mut(&radios[1])
+        .unwrap()
+        .1
+        .insert(prop::CHECKED, Val::I(1));
+    let ops = h.click(radios[1]);
+    assert_eq!(
+        ops,
+        vec![Op::SetI32 {
+            id: radios[0],
+            prop: prop::CHECKED,
+            value: 0
+        }]
+    );
+}
+
+#[test]
+fn dialog_comes_and_goes_with_the_node() {
+    let open = create_signal(false);
+    let mut h = Harness::new(move || DialogHost(open));
+    assert!(h.host.ids_of_kind(kind::DIALOG).is_empty());
+    open.set(true);
+    let ops = h.refresh();
+    let id = h.host.ids_of_kind(kind::DIALOG)[0];
+    assert!(
+        ops.contains(&Op::Create {
+            id,
+            kind: kind::DIALOG
+        }),
+        "{ops:?}"
+    );
+    assert!(ops
+        .iter()
+        .any(|op| matches!(op, Op::Insert { child, .. } if *child == id)));
+    assert!(ops.contains(&Op::SetStr {
+        id,
+        prop: prop::TEXT,
+        value: "Title".into()
+    }));
+    // The dialog body sits under the dialog.
+    assert_eq!(h.host.views[&id].2.len(), 1);
+
+    // DISMISS runs the handler, which closes it.
+    let ops = h.send(id, Event::Dismiss);
+    assert!(!open.get());
+    assert!(ops.contains(&Op::Remove { id }), "{ops:?}");
+    assert!(h.host.ids_of_kind(kind::DIALOG).is_empty());
+}
+
+struct DialogHost(schnellui::signal::Signal<bool>);
+
+impl Template for DialogHost {
+    fn render<R: TemplateRenderer>(self, renderer: &mut R) -> R::Node {
+        let mut nodes = vec![Text::new("page").render(renderer)];
+        if self.0.get() {
+            let open = self.0;
+            nodes.push(
+                dialog()
+                    .label("Title")
+                    .child(Text::new("body"))
+                    .on_click(move || open.set(false))
+                    .render(renderer),
+            );
+        }
+        renderer.container(
+            schnellui::template::ContainerProps::new(schnellui::template::ContainerKind::Column),
+            nodes,
+        )
+    }
 }

@@ -14,7 +14,17 @@ if [ -z "$ndk_root" ] || ! rustup target list --installed | grep -qx x86_64-linu
     echo "check-android-symbols: no NDK or x86_64-linux-android target, skipping"
     exit 0
 fi
-bin="${ndk_root%/}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+bin=""
+for dir in "${ndk_root%/}"/toolchains/llvm/prebuilt/*/bin; do
+    if [ -x "$dir/llvm-nm" ]; then
+        bin="$dir"
+        break
+    fi
+done
+if [ -z "$bin" ]; then
+    echo "check-android-symbols: no llvm-nm under $ndk_root, skipping"
+    exit 0
+fi
 
 CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$bin/x86_64-linux-android24-clang" \
     cargo build --locked -p android_native --target x86_64-linux-android

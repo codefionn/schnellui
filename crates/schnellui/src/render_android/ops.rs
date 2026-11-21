@@ -22,6 +22,20 @@ pub mod kind {
     pub const SLIDER: u8 = 8;
     pub const TEXT_INPUT: u8 = 9;
     pub const SPACER: u8 = 10;
+    pub const SWITCH: u8 = 11;
+    pub const RADIO: u8 = 12;
+    pub const DROPDOWN: u8 = 13;
+    pub const PROGRESS: u8 = 14;
+    pub const LOADING: u8 = 15;
+    pub const TEXT_AREA: u8 = 16;
+    pub const IMAGE: u8 = 17;
+    pub const DIVIDER: u8 = 18;
+    pub const BADGE: u8 = 19;
+    pub const LINK: u8 = 20;
+    pub const DIALOG: u8 = 21;
+    pub const TAB_BAR: u8 = 22;
+    pub const TAB: u8 = 23;
+    pub const LIST_ITEM: u8 = 24;
 }
 
 /// Property codes.
@@ -60,6 +74,16 @@ pub mod prop {
     pub const STEP: u8 = 44;
     pub const PASSWORD: u8 = 45;
     pub const APPEARANCE: u8 = 46;
+    /// Dropdown option labels joined with U+001F.
+    pub const ITEMS: u8 = 50;
+    /// Dropdown selection, -1 for none.
+    pub const SELECTED_INDEX: u8 = 52;
+    /// Image source: a `data:` URL, a file path or `asset:///name`.
+    pub const SRC: u8 = 53;
+    /// Link target, opened by the host after CLICK.
+    pub const HREF: u8 = 54;
+    /// Selected state of a Tab or ListItem.
+    pub const SELECTED: u8 = 55;
 }
 
 /// Event codes, as sent from the host.
@@ -68,6 +92,8 @@ pub mod event {
     pub const TOGGLE: u8 = 2;
     pub const CHANGE: u8 = 3;
     pub const INPUT: u8 = 4;
+    pub const SELECT: u8 = 5;
+    pub const DISMISS: u8 = 6;
 }
 
 const OP_CREATE: u8 = 0x01;

@@ -3,7 +3,7 @@
 use schnellui::template::Template;
 
 use super::diff::{diff_root, emit_full, IdAlloc};
-use super::ops::{self, event, prop, Op};
+use super::ops::{self, event, kind, prop, Op};
 use super::template::AndroidTemplate;
 use super::tree::{AndroidNode, Value};
 
@@ -37,6 +37,9 @@ pub enum Event {
     Toggle(bool),
     Change(f32),
     Input(String),
+    /// The index of the option a Dropdown reports.
+    Select(i32),
+    Dismiss,
 }
 
 impl Event {
@@ -48,6 +51,8 @@ impl Event {
             event::TOGGLE => Some(Event::Toggle(i != 0)),
             event::CHANGE => Some(Event::Change(f)),
             event::INPUT => s.map(Event::Input),
+            event::SELECT => Some(Event::Select(i)),
+            event::DISMISS => Some(Event::Dismiss),
             _ => None,
         }
     }
@@ -88,6 +93,7 @@ impl AndroidRenderer {
         let mut template = AndroidTemplate::new(self.viewport);
         let mut new = (self.view)(&mut template);
         let mut ops = Vec::new();
+        new.prune_options();
         diff_root(self.tree.as_ref(), &mut new, &mut self.ids, &mut ops);
         self.tree = Some(new);
         ops
@@ -112,6 +118,9 @@ impl AndroidRenderer {
         match event {
             Event::Click => {
                 let handler = target.handlers.click.as_mut()?;
+                if target.kind == kind::RADIO {
+                    target.props.insert(prop::CHECKED, Value::I32(1));
+                }
                 handler();
             }
             Event::Toggle(on) => {
@@ -128,6 +137,16 @@ impl AndroidRenderer {
                 let handler = target.handlers.input.as_mut()?;
                 target.props.insert(prop::TEXT, Value::Str(text.clone()));
                 handler(&text);
+            }
+            Event::Select(index) => {
+                let handler = target.handlers.select.as_mut()?;
+                let value = target.option_values.get(usize::try_from(index).ok()?)?;
+                target.props.insert(prop::SELECTED_INDEX, Value::I32(index));
+                handler(value);
+            }
+            Event::Dismiss => {
+                let handler = target.handlers.dismiss.as_mut()?;
+                handler();
             }
         }
         self.finish()
