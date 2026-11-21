@@ -118,8 +118,10 @@ public class SchnellActivity extends Activity {
 
     private void buildViews() {
         applier = new ViewApplier(this, container, new EventGate(SchnellBridge.sinkFor(app)));
-        applier.apply(SchnellBridge.nativeRender(app));
+        // Register before the render. A request made during or after the render snapshot
+        // then posts a task that runs after this method returns and applies the diff.
         SchnellBridge.register(app, applier);
+        applier.apply(SchnellBridge.nativeRender(app));
     }
 
     /** Drops the views and keeps the Rust app for the next activity instance. */
