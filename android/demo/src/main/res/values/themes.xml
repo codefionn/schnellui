@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platform theme only. API 26 to 28 have no system dark mode, so they stay light. -->
+    <style name="AppTheme" parent="android:Theme.DeviceDefault.Light.NoActionBar" />
+</resources>
