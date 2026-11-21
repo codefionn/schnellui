@@ -376,6 +376,9 @@ public final class ViewApplier {
             case Codes.KIND_TEXT_INPUT: {
                 EditText e = new EditText(cx);
                 e.setInputType(InputType.TYPE_CLASS_TEXT);
+                // No full-screen editor in landscape: it would cover the whole app.
+                e.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                        | android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);
                 view = e;
                 break;
             }
@@ -407,6 +410,7 @@ public final class ViewApplier {
             case Codes.KIND_TEXT_AREA: {
                 EditText e = new EditText(cx);
                 e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                e.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);
                 e.setSingleLine(false);
                 e.setMinLines(3);
                 e.setGravity(Gravity.TOP | Gravity.START);
