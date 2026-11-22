@@ -266,7 +266,7 @@ impl App {
         height: u32,
         scale: f32,
     ) -> App {
-        let retained = root.render(&mut schnellui::widgets::SceneTemplate);
+        let retained = root.render(&mut schnellui::widgets::SceneTemplate::new());
         App::mount_with_size_scaled(retained, width, height, scale)
     }
 

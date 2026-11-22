@@ -873,6 +873,8 @@ mod tests_reveal;
 #[cfg(test)]
 mod tests_rich_links;
 #[cfg(test)]
+mod tests_template_adapter;
+#[cfg(test)]
 mod tests_window_return;
 /// Persistent live hosts with reactive redraw scheduling. Native mode translates
 /// winit events into the [`App`]'s frame/input path; headless windowed mode drives

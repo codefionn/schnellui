@@ -838,7 +838,17 @@ ownership stay in `schnellui::template`. Renderers only map them to nodes.
 
 The retained adapter is
 [`SceneTemplate`](../crates/schnellui/src/widgets/template.rs): it returns `AnyView`,
-which `App::mount_template` mounts normally. The HTML branch (feature `render-html`)
+which `App::mount_template` mounts normally. It builds the real retained widget for
+every component the Android renderer maps natively: Switch and Radio with their label
+beside them, Dropdown, Dialog, TabBar and Tab, List and ListItem, Table and TableRow,
+RichText, ThemeProvider (`"dark"` or `"light"`), DragHandle, ProgressBar and the rest.
+A dropdown's options and a table's rows are data in the retained widgets, but a template
+renders them as children first. Each one renders to a placeholder and leaves its data
+with the adapter, and the parent claims the data by the placeholder's address. The
+retained Dropdown is controlled: `open` comes from the props, and `on_toggle` receives
+the state the user asked for. Retained table cells hold text only, so a TableRow's
+children are not shown. DockArea, GroupedTabList, TabGroup and TabNode stay a column of
+their children led by their label. The HTML branch (feature `render-html`)
 uses [`HtmlRenderer`](../crates/schnellui/src/render_html/renderer.rs) and `DomTemplate`
 ([`template.rs`](../crates/schnellui/src/render_html/template.rs)) to emit semantic DOM
 and CSS. It uses no canvas and does not translate WGPU draw commands. SSR and routing
