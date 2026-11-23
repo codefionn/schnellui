@@ -855,6 +855,8 @@ mod tests_disabled_focus;
 #[cfg(test)]
 mod tests_dropdown_focus;
 #[cfg(test)]
+mod tests_dropdown_placement;
+#[cfg(test)]
 mod tests_dropdown_wheel;
 #[cfg(test)]
 mod tests_modal_return;

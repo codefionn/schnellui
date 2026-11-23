@@ -130,8 +130,7 @@ mod imp {
         set_title: unsafe extern "system" fn(this: *mut c_void, title: *const u16) -> HRESULT,
         set_ok_button_label: Unused,
         set_file_name_label: Unused,
-        get_result:
-            unsafe extern "system" fn(this: *mut c_void, item: *mut *mut c_void) -> HRESULT,
+        get_result: unsafe extern "system" fn(this: *mut c_void, item: *mut *mut c_void) -> HRESULT,
     }
 
     /// The start of the `IShellItem` vtable, up to `GetDisplayName`.

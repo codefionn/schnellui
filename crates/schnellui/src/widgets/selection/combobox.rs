@@ -226,6 +226,8 @@ impl View for ComboBox {
                 x: 0.0,
                 y: intrinsic.height,
             });
+            // Opens upward, flush with the field, where it fits only above.
+            style.anchor_above = Some(0.0);
             ctx.layout.set_container(popup, style);
             ctx.scene
                 .set_overlay_level(popup, crate::widgets::POPUP_OVERLAY_LEVEL);

@@ -915,7 +915,10 @@ impl LayoutEngine {
                             };
                             if let Some(style) = self.styles.get(child) {
                                 if style.anchor.is_some() && style.keep_in_view {
-                                    at = keep_anchored_in_view(self.viewport, style, at, cl.size);
+                                    let view = self
+                                        .viewport
+                                        .map(|window| visible_from(scene, child, window));
+                                    at = keep_anchored_in_view(view, style, at, cl.size);
                                 }
                             }
                             self.scratch.push((child, at));
@@ -1150,41 +1153,60 @@ fn apply_container(s: &mut taffy::Style, style: &ContainerStyle) {
     }
 }
 
-/// Moves an anchored, floating box back inside the root viewport: shifts it
-/// left when it runs past the right edge, and opens it upward
-/// (`anchor_above`) when it runs past the bottom and fits above. When it fits
-/// on neither side it slides up to end at the bottom edge, top edge first.
+/// What the window shows around the floating box `id`, in the layout space of
+/// its parent: the window and the part of it the scroll viewports above `id`
+/// leave uncut (both `(window, visible)`). Layout places boxes as if nothing
+/// were scrolled; a page scrolled by `s` shows layout `y` at `y - s`.
+fn visible_from(scene: &Scene, id: WidgetId, window: Rect) -> (Rect, Rect) {
+    let (offset, clip) = scene.overlay_inherited_context(id);
+    let unscroll = |r: Rect| Rect::new(r.x - offset.x, r.y - offset.y, r.width, r.height);
+    (unscroll(window), unscroll(window.intersect(&clip)))
+}
+
+/// Moves an anchored, floating box back inside what the window shows:
+/// shifts it left when it runs past the window's right edge, and opens it
+/// upward (`anchor_above`) when it runs past the bottom of what shows and
+/// fits above. `view` is `(window, visible)` from [`visible_from`]: the
+/// visible part leaves out what scroll viewports cut off. A box that fits
+/// on neither side of the visible part is judged against the whole window
+/// instead, where a reveal can scroll it into view; when it fits on neither
+/// side of the window it slides up to end at the bottom edge, top edge first.
 ///
 /// A box that also fills its parent (a dialog layer scoped to a panel) is
 /// pinned to that parent, not floating: it stays where the parent is, even
 /// when the parent runs past the window.
 fn keep_anchored_in_view(
-    viewport: Option<Rect>,
+    view: Option<(Rect, Rect)>,
     style: &ContainerStyle,
     at: Point,
     size: taffy::Size<f32>,
 ) -> Point {
-    let Some(view) = viewport.filter(|_| !style.fill) else {
+    let Some((window, visible)) = view.filter(|_| !style.fill) else {
         return at;
     };
     let mut at = at;
-    let right = view.x + view.width;
+    let right = window.x + window.width;
     if at.x + size.width > right {
-        at.x = (right - size.width).max(view.x);
+        at.x = (right - size.width).max(window.x);
     }
     if let (Some(anchor), Some(above)) = (style.anchor, style.anchor_above) {
-        let bottom = view.y + view.height;
-        // The parent's top in absolute coordinates.
+        // The parent's top in the same coordinates.
         let parent_y = at.y - anchor.y;
         let flipped = parent_y + above - size.height;
-        if at.y + size.height > bottom {
-            at.y = if flipped >= view.y {
-                flipped
-            } else {
-                // Fits on neither side: slide up until the bottom edge is in
-                // view, over the trigger if need be, but never past the top.
-                (bottom - size.height).max(view.y)
-            };
+        let below_fits = |view: &Rect| at.y + size.height <= view.y + view.height;
+        let above_fits = |view: &Rect| flipped >= view.y;
+        if !visible.is_empty() && below_fits(&visible) {
+            // stays below
+        } else if !visible.is_empty() && above_fits(&visible) {
+            at.y = flipped;
+        } else if below_fits(&window) {
+            // stays below
+        } else if above_fits(&window) {
+            at.y = flipped;
+        } else {
+            // Fits on neither side: slide up until the bottom edge is in
+            // view, over the trigger if need be, but never past the top.
+            at.y = (window.y + window.height - size.height).max(window.y);
         }
     }
     at
@@ -1265,7 +1287,8 @@ mod anchored_tests {
     }
 
     fn place(view: (f32, f32), parent_y: f32, height: f32) -> f32 {
-        let view = Some(Rect::new(0.0, 0.0, view.0, view.1));
+        let window = Rect::new(0.0, 0.0, view.0, view.1);
+        let view = Some((window, window));
         let at = Point {
             x: 0.0,
             y: parent_y + 34.0,
