@@ -20,9 +20,14 @@
 //! [`GlobalMenu`] asks the system to show a menu bar outside the window, where
 //! the system has one (macOS). [`GlobalMenu::supported`] says whether it does;
 //! schnellui never draws a menu bar in the window.
+//!
+//! [`attach_parent_console`] and [`own_console`] give an app built as a
+//! Windows GUI program the console of the terminal that started it, or one
+//! of its own.
 
 mod app_id;
 mod clipboard;
+mod console;
 mod decorations;
 mod folder_picker;
 mod global_menu;
@@ -32,6 +37,7 @@ mod preferences;
 
 pub use app_id::{app_id, is_valid_app_id, portal_app_id, set_app_id, AppIdError};
 pub use clipboard::{ClipboardError, ClipboardImage, SystemClipboard};
+pub use console::{attach_parent_console, own_console};
 pub use decorations::windows_always_undecorated;
 pub use folder_picker::pick_folder;
 pub use global_menu::{
