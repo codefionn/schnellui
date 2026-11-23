@@ -6,7 +6,8 @@ use super::*;
 use schnellui::a11y::Role;
 use schnellui::scene::{Rect, WidgetId};
 use schnellui::widgets::{
-    Button, Column, List, ListItem, Radio, Scroll, Tab, TabBar, Table, TextArea, TextInput,
+    Button, Column, Dropdown, DropdownOption, List, ListItem, Radio, Scroll, Tab, TabBar, Table,
+    TextArea, TextInput,
 };
 
 fn offset(app: &App, scroll: WidgetId) -> f32 {
@@ -98,6 +99,29 @@ fn programmatic_focus_and_the_accesskit_focus_action_scroll_to_the_control() {
     let mid = button(&app, 12);
     assert!(app.dispatch_action(&request(accesskit_action::Action::Focus, mid)));
     assert!(visible_in(&app, sv, mid));
+}
+
+/// A dropdown opens by a remount that keeps focus on its trigger. Its list
+/// floats below the trigger, so a trigger at a viewport's lower edge opened
+/// a list the viewport cut off; the reveal now takes in the open list.
+#[test]
+fn focusing_an_open_dropdown_reveals_its_list_too() {
+    let mut col = Column::new().gap(8.0).child(buttons(2));
+    let mut dropdown = Dropdown::new("Mode").open(true);
+    for name in ["Off", "Balanced", "Quiet"] {
+        dropdown = dropdown.option(DropdownOption::new(name));
+    }
+    col = col.child(dropdown).child(buttons(6));
+    let mut app = App::mount_with_size(Scroll::new().size(300.0, 200.0).child(col), 400, 400);
+    app.frame();
+    let sv = scroll_of(&app);
+    let trigger = app.find_widget(Role::ComboBox, Some("Mode")).unwrap();
+    let quiet = app.find_widget(Role::ListBoxOption, Some("Quiet")).unwrap();
+    assert!(visible_in(&app, sv, trigger));
+    assert!(!visible_in(&app, sv, quiet));
+    assert!(app.focus(Some(trigger)));
+    assert!(visible_in(&app, sv, quiet), "the open list shows whole");
+    assert!(visible_in(&app, sv, trigger), "and its trigger with it");
 }
 
 #[test]

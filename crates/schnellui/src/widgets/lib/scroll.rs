@@ -1011,7 +1011,7 @@ pub fn reveal_target(
         .a11y(id)
         .is_some_and(|a| StateFlags(a.state).contains(StateFlags::FOCUSED));
     if !focused {
-        return Some(rect);
+        return Some(with_open_list(scene, id, rect));
     }
     if scene
         .node(id)
@@ -1032,12 +1032,41 @@ pub fn reveal_target(
             FOCUS_REVEAL_AIR.min(((metrics.viewport.height - rect.height) / 2.0 - ring).max(0.0))
         });
     let reach = ring + air;
-    Some(Rect::new(
+    let ringed = Rect::new(
         rect.x - reach,
         rect.y - reach,
         rect.width + 2.0 * reach,
         rect.height + 2.0 * reach,
-    ))
+    );
+    Some(with_open_list(scene, id, ringed))
+}
+
+/// `rect` grown to take in the open list of the dropdown or combo box whose
+/// trigger is `id`, so a reveal of an open dropdown shows its options too.
+/// A dropdown opens by a remount that keeps focus on its trigger; revealing
+/// only the trigger left a list that opens below a scroll viewport's edge
+/// cut off by it. `rect` alone for any other control.
+fn with_open_list(scene: &Scene, id: WidgetId, rect: Rect) -> Rect {
+    let expanded = scene.a11y(id).is_some_and(|a| {
+        Role::from_u16(a.role) == Role::ComboBox
+            && StateFlags(a.state).contains(StateFlags::EXPANDED)
+    });
+    if !expanded {
+        return rect;
+    }
+    let Some(wrapper) = scene.node(id).and_then(|node| node.parent) else {
+        return rect;
+    };
+    let list = scene.node(wrapper).and_then(|node| {
+        node.children.iter().copied().find(|&child| {
+            scene.is_overlay(child)
+                && scene.overlay_level(child) == crate::widgets::POPUP_OVERLAY_LEVEL
+        })
+    });
+    match list.and_then(|list| scene.layout(list)).map(|b| b.rect) {
+        Some(list) if !list.is_empty() => rect.union(&list),
+        _ => rect,
+    }
 }
 
 /// [`reveal_rect`] for the [`reveal_target`] of the control `id`.
@@ -1049,7 +1078,9 @@ pub fn reveal_widget(
 ) -> bool {
     // A control already in full view, ring and all, stays where it is: Tab onto it does not
     // move the page for the sake of the air around it.
-    if ringed_rect(scene, id).is_some_and(|bare| rect_in_view(scene, id, bare)) {
+    if ringed_rect(scene, id)
+        .is_some_and(|bare| rect_in_view(scene, id, with_open_list(scene, id, bare)))
+    {
         return false;
     }
     match reveal_target(runtime, scene, shaper, id) {
