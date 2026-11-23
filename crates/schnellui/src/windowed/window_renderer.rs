@@ -55,9 +55,12 @@ impl WindowRenderer {
                 return Self::gpu_now(window, width, height, backend);
             }
         };
-        // macOS creates the Metal layer on the main thread; elsewhere the instance
-        // and the surface start on the worker too, which is most of the wait.
-        #[cfg(target_os = "macos")]
+        // macOS creates the Metal layer on the main thread, and winit on Windows
+        // hands out the window's handle only on the event loop's thread, so there
+        // the surface starts here and only the adapter and device on the worker.
+        // Elsewhere the instance and the surface start on the worker too, which is
+        // most of the wait.
+        #[cfg(any(target_os = "macos", windows))]
         let start = {
             let staged = match SurfaceBoot::new(window.clone(), backend) {
                 Ok(staged) => staged,
@@ -65,7 +68,7 @@ impl WindowRenderer {
             };
             move || staged.prepare()
         };
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let start = {
             let window = window.clone();
             move || SurfaceBoot::new(window, backend).and_then(SurfaceBoot::prepare)
@@ -117,7 +120,7 @@ impl WindowRenderer {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     fn cpu_after(
         soft: SoftSurface,
         backend: Backend,

@@ -350,7 +350,8 @@ pub struct SurfaceDevice {
 
 impl SurfaceBoot {
     /// Creates the wgpu instance and a surface for `target`. On macOS this must run
-    /// on the main thread.
+    /// on the main thread, and with a winit window on Windows on the event loop's
+    /// thread, the only one winit gives the window's handle to.
     pub fn new(
         target: impl Into<wgpu::SurfaceTarget<'static>>,
         backend: Backend,
