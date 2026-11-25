@@ -31,6 +31,21 @@ impl ApplicationHandler<PlatformEvent> for WindowedApp {
             }
             None => attrs,
         };
+        // The launcher's startup notification token (XDG_ACTIVATION_TOKEN on
+        // Wayland, DESKTOP_STARTUP_ID on X11). With it the compositor focuses
+        // the new window and ends the launch feedback. The variables stay in
+        // the environment: removing them races with other threads reading it,
+        // so apps that start programs leave them out of those programs' env.
+        #[cfg(target_os = "linux")]
+        let attrs = {
+            use winit::platform::startup_notify::{
+                EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
+            };
+            match event_loop.read_token_from_env() {
+                Some(token) => attrs.with_activation_token(token),
+                None => attrs,
+            }
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -1290,6 +1305,11 @@ impl WindowedApp {
         }
         // The one place pixels and native semantics are produced.
         self.redraw();
+        // The first presented frame is when the app counts as started. Later
+        // frames pay one atomic load.
+        if self.window.is_some() {
+            crate::platform::notify_ready();
+        }
         // A slow frame may finish after the deadline that requested it.
         // Rebase animation pacing on completion so it still yields to
         // input instead of immediately starting another expensive frame.

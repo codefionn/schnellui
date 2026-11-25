@@ -24,6 +24,9 @@
 //! [`attach_parent_console`] and [`own_console`] give an app built as a
 //! Windows GUI program the console of the terminal that started it, or one
 //! of its own.
+//!
+//! [`notify_ready`] tells a systemd unit of `Type=notify` that the app has
+//! started. The windowed host sends it after the first frame.
 
 mod app_id;
 mod clipboard;
@@ -34,6 +37,7 @@ mod global_menu;
 mod global_shortcuts;
 mod os;
 mod preferences;
+mod ready;
 
 pub use app_id::{app_id, is_valid_app_id, portal_app_id, set_app_id, AppIdError};
 pub use clipboard::{ClipboardError, ClipboardImage, SystemClipboard};
@@ -51,3 +55,4 @@ pub use global_shortcuts::{
 pub use preferences::{
     watch_preferences, ColorScheme, Contrast, Locale, PlatformPreferences, PreferenceChange,
 };
+pub use ready::notify_ready;
