@@ -513,6 +513,10 @@ pub enum TooltipSide {
     /// Right of the control, level with it. For a column of icons along the
     /// window's left edge, where above would cover the icon before it.
     After,
+    /// Inside the control, centred on its bottom edge and `gap` up from it. For
+    /// a large control such as a video tile in a grid, whose every neighbour is
+    /// another tile a tooltip outside would cover.
+    Inside,
 }
 
 /// One [`HoverWithin`]: whether the pointer was inside at the last pointer
@@ -629,7 +633,7 @@ fn hover_tooltip_origin(
     let after = target.right() + gap;
     // The side asked for first, then the opposite one.
     let beside = match side {
-        TooltipSide::Above | TooltipSide::Below => [None, None],
+        TooltipSide::Above | TooltipSide::Below | TooltipSide::Inside => [None, None],
         TooltipSide::Before => [Some(before), Some(after)],
         TooltipSide::After => [Some(after), Some(before)],
     };
@@ -651,6 +655,13 @@ fn hover_tooltip_origin(
 
     let top = viewport.y + TOOLTIP_VIEWPORT_MARGIN;
     let bottom = viewport.bottom() - TOOLTIP_VIEWPORT_MARGIN;
+    if side == TooltipSide::Inside {
+        // Over the control's foot, never above its top, and kept in the window.
+        let y = (target.bottom() - gap - tooltip.height)
+            .max(target.y)
+            .clamp(top, (bottom - tooltip.height).max(top));
+        return Point { x, y };
+    }
     let above = target.y - gap - tooltip.height;
     let below = target.bottom() + gap;
     let above_fits = above >= top;
@@ -1217,6 +1228,10 @@ pub(crate) struct Handlers {
     /// neighbours, so its focus ring stays inside its edge, as a tab's or a
     /// list item's does.
     pub(crate) flush_row: bool,
+    /// A row that asked for its focus ring outside its edge
+    /// ([`crate::widgets::ListRow::focus_outset`]): it stands apart from its
+    /// neighbours, so the ring has room there.
+    pub(crate) ring_outset: bool,
 }
 
 /// One dynamic text slot: a signal-bound producer whose value mutates the retained
@@ -1498,6 +1513,9 @@ struct AppliedInteraction {
     /// Stroke width, which only validates that the tracked range still holds
     /// this decoration after the node repainted.
     border_width: f32,
+    /// Whether a halo stroke ([`crate::widgets::FOCUS_HALO_W`]) lies just before
+    /// the ring's stroke, as a keyboard ring has.
+    halo: bool,
     foreground: Vec<PrimitiveColorRestore>,
     background: Option<(WidgetId, usize)>,
     /// The paint bounds of `target`'s subtree the decoration was sized from.

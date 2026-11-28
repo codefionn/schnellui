@@ -383,6 +383,39 @@ fn set_scroll_offset_dirties_paint_and_the_viewport_transform_only() {
 }
 
 #[test]
+fn a_box_keeps_its_top_in_view_while_its_parent_shows() {
+    let mut s = Scene::new();
+    let list = s.insert(WidgetKind::Scroll, None);
+    let row = s.insert(WidgetKind::Column, Some(list));
+    let bar = s.insert(WidgetKind::Row, Some(row));
+    let boxed = |y: f32, h: f32| {
+        let rect = Rect::new(0.0, y, 200.0, h);
+        LayoutBox {
+            rect,
+            content: rect,
+        }
+    };
+    s.set_layout(list, boxed(50.0, 300.0));
+    s.set_layout(row, boxed(40.0, 60.0));
+    s.set_layout(bar, boxed(44.0, 28.0));
+    s.set_top_in_view(bar);
+    // the bar's top shows: it stays
+    s.set_scroll_offset(list, Point { x: 0.0, y: -10.0 });
+    s.keep_tops_in_view();
+    assert_eq!(s.composite_properties(bar).translation.y, 0.0);
+    // the list's edge cuts its top: it slides down to it
+    s.set_scroll_offset(list, Point { x: 0.0, y: 10.0 });
+    assert_eq!(s.composite_properties(bar).translation.y, 16.0);
+    assert!(s.layout_dirty().is_empty(), "the shift never relayouts");
+    // only a sliver of the row shows: the bar stops at the row's bottom
+    s.set_scroll_offset(list, Point { x: 0.0, y: 45.0 });
+    assert_eq!(s.composite_properties(bar).translation.y, 28.0);
+    // the row is out of view: the bar goes back to its place
+    s.set_scroll_offset(list, Point { x: 0.0, y: 60.0 });
+    assert_eq!(s.composite_properties(bar).translation.y, 0.0);
+}
+
+#[test]
 fn idempotent_set_scroll_offset_stays_clean() {
     let (mut s, n, _rect) = painted_node();
     let off = Point { x: 3.0, y: 7.0 };

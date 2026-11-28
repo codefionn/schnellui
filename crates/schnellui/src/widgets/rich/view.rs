@@ -1307,7 +1307,7 @@ fn push_decor(prims: &mut Vec<Primitive>, d: &RichDecor, inv: f32, origin: Point
             x: origin.x + (d.x + d.width) * inv,
             y: yy,
         },
-        width: (d.thickness * inv).max(0.75),
+        width: (d.thickness * inv).max(1.0),
         color: Color::rgba(d.color[0], d.color[1], d.color[2], d.color[3]),
     });
 }

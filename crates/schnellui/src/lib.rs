@@ -859,6 +859,8 @@ mod tests_dropdown_placement;
 #[cfg(test)]
 mod tests_dropdown_wheel;
 #[cfg(test)]
+mod tests_list_row_focus;
+#[cfg(test)]
 mod tests_modal_return;
 #[cfg(test)]
 mod tests_navigation;

@@ -37,6 +37,8 @@ const CONTEXT_MENU_MARGIN: f32 = 4.0;
 const CONTEXT_MENU_SIDE_MARGIN: f32 = 16.0;
 /// Vertical padding of a menu row, each side: menus stay denser than buttons.
 const MENU_PAD_V: f32 = 5.0;
+/// How far the words at a slider's ends reach up into the slider's row, toward its track.
+const SLIDER_ENDS_RISE: f32 = 4.0;
 /// Air between a menu's frame and its rows, so a row's wash and ring stand
 /// clear of the frame as a popover's rows do.
 const MENU_INSET: f32 = 4.0;
@@ -106,6 +108,13 @@ const CHECK_SIZE: f32 = 12.0;
 const CHECK_STROKE: f32 = 2.0;
 /// Room a menu with a chosen row keeps for the check mark.
 const CHECK_ROOM: f32 = CHECK_SIZE + 12.0;
+/// Size of the switch at the end of a setting's row.
+const SWITCH_WIDTH: f32 = 28.0;
+const SWITCH_HEIGHT: f32 = 16.0;
+/// How far the switch's knob sits inside its track.
+const SWITCH_KNOB_INSET: f32 = 2.0;
+/// Room a menu with a switch keeps for it.
+const SWITCH_ROOM: f32 = SWITCH_WIDTH + 12.0;
 /// Height of a rule between two groups of a menu.
 const SEPARATOR_HEIGHT: f32 = 9.0;
 
@@ -125,10 +134,14 @@ pub struct ContextMenuItem {
     label: Cow<'static, str>,
     enabled: bool,
     selected: bool,
+    /// Draws a switch at the row's end, on while `selected`; see [`ContextMenuItem::switch`].
+    switch: bool,
     danger: bool,
     action: ItemAction,
     kind: ItemKind,
     range: SliderRange,
+    /// Words under a slider's track at its two ends; see [`ContextMenuItem::ends`].
+    ends: Option<(Cow<'static, str>, Cow<'static, str>)>,
 }
 
 /// What a menu row is: a command, a rule between groups, a group's caption, or a slider.
@@ -148,10 +161,12 @@ impl ContextMenuItem {
             label: label.into(),
             enabled: true,
             selected: false,
+            switch: false,
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Command,
             range: SliderRange::default(),
+            ends: None,
         }
     }
 
@@ -162,10 +177,12 @@ impl ContextMenuItem {
             label: Cow::Borrowed(""),
             enabled: false,
             selected: false,
+            switch: false,
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Separator,
             range: SliderRange::default(),
+            ends: None,
         }
     }
 
@@ -176,10 +193,12 @@ impl ContextMenuItem {
             label: label.into(),
             enabled: false,
             selected: false,
+            switch: false,
             danger: false,
             action: ItemAction::Custom(None),
             kind: ItemKind::Heading,
             range: SliderRange::default(),
+            ends: None,
         }
     }
 
@@ -199,6 +218,7 @@ impl ContextMenuItem {
             label: label.into(),
             enabled: true,
             selected: false,
+            switch: false,
             danger: false,
             action: ItemAction::Slider(None),
             kind: ItemKind::Slider,
@@ -208,6 +228,7 @@ impl ContextMenuItem {
                 max,
                 step: None,
             },
+            ends: None,
         }
     }
 
@@ -232,10 +253,12 @@ impl ContextMenuItem {
             label: Cow::Borrowed(label),
             enabled: true,
             selected: false,
+            switch: false,
             danger: false,
             action: ItemAction::BuiltIn(action),
             kind: ItemKind::Command,
             range: SliderRange::default(),
+            ends: None,
         }
     }
 
@@ -251,6 +274,15 @@ impl ContextMenuItem {
     /// in the accent at its end and the selected state.
     pub fn selected(mut self, selected: bool) -> ContextMenuItem {
         self.selected = selected;
+        self
+    }
+
+    /// Makes this command a setting that is on or off, such as muting one sound: a switch at
+    /// the row's end shows it, on in the accent while `on`, and the row has the selected state
+    /// then. A check mark alone read as one choice of several, not as a setting to flip.
+    pub fn switch(mut self, on: bool) -> ContextMenuItem {
+        self.switch = true;
+        self.selected = on;
         self
     }
 
@@ -274,6 +306,18 @@ impl ContextMenuItem {
         self
     }
 
+    /// Puts `least` and `most` under a slider row's track, at its start and its end, in the
+    /// headings' smaller size and muted ink, such as "10%" and "200%": with nothing at the
+    /// ends, the range was a guess. The row grows by their line.
+    pub fn ends(
+        mut self,
+        least: impl Into<Cow<'static, str>>,
+        most: impl Into<Cow<'static, str>>,
+    ) -> ContextMenuItem {
+        self.ends = Some((least.into(), most.into()));
+        self
+    }
+
     /// Sets what a slider row runs with its new value on each move. The menu stays open.
     pub fn on_change(mut self, callback: impl FnMut(f32) + 'static) -> ContextMenuItem {
         self.action = ItemAction::Slider(Some(Box::new(callback)));
@@ -292,6 +336,9 @@ pub struct ContextMenu {
     text_size: Option<f32>,
     row_height: Option<f32>,
     name: Option<Cow<'static, str>>,
+    above: bool,
+    spaced: bool,
+    min_width: Option<f32>,
 }
 
 impl ContextMenu {
@@ -310,6 +357,29 @@ impl ContextMenu {
     /// text size can keep rows as easy to hit as its neighbours' lists.
     pub fn row_height(mut self, height: f32) -> ContextMenu {
         self.row_height = Some(height);
+        self
+    }
+
+    /// Opens the menu over the control it hangs from when it fits there, and
+    /// under it only when it does not. For a control whose neighbours below
+    /// matter more than those above, such as a button over a row of controls.
+    pub fn above(mut self, above: bool) -> ContextMenu {
+        self.above = above;
+        self
+    }
+
+    /// Keeps the usual gap between the control and a menu that opens under it,
+    /// as a menu over it has. For a small control at the foot of something the
+    /// menu must leave in sight, such as a button under a video tile.
+    pub fn spaced(mut self, spaced: bool) -> ContextMenu {
+        self.spaced = spaced;
+        self
+    }
+
+    /// Sets the least width of the menu in logical px, for a menu whose slider needs more
+    /// room than its words give it.
+    pub fn min_width(mut self, width: f32) -> ContextMenu {
+        self.min_width = Some(width);
         self
     }
 
@@ -482,12 +552,15 @@ struct RenderItem {
     label: String,
     enabled: bool,
     selected: bool,
+    switch: bool,
     danger: bool,
     kind: ItemKind,
     action: ContextMenuAction,
     custom_index: Option<usize>,
     range: SliderRange,
     shaped: ShapedText,
+    /// A slider's words at the ends of its track, shaped in the headings' size.
+    ends: Option<(ShapedText, ShapedText)>,
 }
 
 fn action_enabled(
@@ -510,11 +583,19 @@ fn action_enabled(
 /// Where a menu of `size` goes for `anchor`: under or over it, see [`menu_top`]. A menu that
 /// fits on neither side of a control and would cover it opens beside the control instead,
 /// right of it or else left, so the control it hangs from stays in sight.
-fn menu_origin(
+#[cfg(test)]
+fn menu_origin(anchor: Rect, size: (f32, f32), viewport: Size, max_x: f32) -> (f32, f32) {
+    menu_origin_toward(anchor, size, viewport, max_x, (false, false))
+}
+
+/// [`menu_origin`], over the anchor first when `above`, with a gap under it when `spaced`,
+/// see [`menu_top_toward`].
+fn menu_origin_toward(
     anchor: Rect,
     (width, height): (f32, f32),
     viewport: Size,
     max_x: f32,
+    (above, spaced): (bool, bool),
 ) -> (f32, f32) {
     // A control in the window's right half lines the menu's right edge up with its own, so
     // the menu hangs over the column the control stands in and covers the same control of
@@ -525,7 +606,7 @@ fn menu_origin(
         anchor.x
     };
     let x = start.clamp(CONTEXT_MENU_SIDE_MARGIN, max_x);
-    let y = menu_top(anchor, height, viewport.height);
+    let y = menu_top_toward(anchor, height, viewport.height, (above, spaced));
     let covers = anchor.height > 0.0 && y < anchor.bottom() && y + height > anchor.y;
     if !covers {
         return (x, y);
@@ -554,12 +635,36 @@ fn menu_origin(
 /// `window_height` tall. Below the anchor when it fits, else above it with the
 /// usual gap (none for a pointer point), else on the side with more room,
 /// clamped into the window and as near the anchor as it can be.
+#[cfg(test)]
 fn menu_top(anchor: Rect, height: f32, window_height: f32) -> f32 {
+    menu_top_toward(anchor, height, window_height, (false, false))
+}
+
+/// [`menu_top`], but with `above` the menu hangs over its anchor whenever it fits there,
+/// and goes under it only when it does not. With `spaced` a menu under its anchor keeps the
+/// usual gap from it too.
+fn menu_top_toward(
+    anchor: Rect,
+    height: f32,
+    window_height: f32,
+    (above, spaced): (bool, bool),
+) -> f32 {
+    if above && anchor.height > 0.0 {
+        let edge = CONTEXT_MENU_SIDE_MARGIN.min((window_height - height).max(0.0) / 2.0);
+        let over = anchor.y - CONTEXT_MENU_MARGIN - height;
+        if over >= edge {
+            return over;
+        }
+    }
     // The window's top and bottom keep the same air as its sides, so a menu never ends
     // against an edge with its shadow cut.
     let edge = CONTEXT_MENU_SIDE_MARGIN.min((window_height - height).max(0.0) / 2.0);
     let max_y = (window_height - height - edge).max(edge);
-    let below = anchor.bottom();
+    let below = if spaced && anchor.height > 0.0 {
+        anchor.bottom() + CONTEXT_MENU_MARGIN
+    } else {
+        anchor.bottom()
+    };
     if below <= max_y {
         return below.max(edge);
     }
@@ -591,6 +696,12 @@ struct Contents {
     size: f32,
     /// The least height of a row, in logical px.
     least_row: f32,
+    /// Over the anchor first, see [`ContextMenu::above`].
+    above: bool,
+    /// A gap under the anchor too, see [`ContextMenu::spaced`].
+    spaced: bool,
+    /// The least width, see [`ContextMenu::min_width`].
+    least_width: f32,
     editable: bool,
 }
 
@@ -611,13 +722,16 @@ fn contents(
             .a11y(source)
             .and_then(|semantics| semantics.value.as_deref())
             .is_some_and(|value| !value.is_empty());
-    let (size, least_row) = runtime.context_menu.with(|state| {
+    let (size, least_row, above, spaced, least_width) = runtime.context_menu.with(|state| {
         let state = state.borrow();
         let menu = state.menus.get(source);
         (
             menu.and_then(|menu| menu.text_size)
                 .unwrap_or(BUTTON_TEXT_SIZE),
             menu.and_then(|menu| menu.row_height).unwrap_or(0.0),
+            menu.is_some_and(|menu| menu.above),
+            menu.is_some_and(|menu| menu.spaced),
+            menu.and_then(|menu| menu.min_width).unwrap_or(0.0),
         )
     });
     let phys = phys_size_px(size, scale);
@@ -649,7 +763,15 @@ fn contents(
                     } else {
                         phys
                     };
+                    let small = phys_size_px(heading_size(size), scale);
+                    let ends = item.ends.as_ref().map(|(least, most)| {
+                        (
+                            shaper.shape(least, small, None),
+                            shaper.shape(most, small, None),
+                        )
+                    });
                     RenderItem {
+                        ends,
                         shaped: shaper.shape(&label, item_phys, None),
                         label,
                         enabled: action_enabled(
@@ -661,6 +783,7 @@ fn contents(
                             has_callback,
                         ),
                         selected: item.selected,
+                        switch: item.switch,
                         danger: item.danger,
                         kind: item.kind,
                         action,
@@ -675,6 +798,9 @@ fn contents(
         items,
         size,
         least_row,
+        above,
+        spaced,
+        least_width,
         editable,
     })
 }
@@ -683,6 +809,8 @@ fn contents(
 #[derive(Clone, Copy)]
 struct Measures {
     rect: Rect,
+    /// One over the scale's norm: shaped sizes are physical, rows logical.
+    inv: f32,
     inset: f32,
     pad_h: f32,
     row_height: f32,
@@ -694,8 +822,16 @@ impl Measures {
     fn height(&self, item: &RenderItem) -> f32 {
         match item.kind {
             ItemKind::Separator => self.separator_height,
-            ItemKind::Command | ItemKind::Heading | ItemKind::Slider => self.row_height,
+            ItemKind::Command | ItemKind::Heading => self.row_height,
+            ItemKind::Slider => self.row_height + self.ends_height(item),
         }
+    }
+
+    /// How tall the line of a slider's words at its ends is; none without them.
+    fn ends_height(&self, item: &RenderItem) -> f32 {
+        item.ends.as_ref().map_or(0.0, |(least, most)| {
+            least.height.max(most.height) * self.inv
+        })
     }
 }
 
@@ -715,8 +851,11 @@ fn measure(
         .iter()
         .map(|item| item.shaped.height * inv + 2.0 * pad_v)
         .fold(contents.least_row, f32::max);
-    // A menu with a chosen row keeps room for the check mark at every row's end.
-    let check_room = if items.iter().any(|item| item.selected) {
+    // A menu with a chosen row keeps room for the check mark at every row's end, and one
+    // with a switch for the switch, on or off.
+    let check_room = if items.iter().any(|item| item.switch) {
+        SWITCH_ROOM
+    } else if items.iter().any(|item| item.selected) {
         CHECK_ROOM
     } else {
         0.0
@@ -726,7 +865,8 @@ fn measure(
         .iter()
         .filter(|item| item.kind != ItemKind::Slider)
         .map(|item| item.shaped.width * inv + 2.0 * pad_h + check_room)
-        .fold(CONTEXT_MENU_MIN_WIDTH * theme.shape.density, f32::max);
+        .fold(CONTEXT_MENU_MIN_WIDTH * theme.shape.density, f32::max)
+        .max(contents.least_width - 2.0 * theme.shape.pad(MENU_INSET));
     let inset = theme.shape.pad(MENU_INSET);
     // A menu that hangs under a row is as wide as the row: a narrower one left the ends of
     // the rows it covers showing beside it (a time, a badge), which read as the menu's own.
@@ -737,6 +877,7 @@ fn measure(
     let separator_height = theme.shape.pad(SEPARATOR_HEIGHT);
     let mut measures = Measures {
         rect: Rect::default(),
+        inv,
         inset,
         pad_h,
         row_height,
@@ -744,7 +885,13 @@ fn measure(
     };
     let height = items.iter().map(|item| measures.height(item)).sum::<f32>() + 2.0 * inset;
     let max_x = (viewport.width - width - CONTEXT_MENU_SIDE_MARGIN).max(CONTEXT_MENU_SIDE_MARGIN);
-    let (x, y) = menu_origin(anchor, (width, height), viewport, max_x);
+    let (x, y) = menu_origin_toward(
+        anchor,
+        (width, height),
+        viewport,
+        max_x,
+        (contents.above, contents.spaced),
+    );
     measures.rect = Rect::new(x, y, width, height);
     measures
 }
@@ -1035,6 +1182,27 @@ fn lay_out_menu(
                 rect.height,
             );
             place_slider(runtime, scene, id, item, rect);
+            // The words at the ends under the track, its start and its end on theirs.
+            if let Some((least, most)) = &item.ends {
+                let small = phys_size_px(heading_size(size), scale) as u32;
+                let under = row_top + row_height - SLIDER_ENDS_RISE;
+                for (shaped, left) in [
+                    (least, rect.x),
+                    (most, rect.x + rect.width - most.width * inv),
+                ] {
+                    rasterize_and_push(
+                        scene.paint_mut(root),
+                        shaper,
+                        atlas,
+                        shaped,
+                        small,
+                        theme.text_muted,
+                        scale,
+                        Point { x: left, y: under },
+                    );
+                }
+                scene.mark_dirty(root, DirtyFlags::PAINT);
+            }
             continue;
         }
         scene.set_layout(
@@ -1074,7 +1242,36 @@ fn lay_out_menu(
             // The chosen row has a check mark in the accent at its end, as a
             // menu of choices marks the current one; a fill would read as the
             // keyboard's row.
-            if item.selected {
+            if item.switch {
+                // A switch: a rounded track in the accent while on and in the muted text
+                // while off, with a round knob at the end it is set to.
+                let track = Rect::new(
+                    rect.x + rect.width - pad_h - SWITCH_WIDTH,
+                    rect.y + (rect.height - SWITCH_HEIGHT) * 0.5,
+                    SWITCH_WIDTH,
+                    SWITCH_HEIGHT,
+                );
+                paint.primitives.push(Primitive::SolidRect {
+                    rect: track,
+                    color: if item.selected {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    },
+                    corner_radius: SWITCH_HEIGHT * 0.5,
+                });
+                let knob = SWITCH_HEIGHT - 2.0 * SWITCH_KNOB_INSET;
+                let knob_x = if item.selected {
+                    track.x + track.width - SWITCH_KNOB_INSET - knob
+                } else {
+                    track.x + SWITCH_KNOB_INSET
+                };
+                paint.primitives.push(Primitive::SolidRect {
+                    rect: Rect::new(knob_x, track.y + SWITCH_KNOB_INSET, knob, knob),
+                    color: theme.surface,
+                    corner_radius: knob * 0.5,
+                });
+            } else if item.selected {
                 let cx = rect.x + rect.width - pad_h - CHECK_SIZE * 0.5;
                 let cy = rect.y + rect.height * 0.5;
                 let h = CHECK_SIZE * 0.5;
@@ -1453,6 +1650,46 @@ mod placement_tests {
         assert_eq!(
             menu_top(Rect::new(0.0, 10.0, 50.0, 30.0), 100.0, 300.0),
             40.0
+        );
+    }
+
+    #[test]
+    fn a_menu_that_prefers_above_hangs_over_its_anchor_when_it_fits() {
+        let anchor = Rect::new(0.0, 200.0, 50.0, 30.0);
+        let y = menu_top_toward(anchor, 100.0, 600.0, (true, false));
+        assert_eq!(y + 100.0, 200.0 - CONTEXT_MENU_MARGIN);
+        // Without room over it, it hangs under it as any menu does.
+        let anchor = Rect::new(0.0, 40.0, 50.0, 30.0);
+        assert_eq!(menu_top_toward(anchor, 100.0, 600.0, (true, false)), 70.0);
+        // The default stays under the anchor.
+        let anchor = Rect::new(0.0, 200.0, 50.0, 30.0);
+        assert_eq!(menu_top_toward(anchor, 100.0, 600.0, (false, false)), 230.0);
+        // A spaced menu under its anchor keeps the usual gap from it.
+        assert_eq!(
+            menu_top_toward(anchor, 100.0, 600.0, (false, true)),
+            230.0 + CONTEXT_MENU_MARGIN
+        );
+    }
+
+    #[test]
+    fn a_switch_row_is_a_selected_setting_and_a_menu_keeps_its_least_width() {
+        let on = ContextMenuItem::new("Mute").switch(true);
+        assert!(on.switch && on.selected);
+        let off = ContextMenuItem::new("Mute").switch(false);
+        assert!(off.switch && !off.selected);
+        assert!(!ContextMenuItem::new("Mute").selected(true).switch);
+        assert_eq!(ContextMenu::new().min_width(200.0).min_width, Some(200.0));
+        assert_eq!(ContextMenu::new().min_width, None);
+    }
+
+    #[test]
+    fn a_slider_keeps_the_words_at_its_ends() {
+        let plain = ContextMenuItem::slider("Volume", 100.0, 10.0, 200.0);
+        assert!(plain.ends.is_none());
+        let ended = ContextMenuItem::slider("Volume", 100.0, 10.0, 200.0).ends("10%", "200%");
+        assert_eq!(
+            ended.ends.as_ref().map(|(a, b)| (a.as_ref(), b.as_ref())),
+            Some(("10%", "200%"))
         );
     }
 

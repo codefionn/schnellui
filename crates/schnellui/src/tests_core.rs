@@ -1765,22 +1765,29 @@ fn pointer_focus_is_semantic_but_keyboard_promotes_focus_visible() {
     let mut app = App::mount_with_size(Button::new("Save"), 240, 120);
     app.frame();
     let button = app.find_widget(Role::Button, Some("Save")).unwrap();
-    let line_count = |app: &App| {
+    let stroke_count = |app: &App, of: f32| {
         app.scene()
             .paint(button)
             .unwrap()
             .primitives
             .iter()
-            .filter(|primitive| matches!(primitive, Primitive::StrokeRect { .. }))
+            .filter(|primitive| matches!(primitive, Primitive::StrokeRect { width, .. } if *width == of))
             .count()
     };
+    let line_count = |app: &App| stroke_count(app, schnellui::widgets::FOCUS_RING_W);
 
     assert!(app.pointer_focus(Some(button)));
     assert_eq!(app.focused_widget(), Some(button));
     assert_eq!(line_count(&app), 0, "pointer focus hides keyboard ring");
+    assert_eq!(stroke_count(&app, schnellui::widgets::FOCUS_HALO_W), 0);
 
     assert!(app.dispatch_key(UiKey::Enter));
     assert_eq!(line_count(&app), 1, "keyboard input reveals focus ring");
+    assert_eq!(
+        stroke_count(&app, schnellui::widgets::FOCUS_HALO_W),
+        1,
+        "the ring wears its halo"
+    );
 
     assert!(app.pointer_focus(Some(button)));
     assert_eq!(app.focused_widget(), Some(button));

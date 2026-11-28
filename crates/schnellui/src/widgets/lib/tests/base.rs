@@ -1808,7 +1808,13 @@ fn tooltip_sides_flip_and_the_extra_gap_moves_the_tooltip_away() {
     let right_edge = Rect::new(352.0, 140.0, 40.0, 40.0);
     let flipped = hover_tooltip_origin(right_edge, tip, viewport, TooltipSide::After, 0.0);
     assert!(flipped.x + tip.width <= right_edge.x);
-    // No tooltip covers its own control.
+    // Inside: over the control's foot, centred, within its box.
+    let tile = Rect::new(100.0, 60.0, 160.0, 90.0);
+    let inside = hover_tooltip_origin(tile, tip, viewport, TooltipSide::Inside, 0.0);
+    assert_eq!(inside.x + tip.width * 0.5, tile.x + tile.width * 0.5);
+    assert!(inside.y >= tile.y && inside.y + tip.height <= tile.bottom());
+    assert!(inside.y + tip.height > tile.bottom() - crate::widgets::TOOLTIP_GAP - 1.0);
+    // No tooltip but an inside one covers its own control.
     for side in [
         TooltipSide::Above,
         TooltipSide::Below,

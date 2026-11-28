@@ -903,6 +903,7 @@ impl App {
             self.layout_consumed_epoch = self.scene.layout_epoch();
             self.layout_runs += 1;
             schnellui::widgets::clamp_scroll_offsets(&self.widgets, &mut self.scene);
+            self.scene.keep_tops_in_view();
             schnellui::widgets::emit_wrapped_paint(
                 &self.widgets,
                 &mut self.scene,

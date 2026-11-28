@@ -60,6 +60,8 @@ fn dot_discs(shape: DotShape, size: f32, color: Color, ground: Color) -> Vec<(f3
 }
 /// Space kept between the title and the trailing text.
 const TRAILING_GAP: f32 = 8.0;
+/// Space between a meta dot and the meta text it stands before.
+const META_DOT_GAP: f32 = 4.0;
 const SUBTITLE_DROP: f32 = 4.0;
 /// Horizontal padding inside a trailing pill.
 const PILL_PAD_H: f32 = 6.0;
@@ -112,6 +114,8 @@ pub struct ListRow {
     tooltip: Option<Cow<'static, str>>,
     on_click: Option<ClickHandler>,
     context_menu: Option<ContextMenu>,
+    meta_dot: Option<Color>,
+    focus_outset: bool,
 }
 
 impl ListRow {
@@ -147,6 +151,8 @@ impl ListRow {
             tooltip: None,
             on_click: None,
             context_menu: None,
+            meta_dot: None,
+            focus_outset: false,
         }
     }
 
@@ -222,6 +228,23 @@ impl ListRow {
     pub fn meta(mut self, text: impl Into<Cow<'static, str>>) -> ListRow {
         let text = text.into();
         self.meta = (!text.is_empty()).then_some(text);
+        self
+    }
+
+    /// A filled dot of this color just before the meta text, such as the mark
+    /// of a row set aside as unread beside its time. Without meta text it is
+    /// not drawn.
+    pub fn meta_dot(mut self, color: Color) -> ListRow {
+        self.meta_dot = Some(color);
+        self
+    }
+
+    /// Rings keyboard focus just outside the row, a gap off its edge, as a
+    /// free-standing control's ring stands, instead of on the row's own edge.
+    /// For rows set apart by gaps: on the edge, the ring of a selected row ran
+    /// into its fill and its accent bar and read as part of the selection.
+    pub fn focus_outset(mut self, outset: bool) -> ListRow {
+        self.focus_outset = outset;
         self
     }
 
@@ -521,7 +544,11 @@ impl View for ListRow {
                 a.state = state.0;
             }
         }
-        with_handlers(&ctx.runtime, id, |h| h.flush_row = true);
+        let outset = this.focus_outset;
+        with_handlers(&ctx.runtime, id, |h| {
+            h.flush_row = true;
+            h.ring_outset = outset;
+        });
         let theme = theme_for(&ctx.runtime, id);
         let inv = 1.0 / norm_scale(ctx.scale);
         let title_phys = phys_size_px(this.title_size, ctx.scale);
@@ -559,6 +586,12 @@ impl View for ListRow {
             .as_ref()
             .map(|text| shape_fit(ctx.text, text, meta_phys, this.width * 0.5, ctx.scale));
         let meta_width = meta_text.as_ref().map_or(0.0, |t| t.width * inv);
+        // The dot before the meta text takes room from the title as the text does.
+        let meta_dot_room = if meta_text.is_some() && this.meta_dot.is_some() {
+            DOT_SIZE + META_DOT_GAP
+        } else {
+            0.0
+        };
         // A time on the title line sends the trailing text to the line under it.
         let trailing_below = meta_text.is_some() && this.subtitle.is_some();
         let trailing_room = if trailing.is_some() {
@@ -572,7 +605,7 @@ impl View for ListRow {
             - this.end_room
             - if trailing_below { 0.0 } else { trailing_room }
             - if meta_text.is_some() {
-                meta_width + TRAILING_GAP
+                meta_width + meta_dot_room + TRAILING_GAP
             } else {
                 0.0
             };
@@ -861,6 +894,7 @@ impl View for ListRow {
             } else {
                 end - trailing_width - TRAILING_GAP - meta_width
             };
+            let y = rect.y + (this.height - meta_text.height * inv) * 0.5;
             rasterize_and_push(
                 pd,
                 ctx.text,
@@ -869,11 +903,21 @@ impl View for ListRow {
                 meta_phys as u32,
                 meta,
                 ctx.scale,
-                Point {
-                    x,
-                    y: rect.y + (this.height - meta_text.height * inv) * 0.5,
-                },
+                Point { x, y },
             );
+            if let Some(color) = this.meta_dot {
+                let centre_y = y + meta_text.height * inv * 0.5;
+                pd.primitives.push(Primitive::SolidRect {
+                    rect: Rect::new(
+                        x - META_DOT_GAP - DOT_SIZE,
+                        centre_y - DOT_SIZE * 0.5,
+                        DOT_SIZE,
+                        DOT_SIZE,
+                    ),
+                    color,
+                    corner_radius: DOT_SIZE * 0.5,
+                });
+            }
         }
         if let Some(subtitle) = &subtitle {
             rasterize_and_push(

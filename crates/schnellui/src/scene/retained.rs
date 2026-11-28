@@ -132,6 +132,9 @@ pub struct Scene {
     /// painted with the control). They escape a window's frame clip only while
     /// the control itself lies inside it. See [`Scene::set_overlay_tail`].
     overlay_tail: SecondaryMap<WidgetId, ()>,
+    /// Nodes that slide down to the top of what the scroll viewports above them show when
+    /// those cut off their top. See [`Scene::set_top_in_view`].
+    top_in_view: SecondaryMap<WidgetId, ()>,
     /// Dense list of overlay roots plus each root's position in it. A
     /// `SecondaryMap` iterates every slot up to the highest index ever inserted,
     /// so enumerating it costs O(scene size) once any overlay sits at a high slot.
@@ -277,6 +280,7 @@ impl Scene {
             overlay_order: SecondaryMap::new(),
             placed_by_hand: SecondaryMap::new(),
             overlay_tail: SecondaryMap::new(),
+            top_in_view: SecondaryMap::new(),
             overlay_roots: Vec::new(),
             overlay_pos: SecondaryMap::new(),
             next_overlay_order: 1,
@@ -393,6 +397,7 @@ impl Scene {
         self.overlay_order.remove(id);
         self.placed_by_hand.remove(id);
         self.overlay_tail.remove(id);
+        self.top_in_view.remove(id);
         self.hidden.remove(id);
         if let Some(reference) = self.component_refs_by_node.remove(id) {
             self.component_refs.remove(&reference);
@@ -857,6 +862,59 @@ impl Scene {
         self.scroll.insert(id, offset);
         self.mark_dirty(id, DirtyFlags::A11Y);
         self.mark_dirty(id, DirtyFlags::PAINT);
+        if !self.top_in_view.is_empty() {
+            self.keep_tops_in_view();
+        }
+    }
+
+    /// Marks `id` as a box that keeps its top in view: when the scroll viewports above it
+    /// cut off its top, it is drawn and hit lower, at the top of what they show, but never
+    /// past where its bottom meets its parent's bottom. A row's toolbar shows whole while
+    /// the row's top lies under a list's edge, and the list does not scroll for it; it
+    /// stays on its row, so it never reads as the next row's. It moves by its
+    /// composite translation, so neither a scroll step nor the shift asks for layout.
+    /// The box takes the place again after each layout and each scroll offset change.
+    pub fn set_top_in_view(&mut self, id: WidgetId) {
+        if self.tree.contains_key(id) {
+            self.top_in_view.insert(id, ());
+        }
+    }
+
+    /// Moves every box marked with [`Scene::set_top_in_view`] to where its top shows.
+    /// The app runs it after layout, once scroll offsets are clamped.
+    pub fn keep_tops_in_view(&mut self) {
+        let ids: SmallVec<[WidgetId; 4]> = self.top_in_view.keys().collect();
+        for id in ids {
+            let shift = self.top_shift(id);
+            let mut properties = self.composite_properties(id);
+            if properties.translation.y != shift {
+                properties.translation.y = shift;
+                self.set_composite_properties(id, properties);
+            }
+        }
+    }
+
+    /// How far down `id` has to go for its top to show, no further than its parent's
+    /// bottom allows; 0 when it shows already, when nothing of it can show, or when its
+    /// parent lies wholly above what shows.
+    fn top_shift(&self, id: WidgetId) -> f32 {
+        let Some(parent) = self.tree.get(id).and_then(|node| node.parent) else {
+            return 0.0;
+        };
+        let (Some(own), Some(outer)) = (self.layout.get(id), self.layout.get(parent)) else {
+            return 0.0;
+        };
+        let (offset, clip) = self.overlay_inherited_context(id);
+        if clip.is_empty() {
+            return 0.0;
+        }
+        let top = own.rect.y + offset.y;
+        let parent_bottom = outer.rect.y + outer.rect.height + offset.y;
+        if !(top < clip.y && parent_bottom > clip.y) {
+            return 0.0;
+        }
+        let room = parent_bottom - (top + own.rect.height);
+        (clip.y - top).min(room).max(0.0)
     }
 
     /// A node's scroll offset (SOUL §3.2). Defaults to the zero [`Point`] for a node

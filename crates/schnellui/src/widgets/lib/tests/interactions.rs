@@ -92,7 +92,7 @@ fn focused_editable_gets_browser_outline_and_keeps_it_while_editing() {
             .unwrap()
             .primitives
             .iter()
-            .filter(|p| matches!(p, Primitive::StrokeRect { .. }))
+            .filter(|p| matches!(p, Primitive::StrokeRect { width, .. } if *width == FOCUS_RING_W))
             .count()
     };
     let (mut scene, _l, mut text, mut atlas, id) = build_one(runtime, TextInput::new("hi"));
@@ -151,6 +151,57 @@ fn focus_outline_matches_css_width_offset_and_contrast_color() {
     assert_eq!(rect.x, bounds.x - out);
     assert_eq!(rect.right(), bounds.right() + out);
     assert_eq!(rect.bottom(), bounds.bottom() + out);
+}
+
+/// The ring wears a one-pixel halo just outside it, in white or black,
+/// whichever stands off the ring's color more, so it reads on any ground.
+#[test]
+fn focus_ring_wears_a_contrasting_halo_just_outside_it() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, _layout, mut text, mut atlas, id) = build_one(runtime, Button::new("Save"));
+    assert!(dispatch_focus(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        Some(id)
+    ));
+    let (ring, radius, _, color) = ring_stroke(&scene, id);
+    let prims = &scene.paint(id).unwrap().primitives;
+    let ring_at = prims
+        .iter()
+        .rposition(|p| matches!(p, Primitive::StrokeRect { width, .. } if *width == FOCUS_RING_W))
+        .unwrap();
+    let Primitive::StrokeRect {
+        rect: halo,
+        color: halo_color,
+        corner_radius,
+        width,
+    } = prims[ring_at - 1]
+    else {
+        panic!("a halo stroke just before the ring");
+    };
+    assert_eq!(width, FOCUS_HALO_W);
+    assert_eq!(halo.x, ring.x - FOCUS_HALO_W);
+    assert_eq!(halo.right(), ring.right() + FOCUS_HALO_W);
+    assert_eq!(corner_radius, radius + FOCUS_HALO_W);
+    let other = if halo_color == Color::WHITE {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    };
+    assert!(contrast_ratio(color, halo_color) >= contrast_ratio(color, other));
+    // Blur takes the halo off with the ring.
+    assert!(dispatch_focus(
+        runtime, &mut scene, &mut text, &mut atlas, None
+    ));
+    assert!(!scene
+        .paint(id)
+        .unwrap()
+        .primitives
+        .iter()
+        .any(|p| matches!(p, Primitive::StrokeRect { width, .. } if *width == FOCUS_HALO_W)));
 }
 
 /// The ring follows the control's own shape: a button's outset ring is its
@@ -660,6 +711,62 @@ fn a_row_radio_is_washed_across_its_row_under_the_pointer() {
         .expect("a wash as wide as the row");
     assert_eq!(wash.height, row.height);
     assert_eq!(wash.width, row.width + 2.0 * RADIO_ROW_PAD);
+}
+
+/// A radio row that lies over its label in a stack is ringed around the dot
+/// and the label, not across the whole width it spans.
+#[test]
+fn a_row_radio_rings_its_dot_and_label_not_the_whole_row() {
+    let runtime_handle = crate::widgets::Runtime::new();
+    let runtime = &runtime_handle;
+    let (mut scene, mut layout, mut text, mut atlas, root) = build_one(
+        runtime,
+        ThemeProvider::new(
+            crate::theme::LIGHT,
+            Stack::new()
+                .size(400.0, 28.0)
+                .child(
+                    Row::new()
+                        .height(28.0)
+                        .child(Column::new().width(24.0))
+                        .child(Text::new("One")),
+                )
+                .child(
+                    Column::new()
+                        .size(400.0, 28.0)
+                        .align(Align::Stretch)
+                        .child(Radio::new(false).row(28.0)),
+                ),
+        ),
+    );
+    layout.sync_tree(&scene, root);
+    layout.compute(
+        &mut scene,
+        root,
+        Size {
+            width: 400.0,
+            height: 28.0,
+        },
+    );
+    reposition_paint(runtime, &mut scene);
+    let marks = *scene.node(root).unwrap().children.last().unwrap();
+    let id = scene.node(marks).unwrap().children[0];
+    let row = scene.layout(id).unwrap().rect;
+    assert!(row.width >= 399.0, "the radio spans the row: {row:?}");
+    assert!(dispatch_focus(
+        runtime,
+        &mut scene,
+        &mut text,
+        &mut atlas,
+        Some(id)
+    ));
+    let (ring, _, _, _) = ring_stroke(&scene, id);
+    assert!(ring.x < row.x, "{ring:?} starts before the dot");
+    assert!(
+        ring.right() < row.x + 120.0,
+        "{ring:?} ends after the label, not at the row's end {row:?}"
+    );
+    assert!(ring.right() > row.x + 30.0, "{ring:?} takes in the label");
 }
 
 /// A toggle's hover halo and focus ring are concentric with the control, with

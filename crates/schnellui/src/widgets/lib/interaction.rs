@@ -11,6 +11,11 @@ pub const TOGGLE_HALO: f32 = 4.0;
 pub const RADIO_ROW_PAD: f32 = 8.0;
 /// One focus ring is a single [`Primitive::StrokeRect`].
 pub const FOCUS_RING_PRIMS: usize = 1;
+/// Width of the halo a focus ring wears on its far side from the control: a
+/// line in white or black, whichever stands off the ring more, so the ring
+/// reads on any ground (a dark rail, a picture, a fill in the accent's hue).
+/// It is its own stroke, laid just before the ring's.
+pub const FOCUS_HALO_W: f32 = 1.0;
 /// Hover border width, chosen not to alias either focus-ring stroke.
 pub const HOVER_BORDER_W: f32 = 1.5;
 /// Pressed-state border, wider than hover and never equal to the focus ring.
@@ -39,16 +44,40 @@ pub const HOVER_BORDER_PRIMS: usize = 1;
 /// the node's primitives fails this, and the stale record is then ignored
 /// instead of eating unrelated paint.
 fn stroke_start(pd: &PaintData, decoration: &AppliedInteraction) -> Option<usize> {
-    let start = pd
+    let ring = pd
         .primitives
         .len()
         .checked_sub(decoration.border_tail + FOCUS_RING_PRIMS)?;
-    pd.primitives[start..start + FOCUS_RING_PRIMS]
+    let ring_ok = pd.primitives[ring..ring + FOCUS_RING_PRIMS]
         .iter()
         .all(|primitive| {
             matches!(primitive, Primitive::StrokeRect { width, .. } if *width == decoration.border_width)
-        })
+        });
+    if !ring_ok {
+        return None;
+    }
+    if !decoration.halo {
+        return Some(ring);
+    }
+    let start = ring.checked_sub(1)?;
+    matches!(pd.primitives[start], Primitive::StrokeRect { width, .. } if width == FOCUS_HALO_W)
         .then_some(start)
+}
+
+/// How many primitives the stroke of `decoration` takes: the ring, and its
+/// halo when it has one.
+fn stroke_prims(decoration: &AppliedInteraction) -> usize {
+    FOCUS_RING_PRIMS + usize::from(decoration.halo)
+}
+
+/// The halo of a focus ring in `ring`: white or black, whichever stands off it more.
+fn focus_halo(ring: Color) -> Color {
+    use crate::widgets::theme::contrast_ratio;
+    if contrast_ratio(ring, Color::WHITE) >= contrast_ratio(ring, Color::BLACK) {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    }
 }
 
 pub(crate) fn ordinary_primitive_end(runtime: &Runtime, id: WidgetId, pd: &PaintData) -> usize {
@@ -631,6 +660,45 @@ pub(crate) fn restore_decorations(runtime: &Runtime, scene: &mut Scene, lifted: 
     }
 }
 
+/// The right edge of the label a radio row (`Radio::row`) lies over: the paint
+/// of the stack the row shares with its labels, on the row's line. `None` when
+/// nothing but the dot is painted there.
+fn radio_row_label_end(runtime: &Runtime, scene: &Scene, id: WidgetId, row: Rect) -> Option<f32> {
+    // The marks and the labels are two layers of one stack, a level or two up.
+    let mut stack = scene.node(id).and_then(|node| node.parent);
+    for _ in 0..3 {
+        let node = scene.node(stack?)?;
+        if node.kind == WidgetKind::Stack {
+            break;
+        }
+        stack = node.parent;
+    }
+    let stack = stack.filter(|&s| scene.node(s).is_some_and(|n| n.kind == WidgetKind::Stack))?;
+    let (top, bottom) = (row.y, row.y + row.height);
+    let mut end: Option<f32> = None;
+    let mut pending = vec![stack];
+    while let Some(node) = pending.pop() {
+        let Some(n) = scene.node(node) else {
+            continue;
+        };
+        if n.kind == WidgetKind::Radio {
+            continue;
+        }
+        if let Some(bounds) = paint_bounds(runtime, scene, node) {
+            let middle = bounds.y + bounds.height * 0.5;
+            if bounds.height <= row.height
+                && (top..=bottom).contains(&middle)
+                && bounds.x >= row.x
+                && bounds.right() <= row.right() + 0.5
+            {
+                end = Some(end.map_or(bounds.right(), |e| e.max(bounds.right())));
+            }
+        }
+        pending.extend(n.children.iter().copied());
+    }
+    end
+}
+
 /// Whether the focus ring of a control of this kind stands outside its box.
 fn ring_outsets(component: Option<InteractionComponent>, kind: Option<WidgetKind>) -> bool {
     matches!(
@@ -725,10 +793,10 @@ fn shift_restores(runtime: &Runtime, owner: WidgetId, at: usize, delta: isize) {
 }
 
 /// Adjusts the stroke tails of the decorations still applied to `owner` when a
-/// stroke is stacked on the end of it (`removed_tail` is `None`: every existing
-/// stroke gains four primitives after it) or taken out of the middle (strokes
-/// that were below it, with a longer tail, lose four).
-fn retail_strokes(runtime: &Runtime, owner: WidgetId, removed_tail: Option<usize>) {
+/// stroke of `prims` primitives is stacked on the end of it (`removed_tail` is
+/// `None`: every existing stroke gains them after it) or taken out of the middle
+/// (strokes that were below it, with a longer tail, lose them).
+fn retail_strokes(runtime: &Runtime, owner: WidgetId, removed_tail: Option<usize>, prims: usize) {
     runtime.with(|rt| {
         let mut rt = rt.borrow_mut();
         let rt = &mut *rt;
@@ -740,9 +808,9 @@ fn retail_strokes(runtime: &Runtime, owner: WidgetId, removed_tail: Option<usize
                 continue;
             }
             match removed_tail {
-                None => decoration.border_tail += FOCUS_RING_PRIMS,
+                None => decoration.border_tail += prims,
                 Some(tail) if decoration.border_tail > tail => {
-                    decoration.border_tail -= FOCUS_RING_PRIMS;
+                    decoration.border_tail -= prims;
                 }
                 Some(_) => {}
             }
@@ -829,11 +897,12 @@ fn strip_applied_interaction(
             .paint(owner)
             .and_then(|pd| stroke_start(pd, &decoration))
         {
+            let prims = stroke_prims(&decoration);
             scene
                 .paint_mut(owner)
                 .primitives
-                .drain(start..start + FOCUS_RING_PRIMS);
-            retail_strokes(runtime, owner, Some(decoration.border_tail));
+                .drain(start..start + prims);
+            retail_strokes(runtime, owner, Some(decoration.border_tail), prims);
             scene.mark_dirty(owner, DirtyFlags::PAINT);
         }
     }
@@ -1081,10 +1150,15 @@ fn apply_interaction_style(
     .then(|| scene.layout(id).map(|layout| layout.rect))
     .flatten()
     .map(|rect| {
+        // The row ends where its label does, not at the far side of the card
+        // it spans: a ring across the whole card read as a box around the
+        // card's content rather than around one choice.
+        let width = radio_row_label_end(runtime, scene, id, rect)
+            .map_or(rect.width, |end| (end - rect.x).clamp(0.0, rect.width));
         let row = Rect::new(
             rect.x - RADIO_ROW_PAD,
             rect.y,
-            rect.width + 2.0 * RADIO_ROW_PAD,
+            width + 2.0 * RADIO_ROW_PAD,
             rect.height,
         );
         (row, theme_for(runtime, id).shape.radius(3.0, row.height))
@@ -1251,9 +1325,11 @@ fn apply_interaction_style(
         recolor_foreground(runtime, scene, id, next, background, &mut foreground);
     }
 
+    // A keyboard ring wears a halo: a seen ring, not a cleared one (a bare field's).
+    let halo = border_width == FOCUS_RING_W && style.border.is_some_and(|border| border.a > 0);
     let border_owner = style.border.map(|border| {
         // Strokes already on this owner now have the new one after them.
-        retail_strokes(runtime, owner, None);
+        retail_strokes(runtime, owner, None, FOCUS_RING_PRIMS + usize::from(halo));
         // A free-standing control or a link wears its focus ring just outside
         // its edge. Rows, tabs and options sit flush against their
         // neighbours, which would paint over an outset ring, so theirs stays
@@ -1264,9 +1340,14 @@ fn apply_interaction_style(
                 .get(id)
                 .is_some_and(|handlers| handlers.flush_row)
         });
+        let ring_outset = runtime.with(|rt| {
+            rt.borrow()
+                .handlers
+                .get(id)
+                .is_some_and(|handlers| handlers.ring_outset)
+        });
         let outset = border_width == FOCUS_RING_W
-            && ring_outsets(component, kind)
-            && !flush_row
+            && ((ring_outsets(component, kind) && !flush_row) || ring_outset)
             && radio_row.is_none();
         let inset = if outset {
             -(FOCUS_RING_W + FOCUS_RING_GAP)
@@ -1339,6 +1420,25 @@ fn apply_interaction_style(
         } else {
             (rect, radius, inset)
         };
+        if halo {
+            // The halo lies on the ring's far side from the control: outside an
+            // outset ring, so the gap between control and ring stays the
+            // ground's; inside a ring on or within the edge, between it and the
+            // row's fill.
+            let halo_inset = if outset {
+                inset - FOCUS_HALO_W
+            } else {
+                inset + border_width
+            };
+            push_ring_stroke(
+                scene.paint_mut(owner),
+                rect,
+                halo_inset,
+                radius,
+                FOCUS_HALO_W,
+                focus_halo(border),
+            );
+        }
         push_ring_stroke(
             scene.paint_mut(owner),
             rect,
@@ -1355,6 +1455,7 @@ fn apply_interaction_style(
         border_owner,
         border_tail: 0,
         border_width,
+        halo: halo && border_owner.is_some(),
         foreground,
         background,
         bounds: geometry,
